@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local outputs cache
+.cache/
+
+# Library workspace (source/result images, SQLite DB, config incl. API key)
+workspace/
+

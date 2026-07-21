@@ -1,0 +1,769 @@
+{
+  "516": {
+    "inputs": {
+      "filename_prefix": "flux/2026-07-11/gen",
+      "images": [
+        "515:65",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "517": {
+    "inputs": {
+      "rgthree_comparer": {
+        "images": [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_dmjyl_00403_.png&type=temp&subfolder=&rand=0.8899195033548561"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_dmjyl_00404_.png&type=temp&subfolder=&rand=0.29537048709783675"
+          }
+        ]
+      },
+      "image_a": [
+        "637",
+        0
+      ],
+      "image_b": [
+        "515:65",
+        0
+      ]
+    },
+    "class_type": "Image Comparer (rgthree)",
+    "_meta": {
+      "title": "Image Comparer (rgthree)"
+    }
+  },
+  "605": {
+    "inputs": {
+      "image": "!Nanette Superpear (3).jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Reference (@image3)"
+    }
+  },
+  "636": {
+    "inputs": {
+      "rgthree_comparer": {
+        "images": [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_rgirp_00043_.png&type=temp&subfolder=&rand=0.20447309800591595"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_rgirp_00044_.png&type=temp&subfolder=&rand=0.9582376556575604"
+          }
+        ]
+      },
+      "image_a": [
+        "605",
+        0
+      ],
+      "image_b": [
+        "515:65",
+        0
+      ]
+    },
+    "class_type": "Image Comparer (rgthree)",
+    "_meta": {
+      "title": "Image Comparer (rgthree)"
+    }
+  },
+  "637": {
+    "inputs": {
+      "image": "5f4sei0s7cah1.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "638": {
+    "inputs": {
+      "image": "clipspace/clipspace-painted-masked-1780490367495.png [input]"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "606:499": {
+    "inputs": {
+      "image": [
+        "638",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "606:500": {
+    "inputs": {
+      "width": [
+        "606:499",
+        0
+      ],
+      "height": [
+        "606:499",
+        1
+      ],
+      "red": 255,
+      "green": 255,
+      "blue": 255
+    },
+    "class_type": "Image Blank",
+    "_meta": {
+      "title": "Image Blank"
+    }
+  },
+  "606:501": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "offset_x": 0,
+      "offset_y": 0,
+      "destination": [
+        "638",
+        0
+      ],
+      "source": [
+        "606:500",
+        0
+      ],
+      "mask": [
+        "638",
+        1
+      ]
+    },
+    "class_type": "ImageComposite+",
+    "_meta": {
+      "title": "🔧 Image Composite"
+    }
+  },
+  "515:61": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "515:64": {
+    "inputs": {
+      "noise": [
+        "515:73",
+        0
+      ],
+      "guider": [
+        "515:63",
+        0
+      ],
+      "sampler": [
+        "515:61",
+        0
+      ],
+      "sigmas": [
+        "515:62",
+        0
+      ],
+      "latent_image": [
+        "515:66",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "515:65": {
+    "inputs": {
+      "samples": [
+        "515:64",
+        0
+      ],
+      "vae": [
+        "515:124",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "515:73": {
+    "inputs": {
+      "noise_seed": 692332782640144
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "515:67": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "515:123",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "515:66": {
+    "inputs": {
+      "width": [
+        "515:100",
+        0
+      ],
+      "height": [
+        "515:100",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Flux 2 Latent"
+    }
+  },
+  "515:100": {
+    "inputs": {
+      "image": [
+        "515:80",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "515:122": {
+    "inputs": {
+      "unet_name": "flux-2-klein-9b-Q6_K.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Unet Loader (GGUF)"
+    }
+  },
+  "515:74": {
+    "inputs": {
+      "text": "remove any jpeg artifacts\nremove any blurriness\n\nPlace this person in an ancient ruin\n\nperfect focus\nultra detailed",
+      "clip": [
+        "515:123",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "515:63": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "515:122",
+        0
+      ],
+      "positive": [
+        "515:600",
+        0
+      ],
+      "negative": [
+        "515:601",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFGGuider"
+    }
+  },
+  "515:123": {
+    "inputs": {
+      "clip_name": "qwen3_8b_abliterated-fp8simplemixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "515:124": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "515:80": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "megapixels": 0.75,
+      "resolution_steps": 1,
+      "image": [
+        "637",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    }
+  },
+  "515:79:101": {
+    "inputs": {
+      "conditioning": [
+        "515:67",
+        0
+      ],
+      "latent": [
+        "515:79:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "515:79:78": {
+    "inputs": {
+      "pixels": [
+        "515:80",
+        0
+      ],
+      "vae": [
+        "515:124",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "515:79:77": {
+    "inputs": {
+      "conditioning": [
+        "515:74",
+        0
+      ],
+      "latent": [
+        "515:79:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "515:167:164": {
+    "inputs": {
+      "conditioning": [
+        "515:79:101",
+        0
+      ],
+      "latent": [
+        "515:167:165",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "515:167:165": {
+    "inputs": {
+      "pixels": [
+        "515:623",
+        0
+      ],
+      "vae": [
+        "515:124",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "515:167:166": {
+    "inputs": {
+      "conditioning": [
+        "515:79:77",
+        0
+      ],
+      "latent": [
+        "515:167:165",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "515:475:472": {
+    "inputs": {
+      "conditioning": [
+        "515:167:164",
+        0
+      ],
+      "latent": [
+        "515:475:473",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "515:475:473": {
+    "inputs": {
+      "pixels": [
+        "515:624",
+        0
+      ],
+      "vae": [
+        "515:124",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "515:475:474": {
+    "inputs": {
+      "conditioning": [
+        "515:167:166",
+        0
+      ],
+      "latent": [
+        "515:475:473",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "515:601": {
+    "inputs": {
+      "index": [
+        "515:604",
+        0
+      ],
+      "cond0": [
+        "515:79:101",
+        0
+      ],
+      "cond1": [
+        "515:167:164",
+        0
+      ],
+      "cond2": [
+        "515:475:472",
+        0
+      ]
+    },
+    "class_type": "easy conditioningIndexSwitch",
+    "_meta": {
+      "title": "Conditioning Index Switch"
+    }
+  },
+  "515:600": {
+    "inputs": {
+      "index": [
+        "515:604",
+        0
+      ],
+      "cond0": [
+        "515:79:77",
+        0
+      ],
+      "cond1": [
+        "515:167:166",
+        0
+      ],
+      "cond2": [
+        "515:475:474",
+        0
+      ]
+    },
+    "class_type": "easy conditioningIndexSwitch",
+    "_meta": {
+      "title": "Conditioning Index Switch"
+    }
+  },
+  "515:624": {
+    "inputs": {
+      "boolean": [
+        "515:625",
+        0
+      ],
+      "image_a": [
+        "515:476",
+        0
+      ],
+      "image_b": [
+        "515:612",
+        0
+      ]
+    },
+    "class_type": "easy imageSwitch",
+    "_meta": {
+      "title": "Image Switch"
+    }
+  },
+  "515:626": {
+    "inputs": {
+      "a": 0,
+      "b": 2,
+      "operation": "add"
+    },
+    "class_type": "easy mathInt",
+    "_meta": {
+      "title": "Math Int"
+    }
+  },
+  "515:623": {
+    "inputs": {
+      "boolean": [
+        "515:621",
+        0
+      ],
+      "image_a": [
+        "515:266",
+        0
+      ],
+      "image_b": [
+        "515:612",
+        0
+      ]
+    },
+    "class_type": "easy imageSwitch",
+    "_meta": {
+      "title": "Image Switch"
+    }
+  },
+  "515:621": {
+    "inputs": {
+      "comparison": "a >= b",
+      "a": [
+        "515:604",
+        0
+      ],
+      "b": [
+        "515:622",
+        0
+      ]
+    },
+    "class_type": "easy compare",
+    "_meta": {
+      "title": "Compare"
+    }
+  },
+  "515:625": {
+    "inputs": {
+      "comparison": "a >= b",
+      "a": [
+        "515:604",
+        0
+      ],
+      "b": [
+        "515:626",
+        0
+      ]
+    },
+    "class_type": "easy compare",
+    "_meta": {
+      "title": "Compare"
+    }
+  },
+  "515:630": {
+    "inputs": {},
+    "class_type": "Context (rgthree)",
+    "_meta": {
+      "title": "Context (rgthree)"
+    }
+  },
+  "515:631": {
+    "inputs": {
+      "images": [
+        "605",
+        0
+      ]
+    },
+    "class_type": "Context (rgthree)",
+    "_meta": {
+      "title": "Context (rgthree)"
+    }
+  },
+  "515:604": {
+    "inputs": {
+      "a": 0,
+      "b": 0,
+      "operation": "add"
+    },
+    "class_type": "easy mathInt",
+    "_meta": {
+      "title": "Math Int"
+    }
+  },
+  "515:266": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "megapixels": 0.4,
+      "resolution_steps": 1,
+      "image": [
+        "515:627",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    }
+  },
+  "515:628": {
+    "inputs": {
+      "boolean": [
+        "515:625",
+        0
+      ],
+      "image_a": [
+        "515:632",
+        7
+      ],
+      "image_b": [
+        "515:612",
+        0
+      ]
+    },
+    "class_type": "easy imageSwitch",
+    "_meta": {
+      "title": "Image Switch"
+    }
+  },
+  "515:627": {
+    "inputs": {
+      "boolean": [
+        "515:621",
+        0
+      ],
+      "image_a": [
+        "515:631",
+        7
+      ],
+      "image_b": [
+        "515:612",
+        0
+      ]
+    },
+    "class_type": "easy imageSwitch",
+    "_meta": {
+      "title": "Image Switch"
+    }
+  },
+  "515:632": {
+    "inputs": {
+      "images": [
+        "606:501",
+        0
+      ]
+    },
+    "class_type": "Context (rgthree)",
+    "_meta": {
+      "title": "Context (rgthree)"
+    }
+  },
+  "515:622": {
+    "inputs": {
+      "a": 0,
+      "b": 1,
+      "operation": "add"
+    },
+    "class_type": "easy mathInt",
+    "_meta": {
+      "title": "Math Int"
+    }
+  },
+  "515:612": {
+    "inputs": {
+      "width": 64,
+      "height": 640,
+      "red": 255,
+      "green": 255,
+      "blue": 255
+    },
+    "class_type": "Image Blank",
+    "_meta": {
+      "title": "Image Blank"
+    }
+  },
+  "515:476": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "megapixels": 0.4,
+      "resolution_steps": 1,
+      "image": [
+        "515:628",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    }
+  },
+  "515:62": {
+    "inputs": {
+      "steps": 2,
+      "width": [
+        "515:100",
+        0
+      ],
+      "height": [
+        "515:100",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2Scheduler"
+    }
+  }
+}

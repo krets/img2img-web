@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Image-to-Image Library</title>
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="topbar">
+    <div class="topbar-left">
+      <span class="brand">🖼️ Image Library</span>
+      <select id="projectSwitcher"></select>
+      <button id="newProjectBtn" class="btn-ghost">+ New Project</button>
+      <button id="deleteProjectBtn" class="btn-ghost small" title="Move this project to trash">🗑 Delete Project</button>
+    </div>
+    <div class="topbar-right">
+      <button id="duplicatesBtn" class="btn-ghost">Find Duplicates</button>
+      <button id="trashBtn" class="btn-ghost">🗑 Trash</button>
+      <button id="exportBtn" class="btn-ghost">Export</button>
+      <button id="settingsBtn" class="btn-ghost">Settings</button>
+    </div>
+  </div>
+
+  <div id="layout">
+    <aside id="sidebar">
+      <div class="panel-section">
+        <div class="sidebar-controls">
+          <input id="searchInput" type="text" placeholder="Search images..." />
+          <div class="sidebar-controls-row">
+            <select id="sortSelect">
+              <option value="recent_result">Latest Result</option>
+              <option value="date">Newest</option>
+              <option value="name">Name</option>
+              <option value="evaluation">Evaluation</option>
+            </select>
+            <select id="filterSelect">
+              <option value="all">All</option>
+              <option value="unprocessed">Unprocessed</option>
+              <option value="UNRATED">Needs Review</option>
+              <option value="YES">Approved</option>
+              <option value="MAYBE">Maybe</option>
+              <option value="NO">Rejected</option>
+            </select>
+            <button id="cleanupNoBtn" class="btn-ghost small" title="Move all NO-rated results in this project to trash">🗑 Clear NO</button>
+          </div>
+        </div>
+        <label class="upload-drop" id="uploadDrop">
+          + Upload images (or paste)
+          <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+        </label>
+        <label class="checkbox-row" title="After upload, immediately queue a generation using the prompt currently in the details panel">
+          <input id="autoGenOnUploadToggle" type="checkbox" />
+          Auto-generate with current prompt
+        </label>
+        <div id="uploadStatus" class="status-line"></div>
+        <div class="sidebar-controls-row">
+          <button id="multiSelectToggleBtn" class="btn-ghost small">☑ Select</button>
+        </div>
+        <div id="multiSelectBar" class="multi-select-bar" style="display:none">
+          <span id="multiSelectCount"></span>
+          <button id="multiSelectMoveBtn" class="btn-ghost small">Move to project…</button>
+          <button id="multiSelectCancelBtn" class="btn-ghost small">Cancel</button>
+        </div>
+        <div id="imageList" class="image-list"></div>
+      </div>
+    </aside>
+
+    <main id="viewer"></main>
+
+    <aside id="detailsPanel">
+      <div class="panel-section">
+        <div class="panel-header">
+          <span>Prompt Palette</span>
+          <button id="newPromptBtn" class="btn-ghost small">+ New</button>
+        </div>
+        <div id="promptList" class="prompt-list"></div>
+      </div>
+
+      <div id="detailsEmpty" class="empty-state">Select an image to see details.</div>
+      <div id="detailsContent" style="display:none">
+        <div class="field">
+          <label>Name</label>
+          <input id="displayNameInput" type="text" />
+        </div>
+        <div class="field">
+          <label>Comment</label>
+          <textarea id="commentInput" rows="2"></textarea>
+        </div>
+
+        <div class="field">
+          <label>Prompt</label>
+          <select id="promptSelect">
+            <option value="">— ad-hoc —</option>
+          </select>
+          <textarea id="promptTextarea" rows="15" placeholder="Describe the edit..."></textarea>
+        </div>
+        <div class="field-row">
+          <select id="engineSelect">
+            <option value="grok">Grok</option>
+            <option value="comfyui">ComfyUI (local)</option>
+          </select>
+          <select id="aspectRatioSelect">
+            <option value="">Keep original</option>
+            <option value="1:1">1:1</option>
+            <option value="16:9">16:9</option>
+            <option value="3:2">3:2</option>
+            <option value="4:3">4:3</option>
+            <option value="9:16">9:16</option>
+            <option value="2:3">2:3</option>
+            <option value="3:4">3:4</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <button id="generateBtn" class="btn-primary">✨ Generate</button>
+        </div>
+        <div class="field-row">
+          <button id="uploadResultBtn" class="btn-ghost drop-target" style="flex:1">📁 Upload Result Instead (or drop file here)</button>
+          <input id="uploadResultInput" type="file" accept="image/*" hidden />
+        </div>
+        <div id="generateStatus" class="status-line"></div>
+
+        <div class="field">
+          <label>Results (<span id="resultCount">0</span>)</label>
+          <div id="resultGrid" class="result-grid"></div>
+        </div>
+        <div class="field-row eval-row">
+          <button id="evalYesBtn" class="btn-eval yes">YES (y)</button>
+          <button id="evalMaybeBtn" class="btn-eval maybe">MAYBE (m)</button>
+          <button id="evalNoBtn" class="btn-eval no">NO (n)</button>
+        </div>
+        <div id="resultPromptUsed" class="result-prompt-used" style="display:none">
+          <span id="resultPromptText" class="result-prompt-used-text"></span>
+          <button id="copyPromptBtn" class="copy-prompt-btn" title="Copy prompt">📋</button>
+        </div>
+        <div id="revisedPrompt" class="revised-prompt"></div>
+
+        <div class="field" style="margin-top: 24px; border-top: 1px solid #2a2c35; padding-top: 16px;">
+          <button id="deleteImageBtn" class="btn-danger" style="width:100%">🗑 Delete Image (and all its results)</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="modalOverlay" class="modal-overlay" style="display:none">
+    <div class="modal" id="modalContent"></div>
+  </div>
+
+  <div id="queueOverlay" class="queue-overlay" style="display:none">
+    <div id="queueOverlayBar" class="queue-overlay-bar"></div>
+    <div id="queueOverlayHeader" class="queue-overlay-header">
+      <span class="queue-overlay-label">Queue</span>
+      <span id="queueOverlayCount" class="queue-overlay-count">0</span>
+    </div>
+    <div id="queueOverlayList" class="queue-overlay-list" style="display:none"></div>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

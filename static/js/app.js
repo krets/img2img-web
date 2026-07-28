@@ -68,6 +68,7 @@ const els = {
   queueOverlayBar: document.getElementById("queueOverlayBar"),
   queueOverlayHeader: document.getElementById("queueOverlayHeader"),
   queueOverlayCount: document.getElementById("queueOverlayCount"),
+  queueOverlayElapsed: document.getElementById("queueOverlayElapsed"),
   queueOverlayList: document.getElementById("queueOverlayList"),
 };
 
@@ -357,7 +358,7 @@ function renderChits(img) {
   const jobsForImage = state.queue.filter((j) => j.image_id === img.id);
   const pendingChits = jobsForImage
     .filter((j) => j.status === "queued" || j.status === "running")
-    .map(() => `<span class="chit pending" title="Generating..."></span>`);
+    .map((j) => `<span class="chit pending" title="Generating... (${formatElapsed(jobElapsedSeconds(j))})"></span>`);
   const errorChits = jobsForImage
     .filter((j) => j.status === "error")
     .map((j) => `<span class="chit error" title="${escapeHtml(j.error || "Generation failed")}"></span>`);
@@ -572,7 +573,9 @@ function renderDetails() {
   const resultUrl = active ? `/api/results/${active.id}/file` : null;
   abViewer.setImages(sourceUrl, resultUrl);
 
-  els.revisedPrompt.textContent = active?.revised_prompt ? `Grok revised prompt: "${active.revised_prompt}"` : "";
+  const revisedPromptText = active?.revised_prompt ? `Grok revised prompt: "${active.revised_prompt}"` : "";
+  const durationText = active?.duration_seconds ? `Generated in ${formatElapsed(active.duration_seconds)}` : "";
+  els.revisedPrompt.textContent = [revisedPromptText, durationText].filter(Boolean).join(" — ");
 }
 
 // Renders the results grid, followed by a dashed upload-dropzone card pinned
@@ -593,7 +596,8 @@ function renderResultGrid(results, activeId) {
   const tilesHtml = results
     .map((r) => {
       const activeClass = r.id === activeId ? "active" : "";
-      const label = `${r.evaluation} — ${new Date(r.date_generated).toLocaleString()}`;
+      const durationLabel = r.duration_seconds ? ` — generated in ${formatElapsed(r.duration_seconds)}` : "";
+      const label = `${r.evaluation} — ${new Date(r.date_generated).toLocaleString()}${durationLabel}`;
       const promptText = r.adhoc_prompt_text || "";
       const promptAttr = escapeHtml(promptText);
       const copyBtn = promptText
@@ -834,25 +838,30 @@ function updateGenerateStatusForCurrentImage() {
   if (errored) els.generateStatus.textContent = `Error: ${errored.error || "Generation failed"}`;
 }
 
+function jobElapsedSeconds(job) {
+  return Date.now() / 1000 - job.created_at;
+}
+
 function formatJobStatus(job) {
-  if (job.status === "queued") return "Queued...";
   if (job.status === "done") return "Done.";
   if (job.status === "error") return `Error: ${job.error || ""}`;
+  const elapsed = ` (${formatElapsed(jobElapsedSeconds(job))})`;
+  if (job.status === "queued") return `Queued...${elapsed}`;
   if (job.engine === "comfyui") {
     switch (job.phase) {
       case "uploading":
-        return "Uploading image to ComfyUI...";
+        return `Uploading image to ComfyUI...${elapsed}`;
       case "queued":
-        return "Queued on ComfyUI...";
+        return `Queued on ComfyUI...${elapsed}`;
       case "running":
-        return job.max ? `ComfyUI: step ${job.value}/${job.max}...` : "ComfyUI is running...";
+        return (job.max ? `ComfyUI: step ${job.value}/${job.max}...` : "ComfyUI is running...") + elapsed;
       case "saving":
-        return "Saving result...";
+        return `Saving result...${elapsed}`;
       default:
-        return "Generating with ComfyUI...";
+        return `Generating with ComfyUI...${elapsed}`;
     }
   }
-  return "Generating with Grok...";
+  return `Generating with Grok...${elapsed}`;
 }
 
 function renderQueueOverlay() {
@@ -863,6 +872,9 @@ function renderQueueOverlay() {
   }
   els.queueOverlay.style.display = "block";
   els.queueOverlayCount.textContent = active.length;
+
+  const oldest = active.reduce((a, b) => (a.created_at < b.created_at ? a : b));
+  els.queueOverlayElapsed.textContent = formatElapsed(jobElapsedSeconds(oldest));
 
   const withProgress = active.find((j) => j.phase === "running" && j.max);
   if (withProgress) {
@@ -1249,6 +1261,7 @@ function renderLogModal(entries) {
             <span class="log-item-status ${failed ? "error" : "done"}">${failed ? "Failed" : "Done"}</span>
             <span class="log-item-name">${escapeHtml(j.image_name)}</span>
             <span class="log-item-engine">${escapeHtml(j.engine)}</span>
+            <span class="log-item-duration">${j.finished_at ? formatElapsed(j.finished_at - j.created_at) : ""}</span>
             <span class="log-item-time">${formatLogTime(j.finished_at)}</span>
           </summary>
           ${j.prompt_text ? `<div class="log-item-prompt">${escapeHtml(j.prompt_text)}</div>` : ""}
@@ -1483,6 +1496,20 @@ initHotkeys({
   onNext: () => stepImage(1),
   onFocusPrompt: () => els.promptTextarea.focus(),
 });
+
+// Formats a duration in seconds as e.g. "45s", "3m 12s", "1h 05m". Used both
+// for live elapsed time (queue/job in progress) and total generation time
+// stored on finished results.
+function formatElapsed(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const remSec = s % 60;
+  if (m < 60) return `${m}m ${String(remSec).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  const remMin = m % 60;
+  return `${h}h ${String(remMin).padStart(2, "0")}m`;
+}
 
 function escapeHtml(str) {
   const div = document.createElement("div");

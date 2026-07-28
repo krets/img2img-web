@@ -470,6 +470,7 @@ button:hover { border-color: #565a68; }
 .log-item-status.error { background: #7f1d1d; color: #fca5a5; }
 .log-item-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-item-engine { flex-shrink: 0; font-size: 11px; color: #9ea2b0; }
+.log-item-duration { flex-shrink: 0; font-size: 11px; color: #9ea2b0; font-variant-numeric: tabular-nums; }
 .log-item-time { flex-shrink: 0; font-size: 11px; color: #9ea2b0; white-space: nowrap; }
 .log-item-prompt { margin-top: 4px; font-size: 12px; color: #9ea2b0; white-space: pre-wrap; }
 .log-item-error { margin-top: 4px; font-size: 12px; color: #fca5a5; white-space: pre-wrap; }
@@ -514,11 +515,12 @@ button:hover { border-color: #565a68; }
 }
 .queue-overlay-label { font-size: 12px; color: #9ea2b0; text-transform: uppercase; letter-spacing: 0.04em; }
 .queue-overlay-count { font-size: 15px; font-weight: 700; }
+.queue-overlay-elapsed { font-size: 11px; color: #9ea2b0; font-variant-numeric: tabular-nums; margin-left: auto; margin-right: 8px; }
 .queue-overlay-list { max-height: 240px; overflow-y: auto; border-top: 1px solid #2a2c35; }
 .queue-item { padding: 8px 12px; border-bottom: 1px solid #2a2c35; }
 .queue-item:last-child { border-bottom: none; }
 .queue-item-name { font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; gap: 6px; }
 .queue-item-engine { font-weight: 400; color: #6b6f7d; text-transform: uppercase; font-size: 10px; }
-.queue-item-status { font-size: 11px; color: #9ea2b0; margin-top: 2px; }
+.queue-item-status { font-size: 11px; color: #9ea2b0; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .queue-item.error .queue-item-status { color: #fca5a5; }
 .queue-item.done .queue-item-status { color: #86efac; }

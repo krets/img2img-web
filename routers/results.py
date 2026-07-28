@@ -1,3 +1,5 @@
+import time
+
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -128,6 +130,7 @@ def _run_generation(job_id, image, body, engine, config, source_path):
     model = None
     aspect_ratio = None
     max_dim = body.max_dim or config["default_max_dim"]
+    start_time = time.time()
     try:
         jobs.update_job(job_id, status="running")
 
@@ -179,6 +182,7 @@ def _run_generation(job_id, image, body, engine, config, source_path):
             max_dim=max_dim,
             revised_prompt=revised_prompt,
             result_id=result_id,
+            duration_seconds=time.time() - start_time,
         )
         jobs.finish_job(job_id, result_id=result["id"])
     except Exception as e:

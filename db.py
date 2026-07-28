@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS results (
     aspect_ratio      TEXT,
     max_dim           INTEGER,
     revised_prompt    TEXT,
+    duration_seconds  REAL,
     evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
     is_active_result  INTEGER DEFAULT 0,
     date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -122,6 +123,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE results ADD COLUMN is_deleted INTEGER DEFAULT 0")
     if "deleted_at" not in result_columns:
         conn.execute("ALTER TABLE results ADD COLUMN deleted_at TIMESTAMP")
+    if "duration_seconds" not in result_columns:
+        conn.execute("ALTER TABLE results ADD COLUMN duration_seconds REAL")
 
     project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "is_deleted" not in project_columns:
@@ -609,15 +612,16 @@ def delete_prompt(prompt_id):
 
 def create_result(image_id, file_path, prompt_id=None, adhoc_prompt_text=None,
                    engine="grok", model=None, aspect_ratio=None, max_dim=None, revised_prompt=None,
-                   media_type="image", result_id=None):
+                   media_type="image", result_id=None, duration_seconds=None):
     conn = get_connection()
     result_id = result_id or new_id()
     conn.execute(
         """INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path,
-                                 media_type, engine, model, aspect_ratio, max_dim, revised_prompt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 media_type, engine, model, aspect_ratio, max_dim, revised_prompt,
+                                 duration_seconds)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (result_id, image_id, prompt_id, adhoc_prompt_text, file_path,
-         media_type, engine, model, aspect_ratio, max_dim, revised_prompt),
+         media_type, engine, model, aspect_ratio, max_dim, revised_prompt, duration_seconds),
     )
     # Newly generated results become the active one for review.
     conn.execute("UPDATE results SET is_active_result = 0 WHERE image_id = ?", (image_id,))

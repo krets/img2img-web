@@ -16,6 +16,20 @@ EXPORTS_DIR = WORKSPACE_ROOT / "exports"
 DB_PATH = WORKSPACE_ROOT / "library.db"
 CONFIG_PATH = WORKSPACE_ROOT / "config.json"
 
+
+def set_db_path(path):
+    """Points the app at a different SQLite file, relocating image storage
+    (source/result images, exports, config.json) alongside it. Used to run
+    against an isolated test workspace instead of the live one.
+    """
+    global DB_PATH, WORKSPACE_ROOT, SOURCE_IMAGES_DIR, RESULT_IMAGES_DIR, EXPORTS_DIR, CONFIG_PATH
+    DB_PATH = Path(path).resolve()
+    WORKSPACE_ROOT = DB_PATH.parent
+    SOURCE_IMAGES_DIR = WORKSPACE_ROOT / "source_images"
+    RESULT_IMAGES_DIR = WORKSPACE_ROOT / "result_images"
+    EXPORTS_DIR = WORKSPACE_ROOT / "exports"
+    CONFIG_PATH = WORKSPACE_ROOT / "config.json"
+
 DEFAULT_CONFIG = {
     "xai_api_key": "",
     "default_model": "grok-imagine-image-quality",

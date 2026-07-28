@@ -9,6 +9,10 @@ export function initABViewer(container) {
         <img class="ab-result" id="abResult" alt="Result" />
       </div>
       <div class="ab-handle" id="abHandle"><div class="ab-handle-grip"></div></div>
+      <div class="ab-actions" id="abActions">
+        <button class="ab-action-btn" id="abCopyBtn" title="Copy result image to clipboard">📋 Copy</button>
+        <button class="ab-action-btn" id="abOpenBtn" title="Open result image in a new tab">↗ Open</button>
+      </div>
     </div>
     <div class="ab-empty" id="abEmpty">Select an image to begin.</div>
   `;
@@ -19,6 +23,47 @@ export function initABViewer(container) {
   const overlay = container.querySelector("#abOverlay");
   const handle = container.querySelector("#abHandle");
   const empty = container.querySelector("#abEmpty");
+  const actions = container.querySelector("#abActions");
+  const copyBtn = container.querySelector("#abCopyBtn");
+  const openBtn = container.querySelector("#abOpenBtn");
+
+  let currentResultUrl = null;
+
+  // Re-encodes as PNG via canvas since the Clipboard API only reliably
+  // accepts image/png across browsers, regardless of the source file's format.
+  async function copyImageToClipboard(url) {
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
+  }
+
+  copyBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!currentResultUrl) return;
+    const original = copyBtn.textContent;
+    try {
+      await copyImageToClipboard(currentResultUrl);
+      copyBtn.textContent = "✓ Copied";
+    } catch (err) {
+      copyBtn.textContent = "✕ Failed";
+    } finally {
+      setTimeout(() => {
+        copyBtn.textContent = original;
+      }, 1200);
+    }
+  });
+
+  openBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!currentResultUrl) return;
+    window.open(currentResultUrl, "_blank", "noopener");
+  });
 
   let percent = 50;
   let dragging = false;
@@ -63,13 +108,16 @@ export function initABViewer(container) {
       stage.style.display = "block";
       empty.style.display = "none";
       base.src = sourceUrl;
+      currentResultUrl = resultUrl || null;
       if (resultUrl) {
         resultImg.src = resultUrl;
         overlay.style.display = "block";
         handle.style.display = "block";
+        actions.style.display = "flex";
       } else {
         overlay.style.display = "none";
         handle.style.display = "none";
+        actions.style.display = "none";
       }
     },
   };

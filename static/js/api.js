@@ -48,6 +48,8 @@ export const api = {
     for (const file of files) form.append("files", file);
     return request("POST", `/projects/${projectId}/images`, { form });
   },
+  importImageFromUrl: (projectId, url) =>
+    request("POST", `/projects/${projectId}/images/from-url`, { json: { url } }),
   importResult: (projectId, { imageId, sourceFile, displayName, resultFile, promptText, evaluation }) => {
     const form = new FormData();
     if (imageId) form.append("image_id", imageId);
@@ -87,6 +89,7 @@ export const api = {
   permanentlyDeleteResult: (resultId) => request("DELETE", `/results/${resultId}/permanent`),
   trashNoResults: (projectId) => request("POST", `/projects/${projectId}/results/trash-no`),
   getQueue: () => request("GET", "/queue"),
+  getQueueLog: () => request("GET", "/queue/log"),
 
   // Config
   getConfig: () => request("GET", "/config"),

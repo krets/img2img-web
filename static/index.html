@@ -16,6 +16,7 @@
     </div>
     <div class="topbar-right">
       <button id="duplicatesBtn" class="btn-ghost">Find Duplicates</button>
+      <button id="logsBtn" class="btn-ghost">📜 Logs</button>
       <button id="trashBtn" class="btn-ghost">🗑 Trash</button>
       <button id="exportBtn" class="btn-ghost">Export</button>
       <button id="settingsBtn" class="btn-ghost">Settings</button>
@@ -56,11 +57,10 @@
         <div id="uploadStatus" class="status-line"></div>
         <div class="sidebar-controls-row">
           <button id="multiSelectToggleBtn" class="btn-ghost small">☑ Select</button>
-        </div>
-        <div id="multiSelectBar" class="multi-select-bar" style="display:none">
-          <span id="multiSelectCount"></span>
-          <button id="multiSelectMoveBtn" class="btn-ghost small">Move to project…</button>
-          <button id="multiSelectCancelBtn" class="btn-ghost small">Cancel</button>
+          <span id="multiSelectBar" class="multi-select-bar" style="display:none">
+            <span id="multiSelectCount"></span>
+            <button id="multiSelectMoveBtn" class="btn-ghost small">Move</button>
+          </span>
         </div>
         <div id="imageList" class="image-list"></div>
       </div>
@@ -114,24 +114,12 @@
         <div class="field-row">
           <button id="generateBtn" class="btn-primary">✨ Generate</button>
         </div>
-        <div class="field-row">
-          <button id="uploadResultBtn" class="btn-ghost drop-target" style="flex:1">📁 Upload Result Instead (or drop file here)</button>
-          <input id="uploadResultInput" type="file" accept="image/*" hidden />
-        </div>
+        <input id="uploadResultInput" type="file" accept="image/*" hidden />
         <div id="generateStatus" class="status-line"></div>
 
         <div class="field">
           <label>Results (<span id="resultCount">0</span>)</label>
           <div id="resultGrid" class="result-grid"></div>
-        </div>
-        <div class="field-row eval-row">
-          <button id="evalYesBtn" class="btn-eval yes">YES (y)</button>
-          <button id="evalMaybeBtn" class="btn-eval maybe">MAYBE (m)</button>
-          <button id="evalNoBtn" class="btn-eval no">NO (n)</button>
-        </div>
-        <div id="resultPromptUsed" class="result-prompt-used" style="display:none">
-          <span id="resultPromptText" class="result-prompt-used-text"></span>
-          <button id="copyPromptBtn" class="copy-prompt-btn" title="Copy prompt">📋</button>
         </div>
         <div id="revisedPrompt" class="revised-prompt"></div>
 

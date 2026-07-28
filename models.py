@@ -20,6 +20,10 @@ class ImageUpdateIn(BaseModel):
     comment: Optional[str] = None
 
 
+class ImageFromUrlIn(BaseModel):
+    url: str
+
+
 class MoveImagesIn(BaseModel):
     image_ids: list[str]
     target_project_id: str

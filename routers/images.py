@@ -1,11 +1,17 @@
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+import requests
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 import db
 import storage
-from models import ImageUpdateIn, MergeImagesIn, MoveImagesIn
+from models import ImageFromUrlIn, ImageUpdateIn, MergeImagesIn, MoveImagesIn
 
 router = APIRouter(tags=["images"])
+
+MAX_URL_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 @router.get("/api/projects/{project_id}/images")
@@ -57,6 +63,58 @@ async def upload_images(project_id: str, files: list[UploadFile] = File(...)):
         )
         created.append(image)
     return {"created": created, "skipped": skipped}
+
+
+@router.post("/api/projects/{project_id}/images/from-url")
+def import_image_from_url(project_id: str, body: ImageFromUrlIn):
+    if not db.get_project(project_id):
+        raise HTTPException(404, "Project not found")
+
+    url = body.url.strip()
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(400, f"Could not fetch URL: {e}")
+
+    content_type = resp.headers.get("content-type", "")
+    if not content_type.startswith("image/"):
+        raise HTTPException(400, f"URL did not return an image (content-type: {content_type or 'unknown'})")
+    if len(resp.content) > MAX_URL_IMAGE_BYTES:
+        raise HTTPException(400, "Image is too large (25MB limit)")
+
+    display_name = unquote(Path(urlparse(url).path).stem) or "image"
+    image_id = db.new_id()
+    try:
+        file_name, width, height, content_hash, resized_hash = storage.save_source_image(
+            project_id, image_id, display_name, resp.content
+        )
+    except Exception as e:
+        raise HTTPException(400, f"Could not process image from URL: {e}")
+
+    existing = db.find_image_by_hash(project_id, content_hash)
+    if existing:
+        storage.delete_source_image(project_id, file_name)
+        return {
+            "created": [],
+            "skipped": [{
+                "filename": display_name,
+                "duplicate_of": existing["display_name"],
+                "duplicate_of_id": existing["id"],
+            }],
+        }
+
+    image = db.create_image(
+        project_id=project_id,
+        file_name=file_name,
+        display_name=display_name,
+        width=width,
+        height=height,
+        content_hash=content_hash,
+        resized_hash=resized_hash,
+        comment=url,
+    )
+    return {"created": [image], "skipped": []}
 
 
 @router.get("/api/projects/{project_id}/duplicates")

@@ -73,6 +73,7 @@ async def import_result(
         image_id=image["id"],
         file_path=result_file_name,
         adhoc_prompt_text=prompt_text or None,
+        engine="imported",
         result_id=result_id,
     )
     if evaluation != "UNRATED":
@@ -83,6 +84,11 @@ async def import_result(
 @router.get("/api/queue")
 def get_queue():
     return jobs.list_jobs()
+
+
+@router.get("/api/queue/log")
+def get_queue_log():
+    return jobs.list_log()
 
 
 @router.post("/api/images/{image_id}/generate")
@@ -121,7 +127,7 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
 def _run_generation(job_id, image, body, engine, config, source_path):
     model = None
     aspect_ratio = None
-    max_dim = None
+    max_dim = body.max_dim or config["default_max_dim"]
     try:
         jobs.update_job(job_id, status="running")
 
@@ -133,12 +139,12 @@ def _run_generation(job_id, image, body, engine, config, source_path):
                     source_path=source_path,
                     prompt=body.adhoc_prompt_text,
                     job_id=job_id,
+                    max_dim=max_dim,
                 )
             except Exception as e:
                 raise RuntimeError(f"ComfyUI request failed: {e}") from e
         else:
             model = body.model or config["default_model"]
-            max_dim = body.max_dim or config["default_max_dim"]
             aspect_ratio = body.aspect_ratio
             try:
                 image_bytes, revised_prompt = grok_client.generate_image_edit(

@@ -11,9 +11,11 @@ client_id) so the frontend's queue overlay can follow it live.
 import json
 import random
 import time
+from io import BytesIO
 from pathlib import Path
 
 import requests
+from PIL import Image
 
 import jobs
 
@@ -29,6 +31,10 @@ SAVE_IMAGE_NODE = "516"
 
 POLL_INTERVAL_SECONDS = 1.0
 POLL_TIMEOUT_SECONDS = 300
+# Generous ceiling for individual HTTP calls (upload, submit, poll, download) so a
+# flaky/slow network doesn't abort a request that would've completed given more time.
+REQUEST_TIMEOUT_SECONDS = 120
+WS_OPEN_TIMEOUT_SECONDS = 30
 
 
 def _load_workflow(workflow_path):
@@ -36,17 +42,42 @@ def _load_workflow(workflow_path):
         return json.load(f)
 
 
-def _upload_image(base_url, image_path):
+def _prepare_upload(image_path, max_dim):
+    """Resizes the source image to max_dim before upload if it's larger, so a
+    slow or remote ComfyUI connection doesn't have to transfer a full-resolution
+    original for every generation (mirrors the Grok engine's preprocessing).
+    Returns (bytes, filename); passes the file through untouched if no resize
+    is needed.
+    """
+    if max_dim:
+        img = Image.open(image_path)
+        if max(img.size) > max_dim:
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                img_rgba = img.convert("RGBA")
+                bg.paste(img_rgba, mask=img_rgba.split()[3])
+                img = bg
+            else:
+                img = img.convert("RGB")
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue(), Path(image_path).stem + ".png"
     with open(image_path, "rb") as f:
-        files = {"image": (Path(image_path).name, f, "image/png")}
-        response = requests.post(
-            f"{base_url}/upload/image", files=files, data={"overwrite": "true"}, timeout=30
-        )
+        return f.read(), Path(image_path).name
+
+
+def _upload_image(base_url, image_path, max_dim=None):
+    image_bytes, filename = _prepare_upload(image_path, max_dim)
+    files = {"image": (filename, image_bytes, "image/png")}
+    response = requests.post(
+        f"{base_url}/upload/image", files=files, data={"overwrite": "true"}, timeout=REQUEST_TIMEOUT_SECONDS
+    )
     response.raise_for_status()
     return response.json()["name"]
 
 
-def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id):
+def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, max_dim=None):
     """Runs the Flux.2 ComfyUI workflow against a source image on disk.
     Returns (image_bytes, revised_prompt) — revised_prompt is always None since
     ComfyUI doesn't rewrite prompts the way the Grok API does.
@@ -55,7 +86,7 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id):
 
     jobs.update_job(job_id, phase="uploading", value=0, max=0)
     workflow = _load_workflow(workflow_path)
-    uploaded_name = _upload_image(base_url, source_path)
+    uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
 
     # Every LoadImage node gets pointed at the uploaded source image. The workflow
     # has unused reference/mask branches (from whatever ComfyUI session it was
@@ -72,7 +103,7 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id):
 
     jobs.update_job(job_id, phase="queued")
     response = requests.post(
-        f"{base_url}/prompt", json={"prompt": workflow, "client_id": job_id}, timeout=30
+        f"{base_url}/prompt", json={"prompt": workflow, "client_id": job_id}, timeout=REQUEST_TIMEOUT_SECONDS
     )
     if response.status_code != 200:
         raise RuntimeError(f"ComfyUI rejected the prompt: {response.status_code} {response.text}")
@@ -112,7 +143,7 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
     """
     ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://") + f"/ws?clientId={job_id}"
     deadline = time.time() + POLL_TIMEOUT_SECONDS
-    with _ws_connect(ws_url, open_timeout=10) as ws:
+    with _ws_connect(ws_url, open_timeout=WS_OPEN_TIMEOUT_SECONDS) as ws:
         while time.time() < deadline:
             try:
                 raw = ws.recv(timeout=max(1.0, deadline - time.time()))
@@ -159,7 +190,7 @@ def _wait_for_result_http(base_url, job_id, prompt_id):
 
 
 def _fetch_history(base_url, prompt_id):
-    response = requests.get(f"{base_url}/history/{prompt_id}", timeout=10)
+    response = requests.get(f"{base_url}/history/{prompt_id}", timeout=REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
     entry = response.json().get(prompt_id)
     if not entry:
@@ -180,7 +211,7 @@ def _download_image(base_url, image_info):
             "subfolder": image_info.get("subfolder", ""),
             "type": image_info.get("type", "output"),
         },
-        timeout=30,
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.content

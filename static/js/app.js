@@ -38,11 +38,11 @@ const els = {
   uploadStatus: document.getElementById("uploadStatus"),
   cleanupNoBtn: document.getElementById("cleanupNoBtn"),
   duplicatesBtn: document.getElementById("duplicatesBtn"),
+  logsBtn: document.getElementById("logsBtn"),
   multiSelectToggleBtn: document.getElementById("multiSelectToggleBtn"),
   multiSelectBar: document.getElementById("multiSelectBar"),
   multiSelectCount: document.getElementById("multiSelectCount"),
   multiSelectMoveBtn: document.getElementById("multiSelectMoveBtn"),
-  multiSelectCancelBtn: document.getElementById("multiSelectCancelBtn"),
   imageList: document.getElementById("imageList"),
   newPromptBtn: document.getElementById("newPromptBtn"),
   promptList: document.getElementById("promptList"),
@@ -56,18 +56,11 @@ const els = {
   engineSelect: document.getElementById("engineSelect"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
   generateBtn: document.getElementById("generateBtn"),
-  uploadResultBtn: document.getElementById("uploadResultBtn"),
   uploadResultInput: document.getElementById("uploadResultInput"),
   generateStatus: document.getElementById("generateStatus"),
   resultCount: document.getElementById("resultCount"),
   resultGrid: document.getElementById("resultGrid"),
   deleteImageBtn: document.getElementById("deleteImageBtn"),
-  evalYesBtn: document.getElementById("evalYesBtn"),
-  evalMaybeBtn: document.getElementById("evalMaybeBtn"),
-  evalNoBtn: document.getElementById("evalNoBtn"),
-  resultPromptUsed: document.getElementById("resultPromptUsed"),
-  resultPromptText: document.getElementById("resultPromptText"),
-  copyPromptBtn: document.getElementById("copyPromptBtn"),
   revisedPrompt: document.getElementById("revisedPrompt"),
   modalOverlay: document.getElementById("modalOverlay"),
   modalContent: document.getElementById("modalContent"),
@@ -95,6 +88,9 @@ function closeModal() {
 }
 els.modalOverlay.addEventListener("click", (e) => {
   if (e.target === els.modalOverlay) closeModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && els.modalOverlay.style.display !== "none") closeModal();
 });
 
 // ---------------------------------------------------------------------------
@@ -136,6 +132,7 @@ els.newProjectBtn.addEventListener("click", () => {
       <button id="mCreate" class="btn-primary">Create</button>
     </div>
   `);
+  modal.querySelector("#mName").focus();
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
   modal.querySelector("#mCreate").addEventListener("click", async () => {
     const name = modal.querySelector("#mName").value.trim();
@@ -233,6 +230,29 @@ function renderImageList() {
     els.imageList.querySelectorAll(".image-item").forEach((el) => {
       el.addEventListener("click", () => selectImage(el.dataset.id));
     });
+    els.imageList.querySelectorAll(".chit[data-result-id]").forEach((chitEl) => {
+      chitEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const imageId = chitEl.closest(".image-item").dataset.id;
+        selectImageResult(imageId, chitEl.dataset.resultId);
+      });
+    });
+  }
+}
+
+// Jumps to a specific generation from its chit in the sidebar grid: selects
+// the image (if not already current) and makes that particular result the
+// active one, same as clicking its tile in the results grid.
+async function selectImageResult(imageId, resultId) {
+  if (state.currentImageId !== imageId) {
+    await selectImage(imageId);
+    if (state.currentImageId !== imageId) return; // navigated away before this resolved
+  }
+  await api.activateResult(resultId);
+  await loadImages();
+  if (state.currentImageId === imageId) {
+    state.currentImage = await api.getImage(imageId);
+    renderDetails();
   }
 }
 
@@ -249,7 +269,7 @@ function toggleImageSelection(id) {
 
 function updateMultiSelectBar() {
   const count = state.selectedImageIds.size;
-  els.multiSelectBar.style.display = state.multiSelectMode && count ? "flex" : "none";
+  els.multiSelectBar.style.display = state.multiSelectMode && count ? "contents" : "none";
   els.multiSelectCount.textContent = `${count} selected`;
 }
 
@@ -259,12 +279,6 @@ els.multiSelectToggleBtn.addEventListener("click", () => {
   els.multiSelectToggleBtn.classList.toggle("active", state.multiSelectMode);
   updateMultiSelectBar();
   renderImageList();
-});
-
-els.multiSelectCancelBtn.addEventListener("click", () => {
-  state.selectedImageIds.clear();
-  renderImageList();
-  updateMultiSelectBar();
 });
 
 els.multiSelectMoveBtn.addEventListener("click", () => {
@@ -338,7 +352,7 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
 // ones, so the sidebar row doubles as a quick per-image progress readout.
 function renderChits(img) {
   const completedChits = (img.result_evaluations || []).map(
-    (r) => `<span class="chit ${r.evaluation}" title="${r.evaluation}"></span>`
+    (r) => `<span class="chit ${r.evaluation}" data-result-id="${r.id}" title="${r.evaluation}"></span>`
   );
   const jobsForImage = state.queue.filter((j) => j.image_id === img.id);
   const pendingChits = jobsForImage
@@ -391,6 +405,12 @@ function reportUploadResult({ created, skipped }) {
 async function handleUploadedFiles(files) {
   if (!files.length) return;
   const { created, skipped } = await api.uploadImages(state.currentProjectId, files);
+  await afterImagesIngested({ created, skipped });
+}
+
+// Shared by file upload, drag-drop, clipboard-image paste, and URL paste: reports
+// what happened, refreshes the list, and jumps to the new (or matching duplicate) image.
+async function afterImagesIngested({ created, skipped }) {
   reportUploadResult({ created, skipped });
   await loadImages();
 
@@ -403,6 +423,25 @@ async function handleUploadedFiles(files) {
   } else if (skipped.length && skipped[0].duplicate_of_id) {
     // Rejected as a duplicate: jump to the existing image it matches instead.
     await selectImage(skipped[0].duplicate_of_id);
+  }
+}
+
+const IMAGE_URL_RE = /^https?:\/\/\S+$/i;
+function isEditableElement(el) {
+  if (!el) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
+}
+
+// Pastes a bare image URL (e.g. "copy image address" from a browser) as a new
+// source image, fetched server-side so the browser's CORS restrictions don't
+// apply. The URL itself is kept as the image's comment for provenance.
+async function handleImageUrlPaste(url) {
+  els.uploadStatus.innerHTML = `<span class="spinner"></span><span>Fetching image from URL...</span>`;
+  try {
+    const { created, skipped } = await api.importImageFromUrl(state.currentProjectId, url);
+    await afterImagesIngested({ created, skipped });
+  } catch (e) {
+    els.uploadStatus.textContent = `Error: ${e.message}`;
   }
 }
 
@@ -441,6 +480,9 @@ els.uploadDrop.addEventListener("drop", async (e) => {
 // into the library as a new source image, anywhere except inside an open
 // modal -- clipboard image data never affects a focused text field, so this
 // can safely listen globally without stepping on normal text pasting.
+// A bare image URL (e.g. "copy image address") is handled too, but only when
+// no text field is focused, since a URL there is normal text the user is
+// pasting on purpose (e.g. into the comment box).
 document.addEventListener("paste", async (e) => {
   if (!state.currentProjectId) return;
   if (els.modalOverlay.style.display !== "none") return;
@@ -453,9 +495,17 @@ document.addEventListener("paste", async (e) => {
       if (file) imageFiles.push(file);
     }
   }
-  if (!imageFiles.length) return;
+  if (imageFiles.length) {
+    e.preventDefault();
+    await handleUploadedFiles(imageFiles);
+    return;
+  }
+
+  if (isEditableElement(document.activeElement)) return;
+  const text = e.clipboardData.getData("text/plain")?.trim();
+  if (!text || !IMAGE_URL_RE.test(text)) return;
   e.preventDefault();
-  await handleUploadedFiles(imageFiles);
+  await handleImageUrlPaste(text);
 });
 
 async function selectImage(id) {
@@ -522,28 +572,67 @@ function renderDetails() {
   const resultUrl = active ? `/api/results/${active.id}/file` : null;
   abViewer.setImages(sourceUrl, resultUrl);
 
-  const promptUsed = active?.adhoc_prompt_text || "";
-  els.resultPromptUsed.style.display = promptUsed ? "block" : "none";
-  els.resultPromptText.textContent = promptUsed ? `Prompt: "${promptUsed}"` : "";
-  els.resultPromptUsed.dataset.rawPrompt = promptUsed;
   els.revisedPrompt.textContent = active?.revised_prompt ? `Grok revised prompt: "${active.revised_prompt}"` : "";
-  highlightEvalButtons(active?.evaluation);
 }
 
+// Renders the results grid, followed by a dashed upload-dropzone card pinned
+// as the last item (secondary to the actual results, which stay newest-first).
+// Each result tile carries three hover-revealed corners: a copy-prompt icon
+// (top-left), delete (top-right), and thumbs-down/neutral/thumbs-up rating
+// controls (bottom-right; the tile's border color already shows the current
+// rating) -- so rating and pruning results no longer needs the old dedicated
+// sidebar buttons.
 function renderResultGrid(results, activeId) {
-  els.resultGrid.innerHTML = results
+  const uploadCardHtml = `
+    <div class="result-upload-card" id="resultUploadCard" title="Upload a result image">
+      <span class="result-upload-card-icon">+</span>
+      <span class="result-upload-card-label">Upload</span>
+    </div>
+  `;
+
+  const tilesHtml = results
     .map((r) => {
       const activeClass = r.id === activeId ? "active" : "";
-      const promptSnippet = r.adhoc_prompt_text ? ` — "${r.adhoc_prompt_text}"` : "";
-      const label = `${r.evaluation} — ${new Date(r.date_generated).toLocaleString()}${promptSnippet}`;
+      const label = `${r.evaluation} — ${new Date(r.date_generated).toLocaleString()}`;
+      const promptText = r.adhoc_prompt_text || "";
+      const promptAttr = escapeHtml(promptText);
+      const copyBtn = promptText
+        ? `<button class="result-tile-copy" data-copy-prompt="${promptAttr}" title="${promptAttr}">📋</button>`
+        : "";
+      const engineLabel = { grok: "Grok", comfyui: "Comfy", imported: "Imported" }[r.engine] || r.engine;
+      const engineBadge = `<span class="result-tile-engine engine-${r.engine}">${escapeHtml(engineLabel)}</span>`;
       return `
         <div class="result-tile ${r.evaluation} ${activeClass}" data-id="${r.id}" title="${escapeHtml(label)}">
           <img src="/api/results/${r.id}/thumbnail" loading="lazy" />
+          ${engineBadge}
+          ${copyBtn}
           <button class="result-tile-delete" data-delete-result="${r.id}" title="Delete result">✕</button>
+          <div class="result-tile-rating">
+            <div class="rating-controls">
+              <button class="rating-btn no ${r.evaluation === "NO" ? "active" : ""}" data-rate="${r.id}" data-value="NO" title="No">👎</button>
+              <button class="rating-btn maybe ${r.evaluation === "MAYBE" ? "active" : ""}" data-rate="${r.id}" data-value="MAYBE" title="Maybe">😐</button>
+              <button class="rating-btn yes ${r.evaluation === "YES" ? "active" : ""}" data-rate="${r.id}" data-value="YES" title="Yes">👍</button>
+            </div>
+          </div>
         </div>
       `;
     })
     .join("");
+
+  els.resultGrid.innerHTML = tilesHtml + uploadCardHtml;
+
+  const uploadCardEl = document.getElementById("resultUploadCard");
+  uploadCardEl.addEventListener("click", () => els.uploadResultInput.click());
+  ["dragover", "dragleave", "drop"].forEach((evtName) => {
+    uploadCardEl.addEventListener(evtName, (e) => {
+      e.preventDefault();
+      uploadCardEl.classList.toggle("dragover", evtName === "dragover");
+    });
+  });
+  uploadCardEl.addEventListener("drop", async (e) => {
+    const file = e.dataTransfer.files[0];
+    await attachResultFile(file);
+  });
 
   els.resultGrid.querySelectorAll(".result-tile").forEach((el) => {
     el.addEventListener("click", async () => {
@@ -571,12 +660,37 @@ function renderResultGrid(results, activeId) {
       await loadImages();
     });
   });
-}
-
-function highlightEvalButtons(evaluation) {
-  els.evalYesBtn.classList.toggle("active", evaluation === "YES");
-  els.evalMaybeBtn.classList.toggle("active", evaluation === "MAYBE");
-  els.evalNoBtn.classList.toggle("active", evaluation === "NO");
+  els.resultGrid.querySelectorAll("[data-copy-prompt]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const text = btn.dataset.copyPrompt;
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = "✓";
+      } catch (err) {
+        btn.textContent = "✕";
+      } finally {
+        setTimeout(() => {
+          btn.textContent = "📋";
+        }, 1000);
+      }
+    });
+  });
+  els.resultGrid.querySelectorAll("[data-rate]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const targetImageId = state.currentImageId;
+      const resultId = btn.dataset.rate;
+      const value = btn.dataset.value;
+      await api.setEvaluation(resultId, value);
+      await loadImages();
+      if (state.currentImageId === targetImageId) {
+        state.currentImage = await api.getImage(targetImageId);
+        renderDetails();
+      }
+    });
+  });
 }
 
 // Per-image debounce timers, keyed by image id, so editing one image never cancels
@@ -811,23 +925,15 @@ async function attachResultFile(file) {
   }
 }
 
-els.uploadResultBtn.addEventListener("click", () => els.uploadResultInput.click());
 els.uploadResultInput.addEventListener("change", async () => {
   const file = els.uploadResultInput.files[0];
   els.uploadResultInput.value = "";
   await attachResultFile(file);
 });
-["dragover", "dragleave", "drop"].forEach((evtName) => {
-  els.uploadResultBtn.addEventListener(evtName, (e) => {
-    e.preventDefault();
-    els.uploadResultBtn.classList.toggle("dragover", evtName === "dragover");
-  });
-});
-els.uploadResultBtn.addEventListener("drop", async (e) => {
-  const file = e.dataTransfer.files[0];
-  await attachResultFile(file);
-});
 
+// Rates the current image's active result. No longer has dedicated buttons in
+// the sidebar (rating now happens per-tile in the results grid), but kept for
+// the y/m/n hotkeys.
 async function setEvaluation(value) {
   const targetImageId = state.currentImageId;
   const results = state.currentImage?.results || [];
@@ -840,24 +946,6 @@ async function setEvaluation(value) {
     renderDetails();
   }
 }
-els.evalYesBtn.addEventListener("click", () => setEvaluation("YES"));
-els.evalMaybeBtn.addEventListener("click", () => setEvaluation("MAYBE"));
-els.evalNoBtn.addEventListener("click", () => setEvaluation("NO"));
-
-els.copyPromptBtn.addEventListener("click", async () => {
-  const text = els.resultPromptUsed.dataset.rawPrompt || "";
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-    els.copyPromptBtn.textContent = "✓";
-  } catch (e) {
-    els.copyPromptBtn.textContent = "✕";
-  } finally {
-    setTimeout(() => {
-      els.copyPromptBtn.textContent = "📋";
-    }, 1200);
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Prompt palette
@@ -1128,6 +1216,55 @@ function renderDuplicatesModal({ exact, possible }) {
       renderDuplicatesModal(refreshed);
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Generation log
+// ---------------------------------------------------------------------------
+
+// Ring buffer of finished (done/error) jobs kept server-side -- see jobs.py.
+// Unlike the queue overlay's per-image chits (which vanish ~10s after a job
+// finishes), this survives long enough to review failures you weren't
+// watching for live. It's still in-memory only, so it resets on server restart.
+els.logsBtn.addEventListener("click", async () => {
+  const log = await api.getQueueLog();
+  renderLogModal(log);
+});
+
+function formatLogTime(ts) {
+  if (!ts) return "";
+  return new Date(ts * 1000).toLocaleString();
+}
+
+// Each entry is a native <details> so the list stays scannable -- only the
+// one-line summary shows by default, collapsed until clicked.
+function renderLogModal(entries) {
+  const rowsHtml = entries.length
+    ? entries
+        .map((j) => {
+          const failed = j.status === "error";
+          return `
+        <details class="log-item ${failed ? "error" : "done"}">
+          <summary class="log-item-header">
+            <span class="log-item-status ${failed ? "error" : "done"}">${failed ? "Failed" : "Done"}</span>
+            <span class="log-item-name">${escapeHtml(j.image_name)}</span>
+            <span class="log-item-engine">${escapeHtml(j.engine)}</span>
+            <span class="log-item-time">${formatLogTime(j.finished_at)}</span>
+          </summary>
+          ${j.prompt_text ? `<div class="log-item-prompt">${escapeHtml(j.prompt_text)}</div>` : ""}
+          ${failed ? `<div class="log-item-error">${escapeHtml(j.error || "Unknown error")}</div>` : ""}
+        </details>
+      `;
+        })
+        .join("")
+    : `<div class="empty-state">No generation activity yet.</div>`;
+
+  const modal = openModal(`
+    <h3>Generation Log</h3>
+    <div class="log-list">${rowsHtml}</div>
+    <div class="modal-actions"><button id="mCancel" class="btn-ghost">Close</button></div>
+  `);
+  modal.querySelector("#mCancel").addEventListener("click", closeModal);
 }
 
 // ---------------------------------------------------------------------------

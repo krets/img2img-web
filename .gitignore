@@ -15,3 +15,6 @@ wheels/
 # Library workspace (source/result images, SQLite DB, config incl. API key)
 workspace/
 
+# Isolated test workspace (used with server.py --db workspace_test/library.db)
+workspace_test/
+

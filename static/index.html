@@ -19,6 +19,7 @@
       <button id="logsBtn" class="btn-ghost">📜 Logs</button>
       <button id="trashBtn" class="btn-ghost">🗑 Trash</button>
       <button id="exportBtn" class="btn-ghost">Export</button>
+      <button id="maximizeViewportBtn" class="btn-ghost" title="Maximize viewport — hide side panels (hotkey: f)">⛶ Maximize</button>
       <button id="settingsBtn" class="btn-ghost">Settings</button>
     </div>
   </div>
@@ -64,16 +65,30 @@
         </div>
         <div id="imageList" class="image-list"></div>
       </div>
+      <div class="panel-edge panel-edge-sidebar">
+        <div class="panel-resize-handle" id="sidebarResizeHandle"></div>
+        <button class="panel-collapse-btn" id="sidebarCollapseBtn" title="Collapse sidebar">‹</button>
+      </div>
     </aside>
+    <button class="panel-expand-tab panel-expand-tab-sidebar" id="sidebarExpandTab" title="Expand sidebar" style="display:none">›</button>
 
     <main id="viewer"></main>
 
+    <button class="panel-expand-tab panel-expand-tab-details" id="detailsExpandTab" title="Expand details panel" style="display:none">‹</button>
     <aside id="detailsPanel">
-      <div class="panel-section">
+      <div class="panel-edge panel-edge-details">
+        <button class="panel-collapse-btn" id="detailsCollapseBtn" title="Collapse details panel">›</button>
+        <div class="panel-resize-handle" id="detailsResizeHandle"></div>
+      </div>
+      <div class="panel-section" id="promptPaletteSection">
         <div class="panel-header">
-          <span>Prompt Palette</span>
-          <button id="newPromptBtn" class="btn-ghost small">+ New</button>
+          <span>Prompt Palette <span id="promptCount" class="prompt-count"></span></span>
+          <span class="panel-header-actions">
+            <button id="newPromptBtn" class="btn-ghost small">+ New</button>
+            <button id="promptPaletteToggleBtn" class="btn-ghost small" title="Collapse/expand prompt palette">▾</button>
+          </span>
         </div>
+        <input id="promptFilterInput" type="text" class="prompt-filter" placeholder="Filter prompts..." />
         <div id="promptList" class="prompt-list"></div>
       </div>
 

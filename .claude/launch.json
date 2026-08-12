@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["server.py"],
       "port": 8765
+    },
+    {
+      "name": "grok_img2img_test",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["server.py", "--port", "8766", "--db", "workspace_test/library.db"],
+      "port": 8766
     }
   ]
 }

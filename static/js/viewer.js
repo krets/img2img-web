@@ -1,22 +1,63 @@
-/** Self-contained A/B comparison slider: source image left, result image right,
- * revealed by a draggable vertical handle using a CSS clip-path.
+/** Image review viewport: source vs. result, with several comparison modes.
+ * All modes share the same two <img> elements (repositioned/restyled per mode
+ * via CSS keyed off ab-stage[data-mode]) rather than duplicating image nodes.
+ *
+ * Modes:
+ *  - wipe-lr / wipe-tb: draggable clip-path wipe (default: wipe-lr)
+ *  - hold-result / hold-source: press-and-hold swaps which image is on top
+ *  - side-by-side: both images adjacent, row or column orientation
+ *  - diff: result layered over source with mix-blend-mode: difference
+ *  - blend: opacity crossfade between the two, via a toolbar slider (not an
+ *    on-image handle -- there's no natural on-image position for it)
  */
+const STORAGE_KEY = "grok_img2img.viewerMode";
+
+const MODES = [
+  { id: "wipe-lr", icon: "⬌", title: "Wipe left/right" },
+  { id: "wipe-tb", icon: "⬍", title: "Wipe top/bottom" },
+  { id: "hold-result", icon: "👁︎R", title: "Hold to reveal result (default: source)" },
+  { id: "hold-source", icon: "👁︎S", title: "Hold to reveal original (default: result)" },
+  { id: "side-by-side", icon: "▥", title: "Side by side" },
+  { id: "diff", icon: "±", title: "Difference" },
+  { id: "blend", icon: "◐", title: "Blend" },
+];
+// Modes with an on-image drag handle. Blend is deliberately excluded -- its
+// crossfade slider lives in the modebar instead of overlaying the image.
+const DRAG_MODES = new Set(["wipe-lr", "wipe-tb"]);
+const HOLD_MODES = new Set(["hold-result", "hold-source"]);
+
+function loadState() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
 export function initABViewer(container) {
   container.innerHTML = `
-    <div class="ab-stage" id="abStage">
-      <img class="ab-base" id="abBase" alt="Source" />
-      <div class="ab-overlay" id="abOverlay">
-        <img class="ab-result" id="abResult" alt="Result" />
-      </div>
-      <div class="ab-handle" id="abHandle"><div class="ab-handle-grip"></div></div>
-      <div class="ab-actions" id="abActions">
-        <button class="ab-action-btn" id="abCopyBtn" title="Copy result image to clipboard">📋 Copy</button>
-        <button class="ab-action-btn" id="abOpenBtn" title="Open result image in a new tab">↗ Open</button>
-      </div>
+    <div class="viewer-modebar" id="viewerModebar">
+      ${MODES.map((m) => `<button class="viewer-mode-btn" data-mode="${m.id}" title="${m.title}">${m.icon}</button>`).join("")}
+      <input type="range" id="blendSlider" class="viewer-blend-slider" min="0" max="100" value="50" title="Blend crossfade" style="display:none" />
+      <button class="viewer-mode-btn viewer-orientation-btn" id="orientationToggleBtn" title="Toggle row/column layout" style="display:none">⟳</button>
     </div>
-    <div class="ab-empty" id="abEmpty">Select an image to begin.</div>
+    <div class="viewer-stage-wrap">
+      <div class="ab-stage" id="abStage" data-mode="wipe-lr">
+        <img class="ab-base" id="abBase" alt="Source" />
+        <div class="ab-overlay" id="abOverlay">
+          <img class="ab-result" id="abResult" alt="Result" />
+        </div>
+        <div class="ab-handle" id="abHandle"><div class="ab-handle-grip"></div></div>
+        <div class="ab-actions" id="abActions">
+          <button class="ab-action-btn" id="abCopyBtn" title="Copy result image to clipboard">📋 Copy</button>
+          <button class="ab-action-btn" id="abOpenBtn" title="Open result image in a new tab">↗ Open</button>
+        </div>
+      </div>
+      <div class="ab-empty" id="abEmpty">Select an image to begin.</div>
+    </div>
   `;
 
+  const modebar = container.querySelector("#viewerModebar");
   const stage = container.querySelector("#abStage");
   const base = container.querySelector("#abBase");
   const resultImg = container.querySelector("#abResult");
@@ -26,8 +67,36 @@ export function initABViewer(container) {
   const actions = container.querySelector("#abActions");
   const copyBtn = container.querySelector("#abCopyBtn");
   const openBtn = container.querySelector("#abOpenBtn");
+  const orientationBtn = container.querySelector("#orientationToggleBtn");
+  const blendSlider = container.querySelector("#blendSlider");
+
+  // navigator.clipboard is only exposed in secure contexts (localhost or HTTPS);
+  // over plain LAN HTTP it's undefined, so hide the button rather than let it
+  // silently fail -- side-by-side mode lets the browser's native right-click
+  // "Copy image" work on the plain <img> instead.
+  const clipboardAvailable = !!(navigator.clipboard && window.isSecureContext);
+  if (!clipboardAvailable) copyBtn.style.display = "none";
 
   let currentResultUrl = null;
+  let hasResult = false;
+  let hasSource = false;
+
+  function updateStageDisplay() {
+    if (!hasSource) {
+      stage.style.display = "none";
+      return;
+    }
+    stage.style.display = mode === "side-by-side" ? "flex" : "block";
+  }
+
+  const saved = loadState();
+  let mode = MODES.some((m) => m.id === saved.mode) ? saved.mode : "wipe-lr";
+  let orientation = saved.orientation === "column" ? "column" : "row";
+  let percent = 50; // wipe-lr / wipe-tb position, and blend crossfade, 0-100
+
+  function persist() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, orientation }));
+  }
 
   // Re-encodes as PNG via canvas since the Clipboard API only reliably
   // accepts image/png across browsers, regardless of the source file's format.
@@ -65,57 +134,106 @@ export function initABViewer(container) {
     window.open(currentResultUrl, "_blank", "noopener");
   });
 
-  let percent = 50;
-  let dragging = false;
-
   function applyPercent(p) {
     percent = Math.min(100, Math.max(0, p));
-    overlay.style.clipPath = `inset(0 0 0 ${percent}%)`;
-    handle.style.left = `${percent}%`;
+    stage.style.setProperty("--wipe-pct", `${percent}%`);
+    stage.style.setProperty("--blend-opacity", percent / 100);
   }
 
   function percentFromEvent(evt) {
     const rect = stage.getBoundingClientRect();
-    const x = evt.clientX - rect.left;
-    return (x / rect.width) * 100;
+    if (mode === "wipe-tb") return ((evt.clientY - rect.top) / rect.height) * 100;
+    return ((evt.clientX - rect.left) / rect.width) * 100;
   }
 
+  let dragging = false;
   handle.addEventListener("pointerdown", (evt) => {
+    if (!DRAG_MODES.has(mode)) return;
     dragging = true;
     handle.setPointerCapture(evt.pointerId);
   });
   stage.addEventListener("pointermove", (evt) => {
-    if (!dragging) return;
-    applyPercent(percentFromEvent(evt));
+    if (dragging && DRAG_MODES.has(mode)) {
+      applyPercent(percentFromEvent(evt));
+    }
   });
   handle.addEventListener("pointerup", () => {
     dragging = false;
   });
   stage.addEventListener("pointerdown", (evt) => {
-    if (evt.target === handle || handle.contains(evt.target)) return;
-    applyPercent(percentFromEvent(evt));
+    if (DRAG_MODES.has(mode)) {
+      if (evt.target === handle || handle.contains(evt.target)) return;
+      applyPercent(percentFromEvent(evt));
+      return;
+    }
+    if (HOLD_MODES.has(mode) && hasResult) {
+      stage.classList.add("ab-holding");
+      stage.setPointerCapture(evt.pointerId);
+    }
   });
+  function releaseHold() {
+    stage.classList.remove("ab-holding");
+  }
+  stage.addEventListener("pointerup", releaseHold);
+  stage.addEventListener("pointerleave", releaseHold);
+  stage.addEventListener("pointercancel", releaseHold);
 
+  function setMode(nextMode) {
+    mode = nextMode;
+    stage.dataset.mode = mode;
+    stage.classList.remove("ab-holding");
+    modebar.querySelectorAll(".viewer-mode-btn[data-mode]").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+    orientationBtn.style.display = mode === "side-by-side" ? "inline-flex" : "none";
+    blendSlider.style.display = mode === "blend" ? "block" : "none";
+    if (mode === "blend") blendSlider.value = percent;
+    applyPercent(percent);
+    updateStageDisplay();
+    if (hasSource) {
+      handle.style.display = hasResult && DRAG_MODES.has(mode) ? "block" : "none";
+    }
+    persist();
+  }
+
+  function setOrientation(next) {
+    orientation = next;
+    stage.classList.toggle("orientation-column", orientation === "column");
+    persist();
+  }
+
+  modebar.querySelectorAll(".viewer-mode-btn[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => setMode(btn.dataset.mode));
+  });
+  orientationBtn.addEventListener("click", () => setOrientation(orientation === "row" ? "column" : "row"));
+  blendSlider.addEventListener("input", (e) => applyPercent(Number(e.target.value)));
+
+  setMode(mode);
+  setOrientation(orientation);
   applyPercent(50);
 
   return {
     setImages(sourceUrl, resultUrl) {
+      hasSource = !!sourceUrl;
       if (!sourceUrl) {
-        stage.style.display = "none";
+        updateStageDisplay();
+        modebar.style.display = "none";
         empty.style.display = "flex";
         return;
       }
-      stage.style.display = "block";
+      updateStageDisplay();
+      modebar.style.display = "flex";
       empty.style.display = "none";
       base.src = sourceUrl;
       currentResultUrl = resultUrl || null;
+      hasResult = !!resultUrl;
       if (resultUrl) {
         resultImg.src = resultUrl;
-        overlay.style.display = "block";
-        handle.style.display = "block";
+        overlay.style.visibility = "visible";
+        handle.style.display = DRAG_MODES.has(mode) ? "block" : "none";
         actions.style.display = "flex";
       } else {
-        overlay.style.display = "none";
+        overlay.style.visibility = "hidden";
         handle.style.display = "none";
         actions.style.display = "none";
       }

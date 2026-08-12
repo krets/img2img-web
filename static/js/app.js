@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { initABViewer } from "./viewer.js";
 import { initHotkeys } from "./hotkeys.js";
+import { initPanels } from "./panels.js";
 
 const state = {
   projects: [],
@@ -9,6 +10,8 @@ const state = {
   currentImageId: null,
   currentImage: null, // full detail incl. results
   prompts: [],
+  promptFilter: "",
+  promptPaletteCollapsed: localStorage.getItem("grok_img2img.promptPaletteCollapsed") === "1",
   sort: "recent_result",
   filter: "all",
   search: "",
@@ -46,6 +49,10 @@ const els = {
   imageList: document.getElementById("imageList"),
   newPromptBtn: document.getElementById("newPromptBtn"),
   promptList: document.getElementById("promptList"),
+  promptCount: document.getElementById("promptCount"),
+  promptFilterInput: document.getElementById("promptFilterInput"),
+  promptPaletteSection: document.getElementById("promptPaletteSection"),
+  promptPaletteToggleBtn: document.getElementById("promptPaletteToggleBtn"),
   viewer: document.getElementById("viewer"),
   detailsEmpty: document.getElementById("detailsEmpty"),
   detailsContent: document.getElementById("detailsContent"),
@@ -73,6 +80,12 @@ const els = {
 };
 
 const abViewer = initABViewer(els.viewer);
+initPanels();
+
+// navigator.clipboard is only exposed in secure contexts (localhost/HTTPS) --
+// unavailable over plain LAN HTTP. Prompt copy falls back to a "show prompt"
+// modal the user can Ctrl+A/Ctrl+C from manually instead of silently failing.
+const clipboardAvailable = !!(navigator.clipboard && window.isSecureContext);
 
 // ---------------------------------------------------------------------------
 // Modal helper
@@ -93,6 +106,23 @@ els.modalOverlay.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && els.modalOverlay.style.display !== "none") closeModal();
 });
+
+// Fallback for prompt-copy when navigator.clipboard is unavailable (insecure
+// context, e.g. plain LAN HTTP): show the text in a selectable readonly box
+// instead of failing silently, so Ctrl+A / Ctrl+C still works manually.
+function showPromptModal(text) {
+  const modal = openModal(`
+    <h3>Prompt text</h3>
+    <p class="modal-note">Clipboard access isn't available on this connection — select all and copy manually.</p>
+    <div class="field"><textarea id="mPromptText" class="prompt-edit-textarea" rows="8" readonly></textarea></div>
+    <div class="modal-actions"><button id="mClose" class="btn-ghost">Close</button></div>
+  `);
+  const ta = modal.querySelector("#mPromptText");
+  ta.value = text;
+  modal.querySelector("#mClose").addEventListener("click", closeModal);
+  ta.focus();
+  ta.select();
+}
 
 // ---------------------------------------------------------------------------
 // Projects
@@ -669,6 +699,10 @@ function renderResultGrid(results, activeId) {
       e.stopPropagation();
       const text = btn.dataset.copyPrompt;
       if (!text) return;
+      if (!clipboardAvailable) {
+        showPromptModal(text);
+        return;
+      }
       try {
         await navigator.clipboard.writeText(text);
         btn.textContent = "✓";
@@ -978,24 +1012,46 @@ function renderPromptSelectOptions() {
   if (state.prompts.some((p) => p.id === previous)) els.promptSelect.value = previous;
 }
 
+function filteredPrompts() {
+  const q = state.promptFilter.trim().toLowerCase();
+  if (!q) return state.prompts;
+  return state.prompts.filter(
+    (p) => p.title.toLowerCase().includes(q) || p.prompt_text.toLowerCase().includes(q)
+  );
+}
+
 function renderPromptList() {
-  els.promptList.innerHTML = state.prompts
+  const filtered = filteredPrompts();
+  els.promptCount.textContent =
+    filtered.length === state.prompts.length ? `(${state.prompts.length})` : `(${filtered.length}/${state.prompts.length})`;
+
+  els.promptList.innerHTML = filtered
     .map(
       (p) => `
       <div class="prompt-item" data-id="${p.id}">
         <span class="title" title="${escapeHtml(p.prompt_text)}">${escapeHtml(p.title)}</span>
-        <span class="del" data-del="${p.id}">✕</span>
+        <span class="prompt-item-actions">
+          <button class="prompt-item-btn edit" data-edit="${p.id}" title="Edit prompt">✎</button>
+          <button class="prompt-item-btn del" data-del="${p.id}" title="Delete prompt">✕</button>
+        </span>
       </div>`
     )
     .join("");
 
   els.promptList.querySelectorAll(".prompt-item").forEach((el) => {
     el.addEventListener("click", (e) => {
-      if (e.target.dataset.del) return;
+      if (e.target.closest("[data-edit], [data-del]")) return;
       const prompt = state.prompts.find((p) => p.id === el.dataset.id);
       if (!prompt) return;
       els.promptSelect.value = prompt.id;
       els.promptTextarea.value = prompt.prompt_text;
+    });
+  });
+  els.promptList.querySelectorAll("[data-edit]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const prompt = state.prompts.find((p) => p.id === el.dataset.edit);
+      if (prompt) openPromptModal(prompt);
     });
   });
   els.promptList.querySelectorAll("[data-del]").forEach((el) => {
@@ -1008,26 +1064,51 @@ function renderPromptList() {
   });
 }
 
-els.newPromptBtn.addEventListener("click", () => {
+function applyPromptPaletteCollapsed() {
+  els.promptPaletteSection.classList.toggle("collapsed", state.promptPaletteCollapsed);
+  els.promptPaletteToggleBtn.textContent = state.promptPaletteCollapsed ? "▸" : "▾";
+}
+els.promptPaletteToggleBtn.addEventListener("click", () => {
+  state.promptPaletteCollapsed = !state.promptPaletteCollapsed;
+  localStorage.setItem("grok_img2img.promptPaletteCollapsed", state.promptPaletteCollapsed ? "1" : "0");
+  applyPromptPaletteCollapsed();
+});
+applyPromptPaletteCollapsed();
+
+els.promptFilterInput.addEventListener("input", (e) => {
+  state.promptFilter = e.target.value;
+  renderPromptList();
+});
+
+// Shared New/Edit modal -- textarea sized generously (15 rows x 80 cols,
+// monospace, vertically resizable) since real prompts run long.
+function openPromptModal(existing) {
   const modal = openModal(`
-    <h3>New Prompt</h3>
-    <div class="field"><label>Title</label><input id="mTitle" type="text" /></div>
-    <div class="field"><label>Prompt Text</label><textarea id="mText" rows="4"></textarea></div>
+    <h3>${existing ? "Edit Prompt" : "New Prompt"}</h3>
+    <div class="field"><label>Title</label><input id="mTitle" type="text" value="${existing ? escapeHtml(existing.title) : ""}" /></div>
+    <div class="field"><label>Prompt Text</label><textarea id="mText" class="prompt-edit-textarea" rows="15" cols="80">${existing ? escapeHtml(existing.prompt_text) : ""}</textarea></div>
     <div class="modal-actions">
       <button id="mCancel" class="btn-ghost">Cancel</button>
-      <button id="mCreate" class="btn-primary">Save</button>
+      <button id="mSave" class="btn-primary">Save</button>
     </div>
   `);
+  modal.querySelector("#mTitle").focus();
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
-  modal.querySelector("#mCreate").addEventListener("click", async () => {
+  modal.querySelector("#mSave").addEventListener("click", async () => {
     const title = modal.querySelector("#mTitle").value.trim();
     const text = modal.querySelector("#mText").value.trim();
     if (!title || !text) return;
-    await api.createPrompt(title, text);
+    if (existing) {
+      await api.updatePrompt(existing.id, { title, prompt_text: text });
+    } else {
+      await api.createPrompt(title, text);
+    }
     closeModal();
     await loadPrompts();
   });
-});
+}
+
+els.newPromptBtn.addEventListener("click", () => openPromptModal(null));
 
 // ---------------------------------------------------------------------------
 // Settings

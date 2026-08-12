@@ -45,7 +45,19 @@ def startup():
     pruning.start_background_pruner()
 
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+class NoCacheStaticFiles(StaticFiles):
+    """Forces browsers to revalidate static assets on every load (still cheap
+    via conditional GETs/304s) instead of serving a stale cached copy after an
+    update -- this is a frequently-iterated local app, not a CDN-fronted site.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", NoCacheStaticFiles(directory="static", html=True), name="static")
 
 
 def _open_browser(port):

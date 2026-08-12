@@ -2,16 +2,27 @@ from fastapi import APIRouter
 
 import comfyui_client
 import config as cfg
+import fal_client
 import grok_client
 from models import ConfigIn
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 
+def _mask(key):
+    return f"{'*' * max(len(key) - 4, 0)}{key[-4:]}" if key else ""
+
+
 def _masked(config):
-    key = config.get("xai_api_key", "")
-    masked = f"{'*' * max(len(key) - 4, 0)}{key[-4:]}" if key else ""
-    return {**config, "xai_api_key": masked, "has_api_key": bool(key)}
+    xai_key = config.get("xai_api_key", "")
+    fal_key = config.get("fal_api_key", "")
+    return {
+        **config,
+        "xai_api_key": _mask(xai_key),
+        "has_api_key": bool(xai_key),
+        "fal_api_key": _mask(fal_key),
+        "has_fal_api_key": bool(fal_key),
+    }
 
 
 @router.get("")
@@ -34,6 +45,10 @@ def update_config(body: ConfigIn):
         config["comfyui_url"] = body.comfyui_url
     if body.comfyui_workflow_path is not None:
         config["comfyui_workflow_path"] = body.comfyui_workflow_path
+    if body.fal_api_key is not None and body.fal_api_key != "":
+        config["fal_api_key"] = body.fal_api_key
+    if body.fal_model is not None:
+        config["fal_model"] = body.fal_model
     cfg.save_config(config)
     return _masked(config)
 
@@ -49,4 +64,10 @@ def check_connection():
 def check_comfyui_connection():
     config = cfg.load_config()
     ok, message = comfyui_client.check_connection(config["comfyui_url"])
+    return {"ok": ok, "message": message}
+
+
+@router.post("/check-fal-connection")
+def check_fal_connection():
+    ok, message = fal_client.check_connection(cfg.get_fal_api_key())
     return {"ok": ok, "message": message}

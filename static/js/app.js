@@ -603,7 +603,7 @@ function renderResultGrid(results, activeId) {
       const copyBtn = promptText
         ? `<button class="result-tile-copy" data-copy-prompt="${promptAttr}" title="${promptAttr}">📋</button>`
         : "";
-      const engineLabel = { grok: "Grok", comfyui: "Comfy", imported: "Imported" }[r.engine] || r.engine;
+      const engineLabel = { grok: "Grok", comfyui: "Comfy", fal: "fal.ai", imported: "Imported" }[r.engine] || r.engine;
       const engineBadge = `<span class="result-tile-engine engine-${r.engine}">${escapeHtml(engineLabel)}</span>`;
       return `
         <div class="result-tile ${r.evaluation} ${activeClass}" data-id="${r.id}" title="${escapeHtml(label)}">
@@ -861,7 +861,8 @@ function formatJobStatus(job) {
         return `Generating with ComfyUI...${elapsed}`;
     }
   }
-  return `Generating with Grok...${elapsed}`;
+  const engineLabel = { grok: "Grok", fal: "fal.ai" }[job.engine] || job.engine;
+  return `Generating with ${engineLabel}...${elapsed}`;
 }
 
 function renderQueueOverlay() {
@@ -1032,6 +1033,40 @@ els.newPromptBtn.addEventListener("click", () => {
 // Settings
 // ---------------------------------------------------------------------------
 
+// Models fal_client.py has an explicit MODEL_SPECS entry for (correct
+// image_url/image_urls shape + the right safety-filter fields for that
+// model). Anything else -- picked via "Custom model ID..." below -- falls
+// back to a best-guess shape server-side that may not be exactly right.
+const FAL_MODELS = [
+  { value: "fal-ai/flux-pro/kontext", label: "FLUX.1 Kontext [pro] — balanced quality (default)", group: "FLUX.1 Kontext" },
+  { value: "fal-ai/flux-pro/kontext/max", label: "FLUX.1 Kontext [max] — best prompt adherence, pricier", group: "FLUX.1 Kontext" },
+  { value: "fal-ai/flux-kontext/dev", label: "FLUX.1 Kontext [dev] — cheaper/faster, open-weight", group: "FLUX.1 Kontext" },
+  { value: "fal-ai/flux-2/klein/4b/edit", label: "FLUX.2 [klein] 4B — fastest/cheapest FLUX.2 edit", group: "FLUX.2" },
+  { value: "fal-ai/flux-2/klein/9b/edit", label: "FLUX.2 [klein] 9B — larger klein, better quality", group: "FLUX.2" },
+  { value: "fal-ai/flux-2-pro/edit", label: "FLUX.2 [pro] — flagship editor, up to 9 reference images", group: "FLUX.2" },
+  { value: "fal-ai/flux-2-flex/edit", label: "FLUX.2 [flex] — tunable quality/speed/cost, up to 10 references", group: "FLUX.2" },
+];
+const FAL_MODEL_CUSTOM = "__custom__";
+
+function renderFalModelOptions(config) {
+  const groups = new Map();
+  for (const m of FAL_MODELS) {
+    if (!groups.has(m.group)) groups.set(m.group, []);
+    groups.get(m.group).push(m);
+  }
+  return [...groups.entries()]
+    .map(
+      ([group, models]) => `
+        <optgroup label="${group}">
+          ${models
+            .map((m) => `<option value="${m.value}" ${config.fal_model === m.value ? "selected" : ""}>${m.label}</option>`)
+            .join("")}
+        </optgroup>
+      `
+    )
+    .join("");
+}
+
 els.settingsBtn.addEventListener("click", async () => {
   const config = await api.getConfig();
   const modal = openModal(`
@@ -1049,19 +1084,46 @@ els.settingsBtn.addEventListener("click", async () => {
       <select id="mEngine">
         <option value="grok" ${config.default_engine === "grok" ? "selected" : ""}>Grok</option>
         <option value="comfyui" ${config.default_engine === "comfyui" ? "selected" : ""}>ComfyUI (local)</option>
+        <option value="fal" ${config.default_engine === "fal" ? "selected" : ""}>fal.ai</option>
       </select>
     </div>
     <div class="field"><label>ComfyUI URL</label><input id="mComfyUrl" type="text" value="${config.comfyui_url}" /></div>
     <div class="field"><label>ComfyUI Workflow File</label><input id="mComfyWorkflow" type="text" value="${config.comfyui_workflow_path}" /></div>
     <div id="mComfyConnStatus" class="status-line"></div>
+    <hr />
+    <div class="field">
+      <label>fal.ai API Key ${config.has_fal_api_key ? `(current: ${config.fal_api_key})` : ""}</label>
+      <input id="mFalKey" type="password" placeholder="Enter to replace..." />
+    </div>
+    <div class="field">
+      <label>fal.ai Model</label>
+      <select id="mFalModel">
+        ${renderFalModelOptions(config)}
+        <option value="${FAL_MODEL_CUSTOM}" ${
+          FAL_MODELS.some((m) => m.value === config.fal_model) ? "" : "selected"
+        }>Custom model ID...</option>
+      </select>
+      <input
+        id="mFalModelCustom"
+        type="text"
+        placeholder="e.g. fal-ai/your-model-id"
+        style="display:${FAL_MODELS.some((m) => m.value === config.fal_model) ? "none" : "block"}; margin-top:6px;"
+        value="${FAL_MODELS.some((m) => m.value === config.fal_model) ? "" : escapeHtml(config.fal_model || "")}"
+      />
+    </div>
+    <div id="mFalConnStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="mCheck" class="btn-ghost">Check Grok Connection</button>
       <button id="mCheckComfy" class="btn-ghost">Check ComfyUI Connection</button>
+      <button id="mCheckFal" class="btn-ghost">Check fal.ai Connection</button>
       <button id="mCancel" class="btn-ghost">Close</button>
       <button id="mSave" class="btn-primary">Save</button>
     </div>
   `);
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
+  modal.querySelector("#mFalModel").addEventListener("change", (e) => {
+    modal.querySelector("#mFalModelCustom").style.display = e.target.value === FAL_MODEL_CUSTOM ? "block" : "none";
+  });
   modal.querySelector("#mCheck").addEventListener("click", async () => {
     modal.querySelector("#mConnStatus").textContent = "Checking...";
     const res = await api.checkConnection();
@@ -1072,7 +1134,17 @@ els.settingsBtn.addEventListener("click", async () => {
     const res = await api.checkComfyuiConnection();
     modal.querySelector("#mComfyConnStatus").textContent = res.message;
   });
+  modal.querySelector("#mCheckFal").addEventListener("click", async () => {
+    modal.querySelector("#mFalConnStatus").textContent = "Checking...";
+    const res = await api.checkFalConnection();
+    modal.querySelector("#mFalConnStatus").textContent = res.message;
+  });
   modal.querySelector("#mSave").addEventListener("click", async () => {
+    const falModelSelected = modal.querySelector("#mFalModel").value;
+    const falModel =
+      falModelSelected === FAL_MODEL_CUSTOM
+        ? modal.querySelector("#mFalModelCustom").value.trim()
+        : falModelSelected;
     const updated = await api.updateConfig({
       xai_api_key: modal.querySelector("#mKey").value || undefined,
       default_model: modal.querySelector("#mModel").value,
@@ -1080,6 +1152,8 @@ els.settingsBtn.addEventListener("click", async () => {
       default_engine: modal.querySelector("#mEngine").value,
       comfyui_url: modal.querySelector("#mComfyUrl").value,
       comfyui_workflow_path: modal.querySelector("#mComfyWorkflow").value,
+      fal_api_key: modal.querySelector("#mFalKey").value || undefined,
+      fal_model: falModel,
     });
     els.engineSelect.value = updated.default_engine;
     closeModal();

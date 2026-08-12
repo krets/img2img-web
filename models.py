@@ -47,7 +47,7 @@ class PromptUpdateIn(BaseModel):
 class GenerateRequestIn(BaseModel):
     prompt_id: Optional[str] = None
     adhoc_prompt_text: str
-    engine: Optional[Literal["grok", "comfyui"]] = None
+    engine: Optional[Literal["grok", "comfyui", "fal"]] = None
     model: Optional[str] = None
     aspect_ratio: Optional[str] = None
     max_dim: Optional[int] = None
@@ -61,9 +61,11 @@ class ConfigIn(BaseModel):
     xai_api_key: Optional[str] = None
     default_model: Optional[str] = None
     default_max_dim: Optional[int] = None
-    default_engine: Optional[Literal["grok", "comfyui"]] = None
+    default_engine: Optional[Literal["grok", "comfyui", "fal"]] = None
     comfyui_url: Optional[str] = None
     comfyui_workflow_path: Optional[str] = None
+    fal_api_key: Optional[str] = None
+    fal_model: Optional[str] = None
 
 
 class ExportRequestIn(BaseModel):

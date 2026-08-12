@@ -37,6 +37,8 @@ DEFAULT_CONFIG = {
     "default_engine": "grok",
     "comfyui_url": "http://127.0.0.1:8188",
     "comfyui_workflow_path": "comfyui_flux2_imageedit.json",
+    "fal_api_key": "",
+    "fal_model": "fal-ai/flux-pro/kontext",
 }
 
 
@@ -70,6 +72,13 @@ def get_api_key():
     if config.get("xai_api_key"):
         return config["xai_api_key"]
     return os.getenv("XAI_API_KEY", "")
+
+
+def get_fal_api_key():
+    config = load_config()
+    if config.get("fal_api_key"):
+        return config["fal_api_key"]
+    return os.getenv("FAL_KEY", "")
 
 
 def comfyui_workflow_path(config=None):

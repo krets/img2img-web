@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 import comfyui_client
 import config as cfg
 import db
+import fal_client
 import grok_client
 import jobs
 import storage
@@ -112,8 +113,10 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
     if not source_path.exists():
         raise HTTPException(404, "Source image file missing on disk")
 
-    if engine != "comfyui" and not cfg.get_api_key():
+    if engine == "grok" and not cfg.get_api_key():
         raise HTTPException(400, "No xAI API key configured. Set one in Settings first.")
+    if engine == "fal" and not cfg.get_fal_api_key():
+        raise HTTPException(400, "No fal.ai API key configured. Set one in Settings first.")
 
     job = jobs.create_job(
         image_id=image_id,
@@ -146,6 +149,18 @@ def _run_generation(job_id, image, body, engine, config, source_path):
                 )
             except Exception as e:
                 raise RuntimeError(f"ComfyUI request failed: {e}") from e
+        elif engine == "fal":
+            model = body.model or config["fal_model"]
+            try:
+                image_bytes, revised_prompt = fal_client.generate_image_edit(
+                    api_key=cfg.get_fal_api_key(),
+                    source_path=source_path,
+                    prompt=body.adhoc_prompt_text,
+                    model=model,
+                    max_dim=max_dim,
+                )
+            except Exception as e:
+                raise RuntimeError(f"fal.ai request failed: {e}") from e
         else:
             model = body.model or config["default_model"]
             aspect_ratio = body.aspect_ratio

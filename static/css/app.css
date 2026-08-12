@@ -354,6 +354,7 @@ button:hover { border-color: #565a68; }
 }
 .result-tile-engine.engine-grok { background: rgba(139,92,246,0.85); }
 .result-tile-engine.engine-comfyui { background: rgba(20,184,166,0.85); }
+.result-tile-engine.engine-fal { background: rgba(236,72,153,0.85); }
 .result-tile-engine.engine-imported { background: rgba(107,114,125,0.85); }
 
 .result-tile-rating {

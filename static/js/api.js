@@ -90,6 +90,7 @@ export const api = {
   trashNoResults: (projectId) => request("POST", `/projects/${projectId}/results/trash-no`),
   getQueue: () => request("GET", "/queue"),
   getQueueLog: () => request("GET", "/queue/log"),
+  cancelJob: (jobId) => request("POST", `/queue/${jobId}/cancel`),
 
   // Config
   getConfig: () => request("GET", "/config"),

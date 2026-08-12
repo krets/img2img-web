@@ -84,6 +84,9 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
     """
     base_url = base_url.rstrip("/")
 
+    if jobs.is_cancelled(job_id):
+        raise jobs.GenerationCancelled()
+
     jobs.update_job(job_id, phase="uploading", value=0, max=0)
     workflow = _load_workflow(workflow_path)
     uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
@@ -111,6 +114,11 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
     if data.get("node_errors"):
         raise RuntimeError(f"ComfyUI reported node errors: {data['node_errors']}")
     prompt_id = data["prompt_id"]
+    jobs.update_job(job_id, prompt_id=prompt_id)
+
+    if jobs.is_cancelled(job_id):
+        _cancel_on_comfyui(base_url, prompt_id)
+        raise jobs.GenerationCancelled()
 
     history_entry = _wait_for_result(base_url, job_id, prompt_id)
     jobs.update_job(job_id, phase="saving")
@@ -130,8 +138,10 @@ def _wait_for_result(base_url, job_id, prompt_id):
             entry = _wait_for_result_ws(base_url, job_id, prompt_id)
             if entry:
                 return entry
+        except jobs.GenerationCancelled:
+            raise  # a real cancellation, not a transport hiccup -- don't mask it
         except Exception:
-            pass  # websocket path failed for any reason — fall back to HTTP polling
+            pass  # websocket path failed for any other reason — fall back to HTTP polling
     return _wait_for_result_http(base_url, job_id, prompt_id)
 
 
@@ -145,10 +155,16 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
     deadline = time.time() + POLL_TIMEOUT_SECONDS
     with _ws_connect(ws_url, open_timeout=WS_OPEN_TIMEOUT_SECONDS) as ws:
         while time.time() < deadline:
+            if jobs.is_cancelled(job_id):
+                _cancel_on_comfyui(base_url, prompt_id)
+                raise jobs.GenerationCancelled()
             try:
-                raw = ws.recv(timeout=max(1.0, deadline - time.time()))
+                # Capped well below the overall deadline so cancellation is
+                # noticed promptly even during a long quiet stretch (e.g.
+                # sitting in ComfyUI's own queue behind other work).
+                raw = ws.recv(timeout=min(2.0, max(0.5, deadline - time.time())))
             except TimeoutError:
-                break
+                continue
             if isinstance(raw, (bytes, bytearray)):
                 continue  # binary preview-image frame, not a status message
             try:
@@ -181,12 +197,38 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
 def _wait_for_result_http(base_url, job_id, prompt_id):
     deadline = time.time() + POLL_TIMEOUT_SECONDS
     while time.time() < deadline:
+        if jobs.is_cancelled(job_id):
+            _cancel_on_comfyui(base_url, prompt_id)
+            raise jobs.GenerationCancelled()
         entry = _fetch_history(base_url, prompt_id)
         if entry:
             return entry
         jobs.update_job(job_id, phase="running")
         time.sleep(POLL_INTERVAL_SECONDS)
     raise RuntimeError(f"Timed out waiting for ComfyUI to finish prompt {prompt_id}")
+
+
+def _cancel_on_comfyui(base_url, prompt_id):
+    """Best-effort cancellation against ComfyUI's own queue. Only interrupts
+    if this prompt is confirmed to be the one currently executing -- never
+    blindly, since /interrupt stops whatever ComfyUI happens to be running,
+    which could be a different job on the same (shared, single-GPU) queue.
+    Otherwise just removes it from the pending queue before it starts.
+    Failures are swallowed: the job is being marked cancelled in our own
+    state regardless, and there's nothing more the caller can do here.
+    """
+    try:
+        state = requests.get(f"{base_url}/queue", timeout=REQUEST_TIMEOUT_SECONDS).json()
+    except Exception:
+        return
+    running_ids = {entry[1] for entry in state.get("queue_running", [])}
+    try:
+        if prompt_id in running_ids:
+            requests.post(f"{base_url}/interrupt", timeout=REQUEST_TIMEOUT_SECONDS)
+        else:
+            requests.post(f"{base_url}/queue", json={"delete": [prompt_id]}, timeout=REQUEST_TIMEOUT_SECONDS)
+    except Exception:
+        pass
 
 
 def _fetch_history(base_url, prompt_id):

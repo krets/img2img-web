@@ -24,6 +24,12 @@ _jobs = {}
 _log = deque(maxlen=LOG_MAXLEN)
 
 
+class GenerationCancelled(Exception):
+    """Raised inside a generation thread once it observes its job's
+    cancel_requested flag, so the caller can record a distinct 'cancelled'
+    terminal state instead of treating it as a generic failure."""
+
+
 def create_job(image_id, project_id, image_name, engine, prompt_text=""):
     job_id = uuid.uuid4().hex
     job = {
@@ -33,7 +39,7 @@ def create_job(image_id, project_id, image_name, engine, prompt_text=""):
         "image_name": image_name,
         "engine": engine,
         "prompt_text": prompt_text,
-        "status": "queued",  # queued -> running -> done | error
+        "status": "queued",  # queued -> running -> done | error | cancelled
         "phase": None,  # engine-specific sub-stage, e.g. comfyui's uploading/running/saving
         "value": 0,
         "max": 0,
@@ -41,6 +47,8 @@ def create_job(image_id, project_id, image_name, engine, prompt_text=""):
         "error": None,
         "created_at": time.time(),
         "finished_at": None,
+        "cancel_requested": False,
+        "prompt_id": None,  # engine-native id (e.g. ComfyUI's prompt_id), set once known
     }
     with _lock:
         _jobs[job_id] = job
@@ -52,6 +60,40 @@ def update_job(job_id, **fields):
         job = _jobs.get(job_id)
         if job:
             job.update(fields)
+
+
+def get_job(job_id):
+    with _lock:
+        job = _jobs.get(job_id)
+        return dict(job) if job else None
+
+
+def request_cancel(job_id):
+    """Flags a still-active job for cooperative cancellation. Returns the job
+    dict if it existed and was active, else None. The actual state
+    transition to 'cancelled' happens in the generation thread once it
+    observes the flag (see is_cancelled/cancel_job)."""
+    with _lock:
+        job = _jobs.get(job_id)
+        if job and job["status"] in ("queued", "running"):
+            job["cancel_requested"] = True
+            return dict(job)
+        return None
+
+
+def is_cancelled(job_id):
+    with _lock:
+        job = _jobs.get(job_id)
+        return bool(job and job["cancel_requested"])
+
+
+def cancel_job(job_id):
+    with _lock:
+        job = _jobs.get(job_id)
+        if job:
+            job["status"] = "cancelled"
+            job["finished_at"] = time.time()
+            _log.append(dict(job))
 
 
 def finish_job(job_id, result_id=None, error=None):

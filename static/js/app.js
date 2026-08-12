@@ -392,8 +392,11 @@ function renderChits(img) {
   const errorChits = jobsForImage
     .filter((j) => j.status === "error")
     .map((j) => `<span class="chit error" title="${escapeHtml(j.error || "Generation failed")}"></span>`);
+  const cancelledChits = jobsForImage
+    .filter((j) => j.status === "cancelled")
+    .map(() => `<span class="chit cancelled" title="Cancelled"></span>`);
 
-  const chits = [...completedChits, ...pendingChits, ...errorChits];
+  const chits = [...completedChits, ...pendingChits, ...errorChits, ...cancelledChits];
   if (!chits.length) return `<span class="badge NONE">NEW</span>`;
   return `<div class="chit-grid">${chits.join("")}</div>`;
 }
@@ -878,6 +881,7 @@ function jobElapsedSeconds(job) {
 
 function formatJobStatus(job) {
   if (job.status === "done") return "Done.";
+  if (job.status === "cancelled") return "Cancelled.";
   if (job.status === "error") return `Error: ${job.error || ""}`;
   const elapsed = ` (${formatElapsed(jobElapsedSeconds(job))})`;
   if (job.status === "queued") return `Queued...${elapsed}`;
@@ -929,17 +933,44 @@ function renderQueueOverlay() {
     .sort((a, b) => b.created_at - a.created_at)
     .map((job) => {
       const label = job.status === "error" ? `Error: ${escapeHtml(job.error || "")}` : formatJobStatus(job);
+      // Only ComfyUI jobs can be pulled back once submitted -- grok/fal have
+      // already been sent to a third-party API by this point.
+      const cancellable = job.engine === "comfyui" && (job.status === "queued" || job.status === "running");
+      const cancelBtn = cancellable
+        ? `<button class="queue-item-cancel" data-cancel-job="${job.id}" title="Cancel this ComfyUI job">✕ Cancel</button>`
+        : "";
+      const promptPreview = job.prompt_text
+        ? `<div class="queue-item-prompt" title="${escapeHtml(job.prompt_text)}">${escapeHtml(job.prompt_text)}</div>`
+        : "";
       return `
         <div class="queue-item ${job.status}">
           <div class="queue-item-name">
             <span>${escapeHtml(job.image_name)}</span>
             <span class="queue-item-engine">${escapeHtml(job.engine)}</span>
           </div>
-          <div class="queue-item-status">${label}</div>
+          ${promptPreview}
+          <div class="queue-item-status">
+            <span>${label}</span>
+            ${cancelBtn}
+          </div>
         </div>
       `;
     })
     .join("");
+
+  els.queueOverlayList.querySelectorAll("[data-cancel-job]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      btn.textContent = "Cancelling...";
+      try {
+        await api.cancelJob(btn.dataset.cancelJob);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = "✕ Cancel";
+      }
+    });
+  });
 }
 
 els.queueOverlayHeader.addEventListener("click", () => {

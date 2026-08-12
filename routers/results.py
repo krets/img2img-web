@@ -94,6 +94,23 @@ def get_queue_log():
     return jobs.list_log()
 
 
+@router.post("/api/queue/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Only ComfyUI jobs are cancellable -- grok/fal requests are already
+    sent to a third-party API by the time a job exists and can't be pulled
+    back, so those never get a cancel affordance in the UI either.
+    """
+    job = jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["engine"] != "comfyui":
+        raise HTTPException(400, "Only ComfyUI jobs can be cancelled")
+    if job["status"] not in ("queued", "running"):
+        raise HTTPException(400, "Job is no longer active")
+    jobs.request_cancel(job_id)
+    return {"ok": True}
+
+
 @router.post("/api/images/{image_id}/generate")
 def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: BackgroundTasks):
     image = db.get_image(image_id)
@@ -147,6 +164,8 @@ def _run_generation(job_id, image, body, engine, config, source_path):
                     job_id=job_id,
                     max_dim=max_dim,
                 )
+            except jobs.GenerationCancelled:
+                raise  # not a failure -- let it propagate to the cancelled-specific handler below
             except Exception as e:
                 raise RuntimeError(f"ComfyUI request failed: {e}") from e
         elif engine == "fal":
@@ -200,6 +219,8 @@ def _run_generation(job_id, image, body, engine, config, source_path):
             duration_seconds=time.time() - start_time,
         )
         jobs.finish_job(job_id, result_id=result["id"])
+    except jobs.GenerationCancelled:
+        jobs.cancel_job(job_id)
     except Exception as e:
         jobs.finish_job(job_id, error=str(e))
 

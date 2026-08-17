@@ -267,3 +267,15 @@ def get_image_thumbnail(image_id: str):
         raise HTTPException(404, "Image file missing on disk")
     thumb_path = storage.get_or_create_thumbnail("images", image["project_id"], image_id, path)
     return FileResponse(thumb_path, media_type="image/jpeg")
+
+
+@router.get("/api/images/{image_id}/preview")
+def get_image_preview(image_id: str):
+    image = db.get_image(image_id)
+    if not image:
+        raise HTTPException(404, "Image not found")
+    path = storage.source_image_path(image["project_id"], image["file_name"])
+    if not path.exists():
+        raise HTTPException(404, "Image file missing on disk")
+    preview_path = storage.get_or_create_preview("images", image["project_id"], image_id, path)
+    return FileResponse(preview_path, media_type="image/jpeg")

@@ -299,58 +299,96 @@ function applyQueueOrdering() {
   state.images = [...active, ...rest];
 }
 
-function renderImageList() {
-  els.imageList.innerHTML = state.images
-    .map((img) => {
-      const selected = img.id === state.currentImageId ? "selected" : "";
-      const checked = state.selectedImageIds.has(img.id) ? "checked" : "";
-      const checkbox = state.multiSelectMode
-        ? `<input type="checkbox" class="image-item-check" data-id="${img.id}" ${checked} />`
-        : "";
-      return `
-        <div class="image-item ${selected}" data-id="${img.id}">
-          ${checkbox}
-          <img src="/api/images/${img.id}/thumbnail" loading="lazy" />
-          <div class="meta">
-            <div class="name">${escapeHtml(img.display_name)}</div>
-          </div>
-          ${renderChits(img)}
-          <button class="image-item-ref-btn" data-use-ref-image="${img.id}" title="Copy as reference image">📎</button>
-          <button class="image-item-ref-btn" data-move-ref-image="${img.id}" title="Move to reference library">✂</button>
-        </div>
-      `;
-    })
-    .join("");
+function renderImageItemHtml(img) {
+  const selected = img.id === state.currentImageId ? "selected" : "";
+  const checked = state.selectedImageIds.has(img.id) ? "checked" : "";
+  const checkbox = state.multiSelectMode
+    ? `<input type="checkbox" class="image-item-check" data-id="${img.id}" ${checked} />`
+    : "";
+  return `
+    <div class="image-item ${selected}" data-id="${img.id}">
+      ${checkbox}
+      <img src="/api/images/${img.id}/thumbnail" loading="lazy" />
+      <div class="meta">
+        <div class="name">${escapeHtml(img.display_name)}</div>
+      </div>
+      <span class="chits-slot">${renderChits(img)}</span>
+      <button class="image-item-ref-btn" data-use-ref-image="${img.id}" title="Copy as reference image">📎</button>
+      <button class="image-item-ref-btn" data-move-ref-image="${img.id}" title="Move to reference library">✂</button>
+    </div>
+  `;
+}
 
-  if (state.multiSelectMode) {
-    els.imageList.querySelectorAll(".image-item").forEach((el) => {
-      el.addEventListener("click", () => toggleImageSelection(el.dataset.id));
-    });
-  } else {
-    els.imageList.querySelectorAll(".image-item").forEach((el) => {
-      el.addEventListener("click", () => selectImage(el.dataset.id));
-    });
-    els.imageList.querySelectorAll(".chit[data-result-id]").forEach((chitEl) => {
-      chitEl.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const imageId = chitEl.closest(".image-item").dataset.id;
-        selectImageResult(imageId, chitEl.dataset.resultId);
-      });
-    });
-  }
-  els.imageList.querySelectorAll("[data-use-ref-image]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
+// Single delegated listener, bound once -- lets renderImageList() patch
+// existing rows in place (see below) without having to re-attach handlers
+// on every poll tick.
+let imageListHandlersBound = false;
+function bindImageListDelegation() {
+  if (imageListHandlersBound) return;
+  imageListHandlersBound = true;
+  els.imageList.addEventListener("click", (e) => {
+    const useRefBtn = e.target.closest("[data-use-ref-image]");
+    if (useRefBtn) {
       e.stopPropagation();
-      const img = state.images.find((i) => i.id === btn.dataset.useRefImage);
+      const img = state.images.find((i) => i.id === useRefBtn.dataset.useRefImage);
       if (img) useAsReferenceFromUrl(`/api/images/${img.id}/file`, img.display_name);
-    });
-  });
-  els.imageList.querySelectorAll("[data-move-ref-image]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
+      return;
+    }
+    const moveRefBtn = e.target.closest("[data-move-ref-image]");
+    if (moveRefBtn) {
       e.stopPropagation();
-      moveImageToReference(btn.dataset.moveRefImage);
-    });
+      moveImageToReference(moveRefBtn.dataset.moveRefImage);
+      return;
+    }
+    const itemEl = e.target.closest(".image-item");
+    if (!itemEl) return;
+    const imageId = itemEl.dataset.id;
+    if (state.multiSelectMode) {
+      toggleImageSelection(imageId);
+      return;
+    }
+    const chitEl = e.target.closest(".chit[data-result-id]");
+    if (chitEl) {
+      selectImageResult(imageId, chitEl.dataset.resultId);
+      return;
+    }
+    selectImage(imageId);
   });
+}
+
+// Tracks what the list's DOM currently reflects (image id order + multi-select
+// mode) so unchanged renders can patch existing rows instead of rebuilding.
+let lastImageListSignature = null;
+
+function renderImageList() {
+  bindImageListDelegation();
+  const ids = state.images.map((img) => img.id);
+  const signature = `${state.multiSelectMode}|${ids.join(",")}`;
+
+  if (signature !== lastImageListSignature) {
+    els.imageList.innerHTML = state.images.map(renderImageItemHtml).join("");
+    lastImageListSignature = signature;
+    return;
+  }
+
+  // Same set/order of images as last render (e.g. a routine queue poll with
+  // no completions) -- patch the mutable bits in place rather than
+  // recreating every row's DOM. Recreating <img> nodes on a ~1.2s timer was
+  // destroying the browser's already-decoded thumbnail bitmaps, which showed
+  // up as thumbnails visibly flickering/breaking while browsing the list.
+  const elById = new Map();
+  els.imageList.querySelectorAll(".image-item").forEach((el) => elById.set(el.dataset.id, el));
+  for (const img of state.images) {
+    const el = elById.get(img.id);
+    if (!el) continue;
+    el.classList.toggle("selected", img.id === state.currentImageId);
+    const checkbox = el.querySelector(".image-item-check");
+    if (checkbox) checkbox.checked = state.selectedImageIds.has(img.id);
+    const nameEl = el.querySelector(".name");
+    if (nameEl) nameEl.textContent = img.display_name;
+    const chitsEl = el.querySelector(".chits-slot");
+    if (chitsEl) chitsEl.innerHTML = renderChits(img);
+  }
 }
 
 // Jumps to a specific generation from its chit in the sidebar grid: selects
@@ -638,6 +676,11 @@ async function selectImage(id) {
   state.currentImageId = id;
   els.generateStatus.textContent = "";
   updateGenerateStatusForCurrentImage();
+  // The source image only depends on `id`, not on the metadata fetch below --
+  // kick off its (progressive) load right away instead of making the viewer
+  // wait on a network round-trip it doesn't need. renderDetails() below will
+  // fill in the result image once metadata resolves.
+  abViewer.setImages(`/api/images/${id}/file`, null);
   const image = await api.getImage(id);
   if (state.currentImageId !== id) return; // user navigated away before this resolved
   state.currentImage = image;
@@ -1872,6 +1915,7 @@ els.settingsBtn.addEventListener("click", async () => {
       fal_model: falModel,
     });
     els.engineSelect.value = updated.default_engine;
+    updateReferenceImagesVisibility();
     closeModal();
   });
 });
@@ -2402,6 +2446,7 @@ function debounce(fn, ms) {
   await loadPrompts();
   const config = await api.getConfig();
   els.engineSelect.value = config.default_engine;
+  updateReferenceImagesVisibility();
   pollQueue();
   setInterval(pollQueue, 1200);
 })();

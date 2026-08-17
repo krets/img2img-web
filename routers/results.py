@@ -268,6 +268,19 @@ def get_result_thumbnail(result_id: str):
     return FileResponse(thumb_path, media_type="image/jpeg")
 
 
+@router.get("/api/results/{result_id}/preview")
+def get_result_preview(result_id: str):
+    result = db.get_result(result_id)
+    if not result:
+        raise HTTPException(404, "Result not found")
+    image = db.get_image(result["image_id"])
+    path = storage.result_image_path(image["project_id"], result["file_path"])
+    if not path.exists():
+        raise HTTPException(404, "Result file missing on disk")
+    preview_path = storage.get_or_create_preview("results", image["project_id"], result_id, path)
+    return FileResponse(preview_path, media_type="image/jpeg")
+
+
 @router.post("/api/results/{result_id}/promote-to-source")
 def promote_result_to_source(result_id: str):
     """Turns a generated result into a brand-new source image in the same

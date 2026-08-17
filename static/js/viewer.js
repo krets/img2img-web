@@ -80,6 +80,41 @@ export function initABViewer(container) {
   let currentResultUrl = null;
   let hasResult = false;
   let hasSource = false;
+  // Tracks what's actually loaded into the base/result <img> elements, so
+  // repeated setImages() calls with unchanged urls (e.g. a metadata refresh
+  // after a background job finishes on the currently-viewed image) don't
+  // needlessly re-trigger the progressive load below.
+  let loadedSourceUrl = null;
+  let loadedResultUrl = null;
+
+  // The /preview endpoint mirrors /file's URL shape but returns a small,
+  // aspect-ratio-preserving JPEG (unlike /thumbnail, which is cropped to a
+  // square for list/grid use and would jump the framing when swapped for
+  // the full image).
+  function previewUrlFor(fullUrl) {
+    return fullUrl ? fullUrl.replace(/\/file$/, "/preview") : null;
+  }
+
+  // Immediately shows a small same-framed preview so the viewer reflects the
+  // newly-selected image right away, then swaps in the full-res version once
+  // it's loaded. Without this, the <img> keeps rendering whatever it last
+  // displayed until the new full-res file finishes loading -- which reads as
+  // "the original still shows the previous image" when switching images.
+  //
+  // imgEl.dataset.pendingFull records the most recently requested full url
+  // for this element; the upgrade only applies if it's still current, so a
+  // slow load for an image the user has since navigated away from can't
+  // clobber whatever loaded after it.
+  function loadProgressive(imgEl, fullUrl) {
+    imgEl.dataset.pendingFull = fullUrl;
+    const previewUrl = previewUrlFor(fullUrl);
+    if (previewUrl) imgEl.src = previewUrl;
+    const upgrade = new Image();
+    upgrade.onload = () => {
+      if (imgEl.dataset.pendingFull === fullUrl) imgEl.src = fullUrl;
+    };
+    upgrade.src = fullUrl;
+  }
 
   function updateStageDisplay() {
     if (!hasSource) {
@@ -234,15 +269,22 @@ export function initABViewer(container) {
       updateStageDisplay();
       modebar.style.display = "flex";
       empty.style.display = "none";
-      base.src = sourceUrl;
+      if (sourceUrl !== loadedSourceUrl) {
+        loadedSourceUrl = sourceUrl;
+        loadProgressive(base, sourceUrl);
+      }
       currentResultUrl = resultUrl || null;
       hasResult = !!resultUrl;
       if (resultUrl) {
-        resultImg.src = resultUrl;
+        if (resultUrl !== loadedResultUrl) {
+          loadedResultUrl = resultUrl;
+          loadProgressive(resultImg, resultUrl);
+        }
         overlay.style.visibility = "visible";
         handle.style.display = DRAG_MODES.has(mode) ? "block" : "none";
         actions.style.display = "flex";
       } else {
+        loadedResultUrl = null;
         overlay.style.visibility = "hidden";
         handle.style.display = "none";
         actions.style.display = "none";

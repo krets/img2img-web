@@ -15,6 +15,12 @@ import config as cfg
 # result grid, duplicate finder) -- 2x the 40px CSS preview box, for retina.
 THUMBNAIL_SIZE = 80
 
+# Long-edge cap for the A/B viewer's fast-loading placeholder preview. Unlike
+# THUMBNAIL_SIZE, this is never cropped -- it exists purely to show correctly
+# -framed (just lower-res) content while the full file loads, so it has to
+# keep the source's own aspect ratio.
+PREVIEW_MAX_DIM = 1024
+
 
 def compute_pixel_hash(img: Image.Image):
     """MD5 of the decoded RGB pixel data, so identical-looking images hash the same
@@ -173,6 +179,21 @@ def get_or_create_thumbnail(kind, project_id, item_id, source_path):
     return thumb_path
 
 
+def get_or_create_preview(kind, project_id, item_id, source_path):
+    """Returns the path to a cached, aspect-ratio-preserving JPEG preview for
+    source_path (long edge capped at PREVIEW_MAX_DIM, never cropped/upscaled).
+    Used by the A/B viewer as a fast-loading placeholder while the full-res
+    file loads -- unlike the square thumbnail, it keeps the source's own
+    framing so swapping to the full image doesn't visibly jump.
+    """
+    preview_path = _thumbnail_dir(kind, project_id) / f"{item_id}_preview.jpg"
+    if not preview_path.exists():
+        img = Image.open(source_path).convert("RGB")
+        img.thumbnail((PREVIEW_MAX_DIM, PREVIEW_MAX_DIM), Image.Resampling.LANCZOS)
+        img.save(preview_path, format="JPEG", quality=85)
+    return preview_path
+
+
 def source_image_path(project_id, file_name):
     return cfg.project_source_dir(project_id) / file_name
 
@@ -205,6 +226,7 @@ def move_result_image(old_project_id, new_project_id, file_name):
 
 def clear_thumbnail(kind, project_id, item_id):
     (_thumbnail_dir(kind, project_id) / f"{item_id}.jpg").unlink(missing_ok=True)
+    (_thumbnail_dir(kind, project_id) / f"{item_id}_preview.jpg").unlink(missing_ok=True)
 
 
 def delete_project_dirs(project_id):

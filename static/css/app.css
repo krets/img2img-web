@@ -188,6 +188,7 @@ button:hover { border-color: #565a68; }
 .image-item img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; }
 .image-item .meta { flex: 1; overflow: hidden; }
 .image-item .meta .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chits-slot { display: contents; }
 .image-item-check { flex-shrink: 0; width: 16px; height: 16px; margin: 0; accent-color: #8B5CF6; }
 .image-item-ref-btn {
   flex-shrink: 0; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;

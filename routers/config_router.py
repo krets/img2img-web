@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 import comfyui_client
 import config as cfg
@@ -71,3 +71,12 @@ def check_comfyui_connection():
 def check_fal_connection():
     ok, message = fal_client.check_connection(cfg.get_fal_api_key())
     return {"ok": ok, "message": message}
+
+
+@router.get("/fal-models")
+def get_fal_models():
+    try:
+        models = fal_client.list_edit_models(cfg.get_fal_api_key())
+    except RuntimeError as e:
+        raise HTTPException(502, str(e)) from e
+    return {"models": models}

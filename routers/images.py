@@ -171,12 +171,38 @@ def merge_images(body: MergeImagesIn):
     return {"kept": body.keep_id, "merged": merged}
 
 
+def _resolve_provenance(image):
+    """Resolves an image's derived_from_result_id (set when it was promoted
+    from a result via /api/results/{id}/promote-to-source) into the display
+    info the details panel needs -- or None for an ordinary uploaded image.
+    Tolerates the source result having since been deleted.
+    """
+    result_id = image.get("derived_from_result_id")
+    if not result_id:
+        return None
+    result = db.get_result(result_id)
+    if not result:
+        return None
+    source_image = db.get_image(result["image_id"])
+    prompt_text = result.get("adhoc_prompt_text")
+    if not prompt_text and result.get("prompt_id"):
+        prompt = db.get_prompt(result["prompt_id"])
+        prompt_text = prompt["prompt_text"] if prompt else None
+    return {
+        "result_id": result_id,
+        "source_image_id": result["image_id"],
+        "source_image_display_name": source_image["display_name"] if source_image else None,
+        "prompt_text": prompt_text,
+    }
+
+
 @router.get("/api/images/{image_id}")
 def get_image(image_id: str):
     image = db.get_image(image_id)
     if not image or image["is_deleted"]:
         raise HTTPException(404, "Image not found")
     image["results"] = db.list_results_for_image(image_id)
+    image["derived_from"] = _resolve_provenance(image)
     return image
 
 

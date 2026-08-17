@@ -46,6 +46,12 @@ def prune_expired():
         db.delete_result(result["id"])
         logger.info("Pruned expired result %s", result["id"])
 
+    for ref in db.list_expired_reference_images(RETENTION_DAYS):
+        storage.delete_reference_image_files(ref["project_id"], ref["original_file_name"], ref["file_name"])
+        storage.clear_thumbnail("references", ref["project_id"], ref["id"])
+        db.delete_reference_image(ref["id"])
+        logger.info("Pruned expired reference image %s (%s)", ref["id"], ref["display_name"])
+
 
 def _loop():
     while True:

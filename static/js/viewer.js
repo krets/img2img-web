@@ -178,6 +178,16 @@ export function initABViewer(container) {
   stage.addEventListener("pointerleave", releaseHold);
   stage.addEventListener("pointercancel", releaseHold);
 
+  // <img> elements are natively draggable, which fights with the wipe handle
+  // and hold-to-reveal pointer interactions (starts a browser image-drag ghost
+  // mid-gesture instead of moving the wipe line / holding the reveal). Only
+  // block it for modes that rely on mouse dragging -- side-by-side/diff/blend
+  // have no drag interaction, so their images keep normal native behavior
+  // (e.g. right-click "Copy image").
+  stage.addEventListener("dragstart", (evt) => {
+    if (DRAG_MODES.has(mode) || HOLD_MODES.has(mode)) evt.preventDefault();
+  });
+
   function setMode(nextMode) {
     mode = nextMode;
     stage.dataset.mode = mode;

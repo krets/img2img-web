@@ -130,6 +130,22 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
     if not source_path.exists():
         raise HTTPException(404, "Source image file missing on disk")
 
+    reference_paths = []
+    if body.reference_image_ids:
+        if engine != "comfyui":
+            raise HTTPException(400, "Reference images are only supported with the ComfyUI engine")
+        max_refs = len(comfyui_client.EXTRA_IMAGE_NODES)
+        if len(body.reference_image_ids) > max_refs:
+            raise HTTPException(400, f"At most {max_refs} reference images are supported")
+        for ref_id in body.reference_image_ids:
+            ref_image = db.get_reference_image(ref_id)
+            if not ref_image or ref_image["project_id"] != image["project_id"]:
+                raise HTTPException(404, f"Reference image {ref_id} not found in this project")
+            ref_path = storage.reference_image_path(ref_image["project_id"], ref_image["file_name"])
+            if not ref_path.exists():
+                raise HTTPException(404, f"Reference image file missing on disk: {ref_id}")
+            reference_paths.append(ref_path)
+
     if engine == "grok" and not cfg.get_api_key():
         raise HTTPException(400, "No xAI API key configured. Set one in Settings first.")
     if engine == "fal" and not cfg.get_fal_api_key():
@@ -142,13 +158,14 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
         engine=engine,
         prompt_text=body.adhoc_prompt_text,
     )
-    background_tasks.add_task(_run_generation, job["id"], image, body, engine, config, source_path)
+    background_tasks.add_task(_run_generation, job["id"], image, body, engine, config, source_path, reference_paths)
     return job
 
 
-def _run_generation(job_id, image, body, engine, config, source_path):
+def _run_generation(job_id, image, body, engine, config, source_path, reference_paths=None):
     model = None
     aspect_ratio = None
+    comfyui_processing_seconds = None
     max_dim = body.max_dim or config["default_max_dim"]
     start_time = time.time()
     try:
@@ -156,13 +173,14 @@ def _run_generation(job_id, image, body, engine, config, source_path):
 
         if engine == "comfyui":
             try:
-                image_bytes, revised_prompt = comfyui_client.generate_image_edit(
+                image_bytes, revised_prompt, comfyui_processing_seconds = comfyui_client.generate_image_edit(
                     base_url=config["comfyui_url"],
                     workflow_path=cfg.comfyui_workflow_path(config),
                     source_path=source_path,
                     prompt=body.adhoc_prompt_text,
                     job_id=job_id,
                     max_dim=max_dim,
+                    extra_source_paths=reference_paths,
                 )
             except jobs.GenerationCancelled:
                 raise  # not a failure -- let it propagate to the cancelled-specific handler below
@@ -216,7 +234,7 @@ def _run_generation(job_id, image, body, engine, config, source_path):
             max_dim=max_dim,
             revised_prompt=revised_prompt,
             result_id=result_id,
-            duration_seconds=time.time() - start_time,
+            duration_seconds=comfyui_processing_seconds if comfyui_processing_seconds is not None else time.time() - start_time,
         )
         jobs.finish_job(job_id, result_id=result["id"])
     except jobs.GenerationCancelled:
@@ -248,6 +266,52 @@ def get_result_thumbnail(result_id: str):
         raise HTTPException(404, "Result file missing on disk")
     thumb_path = storage.get_or_create_thumbnail("results", image["project_id"], result_id, path)
     return FileResponse(thumb_path, media_type="image/jpeg")
+
+
+@router.post("/api/results/{result_id}/promote-to-source")
+def promote_result_to_source(result_id: str):
+    """Turns a generated result into a brand-new source image in the same
+    project, so it can be used as the input for a further round of edits.
+    The new image keeps a pointer (derived_from_result_id) back to the result
+    it came from -- see routers/images.py's get_image for how that's resolved
+    into a display-ready provenance trail.
+    """
+    result = db.get_result(result_id)
+    if not result:
+        raise HTTPException(404, "Result not found")
+    origin_image = db.get_image(result["image_id"])
+    if not origin_image:
+        raise HTTPException(404, "Original image not found")
+    project_id = origin_image["project_id"]
+
+    result_path = storage.result_image_path(project_id, result["file_path"])
+    if not result_path.exists():
+        raise HTTPException(404, "Result file missing on disk")
+
+    display_name = f"{origin_image['display_name']} (from result)"
+    new_image_id = db.new_id()
+    try:
+        file_name, width, height, content_hash, resized_hash = storage.save_source_image(
+            project_id, new_image_id, display_name, result_path.read_bytes()
+        )
+    except Exception as e:
+        raise HTTPException(400, f"Could not process result as source image: {e}")
+
+    existing = db.find_image_by_hash(project_id, content_hash)
+    if existing:
+        storage.delete_source_image(project_id, file_name)
+        raise HTTPException(409, f"This result is already a source image: '{existing['display_name']}'")
+
+    return db.create_image(
+        project_id=project_id,
+        file_name=file_name,
+        display_name=display_name,
+        width=width,
+        height=height,
+        content_hash=content_hash,
+        resized_hash=resized_hash,
+        derived_from_result_id=result_id,
+    )
 
 
 @router.put("/api/results/{result_id}/evaluation")

@@ -19,6 +19,9 @@ const state = {
   queueExpanded: false,
   multiSelectMode: false,
   selectedImageIds: new Set(),
+  referenceImages: [], // this project's reference-image library (separate pool from images/source)
+  referenceImageIds: [], // ids picked from referenceImages for the current generation, persists like engine/aspect ratio
+  sidebarTab: "images", // "images" | "references"
 };
 
 // job ids we've already reacted to a done/error transition for, so the
@@ -40,6 +43,14 @@ const els = {
   autoGenOnUploadToggle: document.getElementById("autoGenOnUploadToggle"),
   uploadStatus: document.getElementById("uploadStatus"),
   cleanupNoBtn: document.getElementById("cleanupNoBtn"),
+  imagesTabBtn: document.getElementById("imagesTabBtn"),
+  referencesTabBtn: document.getElementById("referencesTabBtn"),
+  imagesTabPanel: document.getElementById("imagesTabPanel"),
+  referencesTabPanel: document.getElementById("referencesTabPanel"),
+  referenceUploadDrop: document.getElementById("referenceUploadDrop"),
+  referenceUploadInput: document.getElementById("referenceUploadInput"),
+  referenceUploadStatus: document.getElementById("referenceUploadStatus"),
+  referenceLibraryGrid: document.getElementById("referenceLibraryGrid"),
   duplicatesBtn: document.getElementById("duplicatesBtn"),
   logsBtn: document.getElementById("logsBtn"),
   multiSelectToggleBtn: document.getElementById("multiSelectToggleBtn"),
@@ -57,11 +68,15 @@ const els = {
   detailsEmpty: document.getElementById("detailsEmpty"),
   detailsContent: document.getElementById("detailsContent"),
   displayNameInput: document.getElementById("displayNameInput"),
+  provenanceLine: document.getElementById("provenanceLine"),
   commentInput: document.getElementById("commentInput"),
   promptSelect: document.getElementById("promptSelect"),
   promptTextarea: document.getElementById("promptTextarea"),
   engineSelect: document.getElementById("engineSelect"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
+  referenceImagesField: document.getElementById("referenceImagesField"),
+  referenceImageList: document.getElementById("referenceImageList"),
+  addReferenceImageBtn: document.getElementById("addReferenceImageBtn"),
   generateBtn: document.getElementById("generateBtn"),
   uploadResultInput: document.getElementById("uploadResultInput"),
   generateStatus: document.getElementById("generateStatus"),
@@ -91,6 +106,12 @@ const clipboardAvailable = !!(navigator.clipboard && window.isSecureContext);
 // Modal helper
 // ---------------------------------------------------------------------------
 
+// Optional one-shot callback fired by closeModal() no matter *how* the modal
+// closed (button, backdrop click, Escape) -- lets a modal with async
+// in-flight state (like the crop widget's batch-upload loop) always get
+// notified so it doesn't hang waiting for a save that will never come.
+let modalOnClose = null;
+
 function openModal(html) {
   els.modalContent.innerHTML = html;
   els.modalOverlay.style.display = "flex";
@@ -99,6 +120,9 @@ function openModal(html) {
 function closeModal() {
   els.modalOverlay.style.display = "none";
   els.modalContent.innerHTML = "";
+  const onClose = modalOnClose;
+  modalOnClose = null;
+  if (onClose) onClose();
 }
 els.modalOverlay.addEventListener("click", (e) => {
   if (e.target === els.modalOverlay) closeModal();
@@ -106,6 +130,34 @@ els.modalOverlay.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && els.modalOverlay.style.display !== "none") closeModal();
 });
+
+// Styled stand-in for window.confirm(), matching the app's own modal chrome
+// instead of the browser's native dialog. Resolves false for every dismissal
+// path (Cancel, backdrop click, Escape), true only for the confirm button.
+function openConfirmModal({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
+  return new Promise((resolve) => {
+    const modal = openModal(`
+      <h3>${escapeHtml(title)}</h3>
+      <p class="dup-section-hint">${escapeHtml(message)}</p>
+      <div class="modal-actions">
+        <button id="mCancel" class="btn-ghost" type="button">${escapeHtml(cancelLabel)}</button>
+        <button id="mConfirm" class="${danger ? "btn-danger" : "btn-primary"}" type="button">${escapeHtml(confirmLabel)}</button>
+      </div>
+    `);
+    let settled = false;
+    modalOnClose = () => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    };
+    modal.querySelector("#mCancel").addEventListener("click", closeModal); // triggers modalOnClose -> resolve(false)
+    modal.querySelector("#mConfirm").addEventListener("click", () => {
+      settled = true; // suppress the modalOnClose that closeModal() would otherwise fire
+      closeModal();
+      resolve(true);
+    });
+  });
+}
 
 // Fallback for prompt-copy when navigator.clipboard is unavailable (insecure
 // context, e.g. plain LAN HTTP): show the text in a selectable readonly box
@@ -140,7 +192,7 @@ async function loadProjects() {
 
   if (state.currentProjectId) {
     els.projectSwitcher.value = state.currentProjectId;
-    await loadImages();
+    await Promise.all([loadImages(), loadReferenceImages()]);
   }
 }
 
@@ -149,8 +201,10 @@ els.projectSwitcher.addEventListener("change", async () => {
   localStorage.setItem("lastProjectId", state.currentProjectId);
   state.currentImageId = null;
   state.currentImage = null;
+  state.referenceImageIds = [];
+  renderReferenceImages();
   renderDetails();
-  await loadImages();
+  await Promise.all([loadImages(), loadReferenceImages()]);
 });
 
 els.newProjectBtn.addEventListener("click", () => {
@@ -175,7 +229,7 @@ els.newProjectBtn.addEventListener("click", () => {
     state.currentProjectId = project.id;
     localStorage.setItem("lastProjectId", project.id);
     els.projectSwitcher.value = project.id;
-    await loadImages();
+    await Promise.all([loadImages(), loadReferenceImages()]);
   });
 });
 
@@ -183,10 +237,13 @@ els.deleteProjectBtn.addEventListener("click", async () => {
   if (!state.currentProjectId) return;
   const project = state.projects.find((p) => p.id === state.currentProjectId);
   const name = project?.name || "this project";
-  if (
-    !confirm(`Move "${name}" (and all of its images/results) to trash? You can restore it from Trash within 2 days.`)
-  )
-    return;
+  const ok = await openConfirmModal({
+    title: "Move to Trash",
+    message: `Move "${name}" (and all of its images/results) to Trash? You can restore it within 2 days.`,
+    confirmLabel: "Move to Trash",
+    danger: true,
+  });
+  if (!ok) return;
   await api.deleteProject(state.currentProjectId);
   state.currentImageId = null;
   state.currentImage = null;
@@ -207,6 +264,16 @@ async function loadImages() {
   });
   applyQueueOrdering();
   renderImageList();
+}
+
+async function loadReferenceImages() {
+  if (!state.currentProjectId) return;
+  state.referenceImages = await api.listReferenceImages(state.currentProjectId);
+  // Drop any picked-for-generation ids that no longer exist (e.g. deleted from another tab).
+  const validIds = new Set(state.referenceImages.map((r) => r.id));
+  state.referenceImageIds = state.referenceImageIds.filter((id) => validIds.has(id));
+  renderReferenceLibrary();
+  renderReferenceImages();
 }
 
 // The backend's "Latest Result" sort already treats a fresh upload as recent
@@ -248,6 +315,8 @@ function renderImageList() {
             <div class="name">${escapeHtml(img.display_name)}</div>
           </div>
           ${renderChits(img)}
+          <button class="image-item-ref-btn" data-use-ref-image="${img.id}" title="Copy as reference image">📎</button>
+          <button class="image-item-ref-btn" data-move-ref-image="${img.id}" title="Move to reference library">✂</button>
         </div>
       `;
     })
@@ -269,6 +338,19 @@ function renderImageList() {
       });
     });
   }
+  els.imageList.querySelectorAll("[data-use-ref-image]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const img = state.images.find((i) => i.id === btn.dataset.useRefImage);
+      if (img) useAsReferenceFromUrl(`/api/images/${img.id}/file`, img.display_name);
+    });
+  });
+  els.imageList.querySelectorAll("[data-move-ref-image]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveImageToReference(btn.dataset.moveRefImage);
+    });
+  });
 }
 
 // Jumps to a specific generation from its chit in the sidebar grid: selects
@@ -416,7 +498,13 @@ els.filterSelect.addEventListener("change", () => {
 
 els.cleanupNoBtn.addEventListener("click", async () => {
   if (!state.currentProjectId) return;
-  if (!confirm("Move all NO-rated results in this project to trash? You can restore them from Trash within 2 days.")) return;
+  const ok = await openConfirmModal({
+    title: "Clear NO Results",
+    message: "Move all NO-rated results in this project to Trash? You can restore them within 2 days.",
+    confirmLabel: "Move to Trash",
+    danger: true,
+  });
+  if (!ok) return;
   const { trashed } = await api.trashNoResults(state.currentProjectId);
   await loadImages();
   if (state.currentImageId) {
@@ -531,7 +619,11 @@ document.addEventListener("paste", async (e) => {
   }
   if (imageFiles.length) {
     e.preventDefault();
-    await handleUploadedFiles(imageFiles);
+    if (state.sidebarTab === "references") {
+      await uploadReferenceFilesWithCrop(imageFiles);
+    } else {
+      await handleUploadedFiles(imageFiles);
+    }
     return;
   }
 
@@ -568,7 +660,13 @@ els.deleteImageBtn.addEventListener("click", async () => {
   const targetImageId = state.currentImageId;
   if (!targetImageId) return;
   const name = state.currentImage?.display_name || "this image";
-  if (!confirm(`Move "${name}" and all of its results to trash? You can restore it from Trash within 2 days.`)) return;
+  const ok = await openConfirmModal({
+    title: "Move to Trash",
+    message: `Move "${name}" and all of its results to Trash? You can restore it within 2 days.`,
+    confirmLabel: "Move to Trash",
+    danger: true,
+  });
+  if (!ok) return;
   await api.deleteImage(targetImageId);
   if (state.currentImageId === targetImageId) {
     state.currentImageId = null;
@@ -595,6 +693,7 @@ function renderDetails() {
 
   els.displayNameInput.value = img.display_name;
   els.commentInput.value = img.comment || "";
+  renderProvenanceLine(img.derived_from);
 
   const results = img.results || [];
   els.resultCount.textContent = results.length;
@@ -609,6 +708,31 @@ function renderDetails() {
   const revisedPromptText = active?.revised_prompt ? `Grok revised prompt: "${active.revised_prompt}"` : "";
   const durationText = active?.duration_seconds ? `Generated in ${formatElapsed(active.duration_seconds)}` : "";
   els.revisedPrompt.textContent = [revisedPromptText, durationText].filter(Boolean).join(" — ");
+}
+
+// Shows the "chain of custody" for an image promoted from a result (via the
+// 🔗 button on result tiles) -- which source image and prompt produced it,
+// with a link back to that source. Hidden entirely for ordinary uploads.
+function renderProvenanceLine(derivedFrom) {
+  if (!derivedFrom) {
+    els.provenanceLine.style.display = "none";
+    els.provenanceLine.innerHTML = "";
+    return;
+  }
+  const promptText = derivedFrom.prompt_text ? ` — prompt: "${escapeHtml(derivedFrom.prompt_text)}"` : "";
+  const sourceName = derivedFrom.source_image_display_name;
+  const sourceLink = sourceName
+    ? `<a href="#" data-jump-to-image="${derivedFrom.source_image_id}">${escapeHtml(sourceName)}</a>`
+    : "a since-deleted image";
+  els.provenanceLine.innerHTML = `↳ Derived from a result of ${sourceLink}${promptText}`;
+  els.provenanceLine.style.display = "block";
+  const link = els.provenanceLine.querySelector("[data-jump-to-image]");
+  if (link) {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      selectImage(link.dataset.jumpToImage);
+    });
+  }
 }
 
 // Renders the results grid, followed by a dashed upload-dropzone card pinned
@@ -642,6 +766,8 @@ function renderResultGrid(results, activeId) {
         <div class="result-tile ${r.evaluation} ${activeClass}" data-id="${r.id}" title="${escapeHtml(label)}">
           <img src="/api/results/${r.id}/thumbnail" loading="lazy" />
           ${engineBadge}
+          <button class="result-tile-reference" data-use-ref-result="${r.id}" title="Use as reference image">📎</button>
+          <button class="result-tile-promote" data-promote-result="${r.id}" title="Use as new source image (keeps a link back to this result)">🔗</button>
           ${copyBtn}
           <button class="result-tile-delete" data-delete-result="${r.id}" title="Delete result">✕</button>
           <div class="result-tile-rating">
@@ -688,13 +814,33 @@ function renderResultGrid(results, activeId) {
       e.stopPropagation();
       const targetImageId = state.currentImageId;
       const resultId = btn.dataset.deleteResult;
-      if (!confirm("Move this result to trash? You can restore it from Trash within 2 days.")) return;
+      const ok = await openConfirmModal({
+        title: "Move to Trash",
+        message: "Move this result to Trash? You can restore it within 2 days.",
+        confirmLabel: "Move to Trash",
+        danger: true,
+      });
+      if (!ok) return;
       await api.deleteResult(resultId);
       if (state.currentImageId === targetImageId) {
         state.currentImage = await api.getImage(targetImageId);
         renderDetails();
       }
       await loadImages();
+    });
+  });
+  els.resultGrid.querySelectorAll("[data-use-ref-result]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const resultId = btn.dataset.useRefResult;
+      const name = state.currentImage ? `${state.currentImage.display_name} result` : "result";
+      useAsReferenceFromUrl(`/api/results/${resultId}/file`, name);
+    });
+  });
+  els.resultGrid.querySelectorAll("[data-promote-result]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await promoteResultToSource(btn.dataset.promoteResult);
     });
   });
   els.resultGrid.querySelectorAll("[data-copy-prompt]").forEach((btn) => {
@@ -764,6 +910,413 @@ els.promptSelect.addEventListener("change", () => {
   if (prompt) els.promptTextarea.value = prompt.prompt_text;
 });
 
+// ---------------------------------------------------------------------------
+// Reference images (ComfyUI only) -- up to MAX_REFERENCE_IMAGES images picked
+// from this project's reference-image library (the References sidebar tab,
+// a separate pool from source images) and sent alongside the source image on
+// generate. Selection persists across image switches, same as the
+// engine/aspect-ratio selects.
+// ---------------------------------------------------------------------------
+const MAX_REFERENCE_IMAGES = 2;
+
+function updateReferenceImagesVisibility() {
+  els.referenceImagesField.style.display = els.engineSelect.value === "comfyui" ? "flex" : "none";
+}
+
+function renderReferenceImages() {
+  els.referenceImageList.innerHTML = state.referenceImageIds
+    .map((id) => {
+      const ref = state.referenceImages.find((r) => r.id === id);
+      const label = escapeHtml(ref ? ref.display_name : "");
+      return `
+        <div class="reference-image-thumb" title="${label}">
+          <img src="/api/reference-images/${id}/thumbnail" loading="lazy" />
+          <span class="reference-image-thumb-remove" data-remove-ref="${id}" title="Remove">✕</span>
+        </div>
+      `;
+    })
+    .join("");
+  els.referenceImageList.querySelectorAll("[data-remove-ref]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.referenceImageIds = state.referenceImageIds.filter((id) => id !== btn.dataset.removeRef);
+      renderReferenceImages();
+    });
+  });
+}
+
+function openReferenceImagePicker() {
+  if (!state.referenceImages.length) {
+    const modal = openModal(`
+      <h3>Add reference image</h3>
+      <p class="dup-section-hint">This project has no reference images yet. Add some in the References tab first.</p>
+      <div class="modal-actions"><button id="mCancel" class="btn-ghost">Close</button></div>
+    `);
+    modal.querySelector("#mCancel").addEventListener("click", closeModal);
+    return;
+  }
+  const modal = openModal(`
+    <h3>Add reference image</h3>
+    <p class="dup-section-hint">Select up to ${MAX_REFERENCE_IMAGES} images from this project's reference library.</p>
+    <div class="picker-grid" id="refPickerGrid"></div>
+    <div class="modal-actions"><button id="mCancel" class="btn-ghost">Close</button></div>
+  `);
+  modal.querySelector("#mCancel").addEventListener("click", closeModal);
+  const grid = modal.querySelector("#refPickerGrid");
+  grid.innerHTML = state.referenceImages
+    .map((ref) => {
+      const selected = state.referenceImageIds.includes(ref.id);
+      const disabled = !selected && state.referenceImageIds.length >= MAX_REFERENCE_IMAGES;
+      return `
+        <div class="picker-item ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}" data-picker-id="${ref.id}" title="${escapeHtml(ref.display_name)}">
+          <img src="/api/reference-images/${ref.id}/thumbnail" loading="lazy" />
+        </div>
+      `;
+    })
+    .join("");
+  grid.querySelectorAll("[data-picker-id]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.pickerId;
+      const idx = state.referenceImageIds.indexOf(id);
+      if (idx !== -1) {
+        state.referenceImageIds.splice(idx, 1);
+      } else if (state.referenceImageIds.length < MAX_REFERENCE_IMAGES) {
+        state.referenceImageIds.push(id);
+      } else {
+        return;
+      }
+      renderReferenceImages();
+      openReferenceImagePicker(); // re-render the grid with updated selection state
+    });
+  });
+}
+
+// Interactive rectangular crop: shows imageUrl at a size that fits the modal,
+// with a draggable/resizable selection box. initialBox and the box passed to
+// onSave are both in the *natural* pixel coordinates of the full image, so
+// callers never have to think about the display scale factor.
+function openCropModal({ title, imageUrl, naturalWidth, naturalHeight, initialBox, onSave, onCancel }) {
+  const maxW = 540;
+  const maxH = 440;
+  const scale = Math.min(maxW / naturalWidth, maxH / naturalHeight, 1);
+  const dispW = Math.round(naturalWidth * scale);
+  const dispH = Math.round(naturalHeight * scale);
+  const minSize = 16;
+
+  const modal = openModal(`
+    <h3>${escapeHtml(title)}</h3>
+    <div class="crop-stage-wrap">
+      <div class="crop-stage" id="cropStage" style="width:${dispW}px;height:${dispH}px">
+        <img id="cropImg" src="${imageUrl}" draggable="false" style="width:${dispW}px;height:${dispH}px" />
+        <div class="crop-box" id="cropBox">
+          <div class="crop-handle crop-handle-nw" data-handle="nw"></div>
+          <div class="crop-handle crop-handle-ne" data-handle="ne"></div>
+          <div class="crop-handle crop-handle-sw" data-handle="sw"></div>
+          <div class="crop-handle crop-handle-se" data-handle="se"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="cropResetBtn" class="btn-ghost" type="button">Reset to full image</button>
+      <button id="cropCancelBtn" class="btn-ghost" type="button">Cancel</button>
+      <button id="cropSaveBtn" class="btn-primary" type="button">Save</button>
+    </div>
+  `);
+
+  let settled = false;
+  function settleCancel() {
+    if (settled) return;
+    settled = true;
+    if (onCancel) onCancel();
+  }
+  modalOnClose = settleCancel;
+
+  const stage = modal.querySelector("#cropStage");
+  const boxEl = modal.querySelector("#cropBox");
+  let box; // current selection in DISPLAY pixel coords, relative to the stage
+
+  function setBox(next) {
+    let { x, y, w, h } = next;
+    w = Math.max(minSize, Math.min(w, dispW));
+    h = Math.max(minSize, Math.min(h, dispH));
+    x = Math.max(0, Math.min(x, dispW - w));
+    y = Math.max(0, Math.min(y, dispH - h));
+    box = { x, y, w, h };
+    boxEl.style.left = `${x}px`;
+    boxEl.style.top = `${y}px`;
+    boxEl.style.width = `${w}px`;
+    boxEl.style.height = `${h}px`;
+  }
+
+  if (initialBox) {
+    setBox({ x: initialBox.x * scale, y: initialBox.y * scale, w: initialBox.w * scale, h: initialBox.h * scale });
+  } else {
+    setBox({ x: 0, y: 0, w: dispW, h: dispH });
+  }
+
+  modal.querySelector("#cropResetBtn").addEventListener("click", () => setBox({ x: 0, y: 0, w: dispW, h: dispH }));
+
+  function pointerPos(evt) {
+    const rect = stage.getBoundingClientRect();
+    return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+  }
+
+  let drag = null; // { mode: "move" | "resize", handle, start: {x,y}, startBox }
+  boxEl.addEventListener("pointerdown", (evt) => {
+    const handle = evt.target.dataset.handle;
+    drag = { mode: handle ? "resize" : "move", handle, start: pointerPos(evt), startBox: { ...box } };
+    boxEl.setPointerCapture(evt.pointerId);
+    evt.preventDefault();
+  });
+  boxEl.addEventListener("pointermove", (evt) => {
+    if (!drag) return;
+    const p = pointerPos(evt);
+    const dx = p.x - drag.start.x;
+    const dy = p.y - drag.start.y;
+    if (drag.mode === "move") {
+      setBox({ x: drag.startBox.x + dx, y: drag.startBox.y + dy, w: drag.startBox.w, h: drag.startBox.h });
+      return;
+    }
+    let { x, y, w, h } = drag.startBox;
+    if (drag.handle.includes("n")) {
+      y = drag.startBox.y + dy;
+      h = drag.startBox.h - dy;
+    }
+    if (drag.handle.includes("s")) h = drag.startBox.h + dy;
+    if (drag.handle.includes("w")) {
+      x = drag.startBox.x + dx;
+      w = drag.startBox.w - dx;
+    }
+    if (drag.handle.includes("e")) w = drag.startBox.w + dx;
+    setBox({ x, y, w, h });
+  });
+  boxEl.addEventListener("pointerup", () => {
+    drag = null;
+  });
+  boxEl.addEventListener("pointercancel", () => {
+    drag = null;
+  });
+
+  modal.querySelector("#cropCancelBtn").addEventListener("click", closeModal); // triggers settleCancel via modalOnClose
+  modal.querySelector("#cropSaveBtn").addEventListener("click", () => {
+    const natural = { x: box.x / scale, y: box.y / scale, w: box.w / scale, h: box.h / scale };
+    settled = true; // suppress the settleCancel that closeModal() would otherwise fire
+    closeModal();
+    onSave(natural);
+  });
+}
+
+els.addReferenceImageBtn.addEventListener("click", openReferenceImagePicker);
+els.engineSelect.addEventListener("change", updateReferenceImagesVisibility);
+updateReferenceImagesVisibility();
+renderReferenceImages();
+
+// ---------------------------------------------------------------------------
+// References sidebar tab -- this project's reference-image library: upload
+// (with a just-in-time crop step per file), recrop later from the untouched
+// original, rename via the crop title, and delete. Separate pool from the
+// main image list; see the generate-panel picker above for where these get used.
+// ---------------------------------------------------------------------------
+
+function setSidebarTab(tab) {
+  state.sidebarTab = tab;
+  els.imagesTabBtn.classList.toggle("active", tab === "images");
+  els.referencesTabBtn.classList.toggle("active", tab === "references");
+  els.imagesTabPanel.style.display = tab === "images" ? "flex" : "none";
+  els.referencesTabPanel.style.display = tab === "references" ? "flex" : "none";
+}
+els.imagesTabBtn.addEventListener("click", () => setSidebarTab("images"));
+els.referencesTabBtn.addEventListener("click", () => setSidebarTab("references"));
+
+function renderReferenceLibrary() {
+  if (!state.referenceImages.length) {
+    els.referenceLibraryGrid.innerHTML = `<p class="dup-section-hint">No reference images yet.</p>`;
+    return;
+  }
+  els.referenceLibraryGrid.innerHTML = state.referenceImages
+    .map(
+      (ref) => `
+        <div class="reference-library-item" title="${escapeHtml(ref.display_name)}">
+          <img src="/api/reference-images/${ref.id}/thumbnail" loading="lazy" />
+          <div class="reference-library-item-actions">
+            <button class="reference-library-item-btn" data-crop-ref="${ref.id}" title="Crop">✂</button>
+            <button class="reference-library-item-btn danger" data-delete-ref="${ref.id}" title="Delete">✕</button>
+          </div>
+          <div class="reference-library-item-name">${escapeHtml(ref.display_name)}</div>
+        </div>
+      `
+    )
+    .join("");
+  els.referenceLibraryGrid.querySelectorAll("[data-crop-ref]").forEach((btn) => {
+    btn.addEventListener("click", () => recropReferenceImage(btn.dataset.cropRef));
+  });
+  els.referenceLibraryGrid.querySelectorAll("[data-delete-ref]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.deleteRef;
+      const ref = state.referenceImages.find((r) => r.id === id);
+      const ok = await openConfirmModal({
+        title: "Move to Trash",
+        message: `Move reference image "${ref ? ref.display_name : ""}" to Trash? You can restore it within 2 days.`,
+        confirmLabel: "Move to Trash",
+        danger: true,
+      });
+      if (!ok) return;
+      await api.deleteReferenceImage(id);
+      await loadReferenceImages();
+    });
+  });
+}
+
+function recropReferenceImage(id) {
+  const ref = state.referenceImages.find((r) => r.id === id);
+  if (!ref) return;
+  openCropModal({
+    title: `Crop "${ref.display_name}"`,
+    imageUrl: `/api/reference-images/${id}/original`,
+    naturalWidth: ref.orig_width,
+    naturalHeight: ref.orig_height,
+    initialBox: ref.crop_x != null ? { x: ref.crop_x, y: ref.crop_y, w: ref.crop_w, h: ref.crop_h } : null,
+    onSave: async (box) => {
+      await api.recropReferenceImage(id, box);
+      await loadReferenceImages();
+    },
+  });
+}
+
+// Loads a File into an <img> just to read its natural pixel size for the crop
+// modal -- the object URL is revoked once the modal for this file is done.
+function readImageNaturalSize(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({ url, width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read image"));
+    };
+    img.src = url;
+  });
+}
+
+// Uploads each file in sequence, opening the crop modal for it first --
+// cancelling a file's crop skips just that file rather than the whole batch.
+// Returns how many files were actually uploaded, so callers with a follow-up
+// side effect (e.g. deleting the file a "move" originated from) can tell a
+// real upload apart from an all-cancelled batch.
+async function uploadReferenceFilesWithCrop(files) {
+  const fileList = Array.from(files);
+  if (!fileList.length || !state.currentProjectId) return 0;
+  let uploaded = 0;
+  for (const file of fileList) {
+    let dims;
+    try {
+      dims = await readImageNaturalSize(file);
+    } catch {
+      continue;
+    }
+    const displayName = (file.name || "reference").replace(/\.[^.]+$/, "");
+    const cropBox = await new Promise((resolve) => {
+      openCropModal({
+        title: `Crop "${displayName}"`,
+        imageUrl: dims.url,
+        naturalWidth: dims.width,
+        naturalHeight: dims.height,
+        initialBox: null,
+        onSave: resolve,
+        onCancel: () => resolve(null),
+      });
+    });
+    URL.revokeObjectURL(dims.url);
+    if (!cropBox) continue;
+    els.referenceUploadStatus.innerHTML = `<span class="spinner"></span><span>Uploading ${uploaded + 1}/${fileList.length}...</span>`;
+    await api.uploadReferenceImage(state.currentProjectId, { file, displayName, cropBox });
+    uploaded++;
+  }
+  els.referenceUploadStatus.textContent = uploaded ? `Added ${uploaded} reference image(s).` : "";
+  await loadReferenceImages();
+  return uploaded;
+}
+
+els.referenceUploadInput.addEventListener("change", async () => {
+  const files = els.referenceUploadInput.files;
+  els.referenceUploadInput.value = "";
+  await uploadReferenceFilesWithCrop(files);
+});
+["dragover", "dragleave", "drop"].forEach((evtName) => {
+  els.referenceUploadDrop.addEventListener(evtName, (e) => {
+    e.preventDefault();
+    els.referenceUploadDrop.classList.toggle("dragover", evtName === "dragover");
+  });
+});
+els.referenceUploadDrop.addEventListener("drop", async (e) => {
+  await uploadReferenceFilesWithCrop(e.dataTransfer.files);
+});
+
+// "Use as reference" from a library image or a generated result (the 📎
+// button on image rows and result tiles): fetches the already-stored file
+// and feeds it through the normal upload-with-crop flow, so it lands in the
+// reference library as its own independent copy -- editing or deleting it
+// later never touches the source image/result it came from.
+async function useAsReferenceFromUrl(url, suggestedName) {
+  let blob;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.statusText || "request failed");
+    blob = await resp.blob();
+  } catch (e) {
+    els.referenceUploadStatus.textContent = `Error: could not load image (${e.message})`;
+    return 0;
+  }
+  const file = new File([blob], `${suggestedName || "reference"}.png`, { type: blob.type || "image/png" });
+  setSidebarTab("references");
+  return uploadReferenceFilesWithCrop([file]);
+}
+
+// "Move to reference" from a library image (image-list row's scissors icon):
+// same as useAsReferenceFromUrl, but afterward removes the original from the
+// main image list -- nothing is lost (under the hood it's the same reversible
+// soft-delete as any other image removal, just not framed as "Trash" here
+// since from the user's side this is a relocation, not a deletion), and
+// skipped entirely if the user cancels the crop step (nothing uploaded =>
+// nothing removed).
+async function moveImageToReference(imageId) {
+  const img = state.images.find((i) => i.id === imageId);
+  if (!img) return;
+  const resultCount = img.result_count || 0;
+  const message =
+    `Move "${img.display_name}" to your reference library? It'll leave the main image list` +
+    (resultCount ? `, along with its ${resultCount} result(s), ` : " ") +
+    `-- nothing is deleted, and the original stays recoverable from Trash if you change your mind.`;
+  const ok = await openConfirmModal({ title: "Move to References", message, confirmLabel: "Move" });
+  if (!ok) return;
+
+  const uploadedCount = await useAsReferenceFromUrl(`/api/images/${imageId}/file`, img.display_name);
+  if (!uploadedCount) return; // cancelled the crop step -- leave the original alone
+
+  await api.deleteImage(imageId);
+  if (state.currentImageId === imageId) {
+    state.currentImageId = null;
+    state.currentImage = null;
+    renderDetails();
+  }
+  await loadImages();
+}
+
+// Turns a result into a new source image (for re-running a prompt on
+// something you just generated) and jumps to it. The new image keeps a
+// provenance link back to the result/prompt it came from -- see the
+// provenance line rendered in renderDetails() below.
+async function promoteResultToSource(resultId) {
+  let newImage;
+  try {
+    newImage = await api.promoteResultToSource(resultId);
+  } catch (e) {
+    els.generateStatus.textContent = `Error: ${e.message}`;
+    return;
+  }
+  await loadImages();
+  await selectImage(newImage.id);
+}
+
 els.generateBtn.addEventListener("click", generate);
 
 async function generate() {
@@ -803,11 +1356,13 @@ async function enqueueGeneration(imageId) {
   const promptId = els.promptSelect.value || null;
   const aspectRatio = els.aspectRatioSelect.value || null;
   const engine = els.engineSelect.value;
+  const referenceImageIds = engine === "comfyui" ? state.referenceImageIds : [];
   const job = await api.generateResult(imageId, {
     prompt_id: promptId,
     adhoc_prompt_text: promptText,
     engine,
     aspect_ratio: aspectRatio,
+    reference_image_ids: referenceImageIds.length ? referenceImageIds : undefined,
   });
   mergeQueueJob(job);
   return job;
@@ -1088,7 +1643,13 @@ function renderPromptList() {
   els.promptList.querySelectorAll("[data-del]").forEach((el) => {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm("Delete this prompt?")) return;
+      const ok = await openConfirmModal({
+        title: "Delete Prompt",
+        message: "Delete this prompt? This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
       await api.deletePrompt(el.dataset.del);
       await loadPrompts();
     });
@@ -1160,23 +1721,46 @@ const FAL_MODELS = [
 ];
 const FAL_MODEL_CUSTOM = "__custom__";
 
-function renderFalModelOptions(config) {
+// Populated on demand by the "Refresh from fal.ai" button in Settings (GET
+// /api/config/fal-models). Kept in module scope, not persisted, so it
+// survives closing/reopening the Settings modal within a session but a page
+// reload starts back at just the curated FAL_MODELS list above.
+let discoveredFalModels = [];
+
+function isKnownFalModel(value) {
+  return FAL_MODELS.some((m) => m.value === value) || discoveredFalModels.some((m) => m.value === value);
+}
+
+function renderFalModelOptions(selectedValue) {
   const groups = new Map();
   for (const m of FAL_MODELS) {
     if (!groups.has(m.group)) groups.set(m.group, []);
     groups.get(m.group).push(m);
   }
+  const curatedValues = new Set(FAL_MODELS.map((m) => m.value));
+  const discovered = discoveredFalModels.filter((m) => !curatedValues.has(m.value));
+  if (discovered.length) groups.set("More from fal.ai", discovered);
   return [...groups.entries()]
     .map(
       ([group, models]) => `
-        <optgroup label="${group}">
+        <optgroup label="${escapeHtml(group)}">
           ${models
-            .map((m) => `<option value="${m.value}" ${config.fal_model === m.value ? "selected" : ""}>${m.label}</option>`)
+            .map(
+              (m) =>
+                `<option value="${escapeHtml(m.value)}" ${selectedValue === m.value ? "selected" : ""}>${escapeHtml(m.label)}</option>`
+            )
             .join("")}
         </optgroup>
       `
     )
     .join("");
+}
+
+function falModelSelectHtml(selectedValue) {
+  return `
+    ${renderFalModelOptions(selectedValue)}
+    <option value="${FAL_MODEL_CUSTOM}" ${isKnownFalModel(selectedValue) ? "" : "selected"}>Custom model ID...</option>
+  `;
 }
 
 els.settingsBtn.addEventListener("click", async () => {
@@ -1209,19 +1793,20 @@ els.settingsBtn.addEventListener("click", async () => {
     </div>
     <div class="field">
       <label>fal.ai Model</label>
-      <select id="mFalModel">
-        ${renderFalModelOptions(config)}
-        <option value="${FAL_MODEL_CUSTOM}" ${
-          FAL_MODELS.some((m) => m.value === config.fal_model) ? "" : "selected"
-        }>Custom model ID...</option>
-      </select>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <select id="mFalModel" style="flex:1;">
+          ${falModelSelectHtml(config.fal_model)}
+        </select>
+        <button id="mFalModelRefresh" class="btn-ghost small" type="button">Refresh from fal.ai</button>
+      </div>
       <input
         id="mFalModelCustom"
         type="text"
         placeholder="e.g. fal-ai/your-model-id"
-        style="display:${FAL_MODELS.some((m) => m.value === config.fal_model) ? "none" : "block"}; margin-top:6px;"
-        value="${FAL_MODELS.some((m) => m.value === config.fal_model) ? "" : escapeHtml(config.fal_model || "")}"
+        style="display:${isKnownFalModel(config.fal_model) ? "none" : "block"}; margin-top:6px;"
+        value="${isKnownFalModel(config.fal_model) ? "" : escapeHtml(config.fal_model || "")}"
       />
+      <div id="mFalModelsStatus" class="status-line"></div>
     </div>
     <div id="mFalConnStatus" class="status-line"></div>
     <div class="modal-actions">
@@ -1235,6 +1820,25 @@ els.settingsBtn.addEventListener("click", async () => {
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
   modal.querySelector("#mFalModel").addEventListener("change", (e) => {
     modal.querySelector("#mFalModelCustom").style.display = e.target.value === FAL_MODEL_CUSTOM ? "block" : "none";
+  });
+  modal.querySelector("#mFalModelRefresh").addEventListener("click", async () => {
+    const select = modal.querySelector("#mFalModel");
+    const statusEl = modal.querySelector("#mFalModelsStatus");
+    const refreshBtn = modal.querySelector("#mFalModelRefresh");
+    const previousValue = select.value === FAL_MODEL_CUSTOM ? modal.querySelector("#mFalModelCustom").value.trim() : select.value;
+    refreshBtn.disabled = true;
+    statusEl.textContent = "Fetching edit models from fal.ai...";
+    try {
+      const res = await api.getFalModels();
+      discoveredFalModels = res.models;
+      select.innerHTML = falModelSelectHtml(previousValue);
+      modal.querySelector("#mFalModelCustom").style.display = isKnownFalModel(previousValue) ? "none" : "block";
+      statusEl.textContent = `Found ${discoveredFalModels.length} edit model(s) from fal.ai.`;
+    } catch (e) {
+      statusEl.textContent = `Refresh failed: ${e.message}`;
+    } finally {
+      refreshBtn.disabled = false;
+    }
   });
   modal.querySelector("#mCheck").addEventListener("click", async () => {
     modal.querySelector("#mConnStatus").textContent = "Checking...";
@@ -1376,7 +1980,16 @@ function renderDuplicatesModal({ exact, possible }) {
   modal.querySelectorAll("[data-delete-image]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.deleteImage;
-      if (!confirm("Move this image and all its results to trash? You can restore it from Trash within 2 days.")) return;
+      const ok = await openConfirmModal({
+        title: "Move to Trash",
+        message: "Move this image and all its results to Trash? You can restore it within 2 days.",
+        confirmLabel: "Move to Trash",
+        danger: true,
+      });
+      if (!ok) {
+        renderDuplicatesModal({ exact, possible }); // confirm modal replaced this one -- restore it
+        return;
+      }
       await api.deleteImage(id);
       if (state.currentImageId === id) {
         state.currentImageId = null;
@@ -1397,12 +2010,16 @@ function renderDuplicatesModal({ exact, possible }) {
       const keepId = selected.value;
       const removeIds = Array.from(radios).map((r) => r.value).filter((id) => id !== keepId);
       if (!removeIds.length) return;
-      if (
-        !confirm(
-          `Merge ${removeIds.length} duplicate(s) into the selected image? Their results will be combined onto it, and the duplicate copies removed.`
-        )
-      )
+      const ok = await openConfirmModal({
+        title: "Merge Duplicates",
+        message: `Merge ${removeIds.length} duplicate(s) into the selected image? Their results will be combined onto it, and the duplicate copies removed. This cannot be undone.`,
+        confirmLabel: "Merge",
+        danger: true,
+      });
+      if (!ok) {
+        renderDuplicatesModal({ exact, possible }); // confirm modal replaced this one -- restore it
         return;
+      }
       await api.mergeImages(keepId, removeIds);
       if (removeIds.includes(state.currentImageId)) {
         state.currentImageId = null;
@@ -1484,10 +2101,19 @@ function daysRemaining(deletedAt, retentionDays = 2) {
 els.trashBtn.addEventListener("click", renderTrashModal);
 
 async function renderTrashModal(statusMessage = "") {
-  const [projectTrash, trashedProjects] = await Promise.all([
-    state.currentProjectId ? api.getProjectTrash(state.currentProjectId) : Promise.resolve({ images: [], results: [] }),
+  const [rawProjectTrash, trashedProjects] = await Promise.all([
+    state.currentProjectId ? api.getProjectTrash(state.currentProjectId) : Promise.resolve({}),
     api.getTrashedProjects(),
   ]);
+  // Defensive against a backend that hasn't been restarted since reference_images
+  // was added to this response -- without this, an old server's response would
+  // throw below and silently break the whole Trash button (no console-visible UI
+  // error, since it's an unhandled rejection inside an async click handler).
+  const projectTrash = {
+    images: rawProjectTrash.images || [],
+    results: rawProjectTrash.results || [],
+    reference_images: rawProjectTrash.reference_images || [],
+  };
   const currentProjectName = state.projects.find((p) => p.id === state.currentProjectId)?.name || "this project";
 
   const imagesHtml = projectTrash.images.length
@@ -1522,6 +2148,22 @@ async function renderTrashModal(statusMessage = "") {
         .join("")
     : `<div class="empty-state">No trashed results.</div>`;
 
+  const referencesHtml = projectTrash.reference_images.length
+    ? projectTrash.reference_images
+        .map(
+          (ref) => `
+      <div class="trash-item">
+        <img src="/api/reference-images/${ref.id}/thumbnail" loading="lazy" />
+        <span class="trash-name">${escapeHtml(ref.display_name)}</span>
+        <span class="trash-meta">Deleted ${formatDeletedAt(ref.deleted_at)} · ${daysRemaining(ref.deleted_at)}d left</span>
+        <button class="btn-ghost small" data-restore-reference="${ref.id}">Restore</button>
+        <button class="btn-danger small" data-purge-reference="${ref.id}">Delete Forever</button>
+      </div>
+    `
+        )
+        .join("")
+    : `<div class="empty-state">No trashed reference images.</div>`;
+
   const projectsHtml = trashedProjects.length
     ? trashedProjects
         .map(
@@ -1547,6 +2189,8 @@ async function renderTrashModal(statusMessage = "") {
       <div class="trash-list">${imagesHtml}</div>
       <div class="panel-header"><span>${escapeHtml(currentProjectName)} — Results</span></div>
       <div class="trash-list">${resultsHtml}</div>
+      <div class="panel-header"><span>${escapeHtml(currentProjectName)} — References</span></div>
+      <div class="trash-list">${referencesHtml}</div>
       <div class="panel-header"><span>Trashed Projects</span></div>
       <div class="trash-list">${projectsHtml}</div>
     </div>
@@ -1572,7 +2216,13 @@ async function renderTrashModal(statusMessage = "") {
   });
   modal.querySelectorAll("[data-purge-image]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Permanently delete this image and its results? This cannot be undone.")) return;
+      const ok = await openConfirmModal({
+        title: "Delete Forever",
+        message: "Permanently delete this image and its results? This cannot be undone.",
+        confirmLabel: "Delete Forever",
+        danger: true,
+      });
+      if (!ok) return renderTrashModal(); // confirm modal replaced this one -- restore it
       await api.permanentlyDeleteImage(btn.dataset.purgeImage);
       await renderTrashModal();
     });
@@ -1591,8 +2241,34 @@ async function renderTrashModal(statusMessage = "") {
   });
   modal.querySelectorAll("[data-purge-result]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Permanently delete this result? This cannot be undone.")) return;
+      const ok = await openConfirmModal({
+        title: "Delete Forever",
+        message: "Permanently delete this result? This cannot be undone.",
+        confirmLabel: "Delete Forever",
+        danger: true,
+      });
+      if (!ok) return renderTrashModal(); // confirm modal replaced this one -- restore it
       await api.permanentlyDeleteResult(btn.dataset.purgeResult);
+      await renderTrashModal();
+    });
+  });
+  modal.querySelectorAll("[data-restore-reference]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api.restoreReferenceImage(btn.dataset.restoreReference);
+      await loadReferenceImages();
+      await renderTrashModal();
+    });
+  });
+  modal.querySelectorAll("[data-purge-reference]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const ok = await openConfirmModal({
+        title: "Delete Forever",
+        message: "Permanently delete this reference image? This cannot be undone.",
+        confirmLabel: "Delete Forever",
+        danger: true,
+      });
+      if (!ok) return renderTrashModal(); // confirm modal replaced this one -- restore it
+      await api.permanentlyDeleteReferenceImage(btn.dataset.purgeReference);
       await renderTrashModal();
     });
   });
@@ -1605,7 +2281,13 @@ async function renderTrashModal(statusMessage = "") {
   });
   modal.querySelectorAll("[data-purge-project]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Permanently delete this project and everything in it? This cannot be undone.")) return;
+      const ok = await openConfirmModal({
+        title: "Delete Forever",
+        message: "Permanently delete this project and everything in it? This cannot be undone.",
+        confirmLabel: "Delete Forever",
+        danger: true,
+      });
+      if (!ok) return renderTrashModal(); // confirm modal replaced this one -- restore it
       await api.permanentlyDeleteProject(btn.dataset.purgeProject);
       await renderTrashModal();
     });

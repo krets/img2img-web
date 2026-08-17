@@ -69,6 +69,59 @@ def save_source_image(project_id, image_id, display_name, file_bytes):
     return file_name, img.width, img.height, content_hash, resized_hash
 
 
+def save_reference_image_original(project_id, ref_id, display_name, file_bytes):
+    """Normalizes an uploaded reference image to full-resolution PNG (like
+    save_source_image) and saves the untouched original under the project's
+    reference_images folder. The original is kept around even after cropping,
+    so a reference can always be re-cropped from full quality. Returns
+    (file_name, width, height).
+    """
+    img = Image.open(io.BytesIO(file_bytes))
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        img_rgba = img.convert("RGBA")
+        bg.paste(img_rgba, mask=img_rgba.split()[3])
+        img = bg
+    else:
+        img = img.convert("RGB")
+
+    slug = slugify(display_name)
+    file_name = f"{ref_id}_{slug}_orig.png"
+    dest = cfg.project_reference_dir(project_id) / file_name
+    img.save(dest, format="PNG")
+    return file_name, img.width, img.height
+
+
+def apply_reference_crop(project_id, ref_id, display_name, original_file_name, crop_box):
+    """Crops the reference image's original file to crop_box (x, y, w, h in
+    original-pixel coordinates; None means the full image) and saves the
+    result as the active file used for thumbnails/generation. Always crops
+    from original_file_name, never from a previous crop, so repeated
+    re-cropping never compounds quality loss. Returns (file_name, width, height).
+    """
+    orig_path = cfg.project_reference_dir(project_id) / original_file_name
+    img = Image.open(orig_path).convert("RGB")
+    if crop_box is not None:
+        x, y, w, h = crop_box
+        img = img.crop((x, y, x + w, y + h))
+
+    slug = slugify(display_name)
+    file_name = f"{ref_id}_{slug}.png"
+    dest = cfg.project_reference_dir(project_id) / file_name
+    img.save(dest, format="PNG")
+    return file_name, img.width, img.height
+
+
+def reference_image_path(project_id, file_name):
+    return cfg.project_reference_dir(project_id) / file_name
+
+
+def delete_reference_image_files(project_id, original_file_name, file_name):
+    reference_image_path(project_id, original_file_name).unlink(missing_ok=True)
+    if file_name != original_file_name:
+        reference_image_path(project_id, file_name).unlink(missing_ok=True)
+
+
 def save_result_image(project_id, result_id, prompt_text, image_bytes, metadata=None):
     """Saves generated result bytes under the project's result_images folder,
     embedding the prompt (and any extra metadata) as PNG text chunks so it's
@@ -157,6 +210,7 @@ def clear_thumbnail(kind, project_id, item_id):
 def delete_project_dirs(project_id):
     shutil.rmtree(cfg.project_source_dir(project_id), ignore_errors=True)
     shutil.rmtree(cfg.project_result_dir(project_id), ignore_errors=True)
+    shutil.rmtree(cfg.project_reference_dir(project_id), ignore_errors=True)
     shutil.rmtree(cfg.WORKSPACE_ROOT / "thumbnails" / project_id, ignore_errors=True)
 
 

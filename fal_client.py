@@ -13,6 +13,7 @@ from grok_img2img import load_and_preprocess_image
 DEFAULT_MODEL = "fal-ai/flux-pro/kontext"
 FAL_RUN_BASE = "https://fal.run"
 FAL_QUEUE_BASE = "https://queue.fal.run"
+FAL_MODELS_BASE = "https://api.fal.ai/v1/models"
 REQUEST_TIMEOUT_SECONDS = 180
 
 # Per-model request shape. fal's edit models don't share one schema: the image
@@ -59,6 +60,75 @@ DEFAULT_MODEL_SPEC = {"image_field": "image_urls", "safety_extra": {"enable_safe
 
 def _model_spec(model):
     return MODEL_SPECS.get(model, DEFAULT_MODEL_SPEC)
+
+
+# fal.ai's model-search API buckets everything under a broad "image-to-image"
+# category -- upscalers, background removal, segmentation, inpainting/outpainting,
+# vectorizers, etc all land there alongside actual prompt-driven edit models.
+# There's no dedicated "edit" category to filter on, so these substrings flag
+# endpoint_id/group-label combinations that need a different request shape
+# (a mask, a strength parameter, no prompt at all) than the plain
+# (prompt, image) shape generate_image_edit sends, even when "edit" also
+# appears in the name.
+_NON_EDIT_HINTS = (
+    "upscale", "vectorize", "segment", "-rle", "background", "rembg",
+    "depth", "tryon", "try-on", "product-shot", "outpaint", "expand",
+    "erase", "inpaint", "reframe", "mask", "layerize", "layered",
+    "extract-frame", "photo-restoration", "auto-segment",
+)
+
+
+def list_edit_models(api_key=None, max_pages=10):
+    """Queries fal.ai's public model-search API (https://api.fal.ai/v1/models)
+    for image-to-image models and filters down to ones that look like
+    prompt-driven edit models. Best-effort: fal has no dedicated "edit"
+    category, so this is a name/label heuristic and can include false
+    positives or miss unusually-named models -- models it turns up that
+    aren't in MODEL_SPECS above just fall back to DEFAULT_MODEL_SPEC, same
+    as a manually-entered custom model ID.
+    """
+    headers = {"Authorization": f"Key {api_key}"} if api_key else {}
+    models = []
+    cursor = None
+    for _ in range(max_pages):
+        params = {"category": "image-to-image", "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            response = requests.get(FAL_MODELS_BASE, params=params, headers=headers, timeout=15)
+        except Exception as e:
+            raise RuntimeError(f"fal.ai model search request failed: {e}")
+        if response.status_code != 200:
+            raise RuntimeError(f"fal.ai model search failed with status code {response.status_code}: {response.text}")
+        data = response.json()
+        models.extend(data.get("models", []))
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+
+    results = []
+    for m in models:
+        endpoint_id = m.get("endpoint_id", "")
+        meta = m.get("metadata", {})
+        if meta.get("status") != "active":
+            continue
+        group_label = (meta.get("group") or {}).get("label", "")
+        haystack = f"{endpoint_id} {group_label}".lower()
+        if "edit" not in haystack:
+            continue
+        if any(hint in haystack for hint in _NON_EDIT_HINTS):
+            continue
+        results.append(
+            {
+                "value": endpoint_id,
+                "label": meta.get("display_name") or endpoint_id,
+                "group": group_label or "fal.ai",
+            }
+        )
+    results.sort(key=lambda r: (r["group"], r["label"]))
+    return results
 
 
 def generate_image_edit(api_key, source_path, prompt, model=None, max_dim=1024):

@@ -20,18 +20,39 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE TABLE IF NOT EXISTS images (
-    id            TEXT PRIMARY KEY,
-    project_id    TEXT NOT NULL,
-    file_name     TEXT NOT NULL,
-    display_name  TEXT NOT NULL,
-    comment       TEXT,
-    width         INTEGER,
-    height        INTEGER,
-    content_hash  TEXT,
-    resized_hash  TEXT,
-    date_added    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_deleted    INTEGER DEFAULT 0,
-    deleted_at    TIMESTAMP,
+    id                     TEXT PRIMARY KEY,
+    project_id             TEXT NOT NULL,
+    file_name              TEXT NOT NULL,
+    display_name           TEXT NOT NULL,
+    comment                TEXT,
+    width                  INTEGER,
+    height                 INTEGER,
+    content_hash           TEXT,
+    resized_hash           TEXT,
+    derived_from_result_id TEXT,
+    date_added             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted             INTEGER DEFAULT 0,
+    deleted_at             TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reference_images (
+    id                  TEXT PRIMARY KEY,
+    project_id          TEXT NOT NULL,
+    display_name        TEXT NOT NULL,
+    original_file_name  TEXT NOT NULL,
+    file_name           TEXT NOT NULL,
+    crop_x              INTEGER,
+    crop_y              INTEGER,
+    crop_w              INTEGER,
+    crop_h              INTEGER,
+    orig_width          INTEGER,
+    orig_height         INTEGER,
+    width               INTEGER,
+    height              INTEGER,
+    date_added          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted          INTEGER DEFAULT 0,
+    deleted_at          TIMESTAMP,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -80,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_results_evaluation   ON results(evaluation);
 CREATE INDEX IF NOT EXISTS idx_results_active       ON results(image_id, is_active_result);
 CREATE INDEX IF NOT EXISTS idx_results_deleted_at   ON results(is_deleted, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_projects_deleted_at  ON projects(is_deleted, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_reference_images_project ON reference_images(project_id, is_deleted);
+CREATE INDEX IF NOT EXISTS idx_reference_images_deleted_at ON reference_images(is_deleted, deleted_at);
 """
 
 _connection = None
@@ -115,6 +138,14 @@ def _migrate(conn):
         conn.execute("ALTER TABLE images ADD COLUMN is_deleted INTEGER DEFAULT 0")
     if "deleted_at" not in columns:
         conn.execute("ALTER TABLE images ADD COLUMN deleted_at TIMESTAMP")
+    if "derived_from_result_id" not in columns:
+        conn.execute("ALTER TABLE images ADD COLUMN derived_from_result_id TEXT")
+
+    reference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reference_images)").fetchall()}
+    if "is_deleted" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN is_deleted INTEGER DEFAULT 0")
+    if "deleted_at" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN deleted_at TIMESTAMP")
 
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()}
     if "engine" not in result_columns:
@@ -136,6 +167,7 @@ def _migrate(conn):
     # single-column version so INDEXES_SCHEMA's CREATE INDEX IF NOT EXISTS
     # actually recreates it instead of leaving pre-existing DBs on the old one.
     conn.execute("DROP INDEX IF EXISTS idx_images_project")
+    conn.execute("DROP INDEX IF EXISTS idx_reference_images_project")
 
     _migrate_unrated_evaluation(conn)
 
@@ -308,14 +340,15 @@ def restore_project(project_id):
 # ---------------------------------------------------------------------------
 
 def create_image(project_id, file_name, display_name, width=None, height=None, comment=None,
-                  content_hash=None, resized_hash=None):
+                  content_hash=None, resized_hash=None, derived_from_result_id=None):
     conn = get_connection()
     image_id = new_id()
     conn.execute(
         """INSERT INTO images (id, project_id, file_name, display_name, comment, width, height,
-                                content_hash, resized_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (image_id, project_id, file_name, display_name, comment, width, height, content_hash, resized_hash),
+                                content_hash, resized_hash, derived_from_result_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (image_id, project_id, file_name, display_name, comment, width, height, content_hash, resized_hash,
+         derived_from_result_id),
     )
     conn.commit()
     return get_image(image_id)
@@ -552,6 +585,103 @@ def merge_images(keep_id, remove_id):
         conn.execute("UPDATE results SET is_active_result = 0 WHERE image_id = ?", (keep_id,))
         conn.execute("UPDATE results SET is_active_result = 1 WHERE id = ?", (latest["id"],))
     conn.execute("DELETE FROM images WHERE id = ?", (remove_id,))
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Reference images (per-project prep material, distinct from library images)
+# ---------------------------------------------------------------------------
+
+def create_reference_image(project_id, display_name, original_file_name, file_name,
+                            crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height, ref_id=None):
+    conn = get_connection()
+    ref_id = ref_id or new_id()
+    conn.execute(
+        """INSERT INTO reference_images (id, project_id, display_name, original_file_name, file_name,
+                                          crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ref_id, project_id, display_name, original_file_name, file_name,
+         crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height),
+    )
+    conn.commit()
+    return get_reference_image(ref_id)
+
+
+def list_reference_images(project_id):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM reference_images WHERE project_id = ? AND is_deleted = 0 ORDER BY date_added DESC",
+        (project_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_deleted_reference_images(project_id):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM reference_images WHERE project_id = ? AND is_deleted = 1 ORDER BY deleted_at DESC",
+        (project_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_expired_reference_images(retention_days):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM reference_images WHERE is_deleted = 1 AND deleted_at <= datetime('now', ?)",
+        (f"-{retention_days} days",),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_reference_image(ref_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM reference_images WHERE id = ?", (ref_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_reference_image(ref_id, display_name=None):
+    conn = get_connection()
+    if display_name is not None:
+        conn.execute("UPDATE reference_images SET display_name = ? WHERE id = ?", (display_name, ref_id))
+        conn.commit()
+    return get_reference_image(ref_id)
+
+
+def update_reference_image_crop(ref_id, file_name, crop_x, crop_y, crop_w, crop_h, width, height):
+    conn = get_connection()
+    conn.execute(
+        """UPDATE reference_images
+           SET file_name = ?, crop_x = ?, crop_y = ?, crop_w = ?, crop_h = ?, width = ?, height = ?
+           WHERE id = ?""",
+        (file_name, crop_x, crop_y, crop_w, crop_h, width, height, ref_id),
+    )
+    conn.commit()
+    return get_reference_image(ref_id)
+
+
+def soft_delete_reference_image(ref_id):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE reference_images SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (ref_id,)
+    )
+    conn.commit()
+    return get_reference_image(ref_id)
+
+
+def restore_reference_image(ref_id):
+    conn = get_connection()
+    conn.execute("UPDATE reference_images SET is_deleted = 0, deleted_at = NULL WHERE id = ?", (ref_id,))
+    conn.commit()
+    return get_reference_image(ref_id)
+
+
+def delete_reference_image(ref_id):
+    """Hard delete -- only for permanent removal (after it's already trashed)
+    or the retention purge job. Callers are responsible for the files on disk.
+    """
+    conn = get_connection()
+    conn.execute("DELETE FROM reference_images WHERE id = ?", (ref_id,))
     conn.commit()
 
 

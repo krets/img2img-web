@@ -12,73 +12,13 @@
       "title": "Save Image"
     }
   },
-  "517": {
-    "inputs": {
-      "rgthree_comparer": {
-        "images": [
-          {
-            "name": "A",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_dmjyl_00403_.png&type=temp&subfolder=&rand=0.8899195033548561"
-          },
-          {
-            "name": "B",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_dmjyl_00404_.png&type=temp&subfolder=&rand=0.29537048709783675"
-          }
-        ]
-      },
-      "image_a": [
-        "637",
-        0
-      ],
-      "image_b": [
-        "515:65",
-        0
-      ]
-    },
-    "class_type": "Image Comparer (rgthree)",
-    "_meta": {
-      "title": "Image Comparer (rgthree)"
-    }
-  },
   "605": {
     "inputs": {
       "image": "!Nanette Superpear (3).jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Reference (@image3)"
-    }
-  },
-  "636": {
-    "inputs": {
-      "rgthree_comparer": {
-        "images": [
-          {
-            "name": "A",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_rgirp_00043_.png&type=temp&subfolder=&rand=0.20447309800591595"
-          },
-          {
-            "name": "B",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_rgirp_00044_.png&type=temp&subfolder=&rand=0.9582376556575604"
-          }
-        ]
-      },
-      "image_a": [
-        "605",
-        0
-      ],
-      "image_b": [
-        "515:65",
-        0
-      ]
-    },
-    "class_type": "Image Comparer (rgthree)",
-    "_meta": {
-      "title": "Image Comparer (rgthree)"
+      "title": "Reference image 2 (optional)"
     }
   },
   "637": {
@@ -96,62 +36,7 @@
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Load Image"
-    }
-  },
-  "606:499": {
-    "inputs": {
-      "image": [
-        "638",
-        0
-      ]
-    },
-    "class_type": "GetImageSize",
-    "_meta": {
-      "title": "Get Image Size"
-    }
-  },
-  "606:500": {
-    "inputs": {
-      "width": [
-        "606:499",
-        0
-      ],
-      "height": [
-        "606:499",
-        1
-      ],
-      "red": 255,
-      "green": 255,
-      "blue": 255
-    },
-    "class_type": "Image Blank",
-    "_meta": {
-      "title": "Image Blank"
-    }
-  },
-  "606:501": {
-    "inputs": {
-      "x": 0,
-      "y": 0,
-      "offset_x": 0,
-      "offset_y": 0,
-      "destination": [
-        "638",
-        0
-      ],
-      "source": [
-        "606:500",
-        0
-      ],
-      "mask": [
-        "638",
-        1
-      ]
-    },
-    "class_type": "ImageComposite+",
-    "_meta": {
-      "title": "🔧 Image Composite"
+      "title": "Reference image 3 (optional)"
     }
   },
   "515:61": {
@@ -613,13 +498,6 @@
       "title": "Compare"
     }
   },
-  "515:630": {
-    "inputs": {},
-    "class_type": "Context (rgthree)",
-    "_meta": {
-      "title": "Context (rgthree)"
-    }
-  },
   "515:631": {
     "inputs": {
       "images": [
@@ -701,7 +579,7 @@
   "515:632": {
     "inputs": {
       "images": [
-        "606:501",
+        "638",
         0
       ]
     },

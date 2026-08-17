@@ -23,7 +23,7 @@ import config as cfg
 import db
 import pruning
 import storage
-from routers import config_router, export, images, projects, prompts, results
+from routers import config_router, export, images, projects, prompts, references, results
 
 HOST = "0.0.0.0"
 
@@ -31,6 +31,7 @@ app = FastAPI(title="Image-to-Image Library Manager")
 
 app.include_router(projects.router)
 app.include_router(images.router)
+app.include_router(references.router)
 app.include_router(prompts.router)
 app.include_router(results.router)
 app.include_router(export.router)

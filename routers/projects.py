@@ -37,6 +37,7 @@ def get_project_trash(project_id: str):
     return {
         "images": db.list_deleted_images(project_id),
         "results": db.list_deleted_results(project_id),
+        "reference_images": db.list_deleted_reference_images(project_id),
     }
 
 

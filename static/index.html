@@ -27,43 +27,58 @@
   <div id="layout">
     <aside id="sidebar">
       <div class="panel-section">
-        <div class="sidebar-controls">
-          <input id="searchInput" type="text" placeholder="Search images..." />
-          <div class="sidebar-controls-row">
-            <select id="sortSelect">
-              <option value="recent_result">Latest Result</option>
-              <option value="date">Newest</option>
-              <option value="name">Name</option>
-              <option value="evaluation">Evaluation</option>
-            </select>
-            <select id="filterSelect">
-              <option value="all">All</option>
-              <option value="unprocessed">Unprocessed</option>
-              <option value="UNRATED">Needs Review</option>
-              <option value="YES">Approved</option>
-              <option value="MAYBE">Maybe</option>
-              <option value="NO">Rejected</option>
-            </select>
-            <button id="cleanupNoBtn" class="btn-ghost small" title="Move all NO-rated results in this project to trash">🗑 Clear NO</button>
+        <div class="sidebar-tabs">
+          <button class="sidebar-tab-btn active" id="imagesTabBtn" data-sidebar-tab="images">Images</button>
+          <button class="sidebar-tab-btn" id="referencesTabBtn" data-sidebar-tab="references">References</button>
+        </div>
+        <div id="imagesTabPanel">
+          <div class="sidebar-controls">
+            <input id="searchInput" type="text" placeholder="Search images..." />
+            <div class="sidebar-controls-row">
+              <select id="sortSelect">
+                <option value="recent_result">Latest Result</option>
+                <option value="date">Newest</option>
+                <option value="name">Name</option>
+                <option value="evaluation">Evaluation</option>
+              </select>
+              <select id="filterSelect">
+                <option value="all">All</option>
+                <option value="unprocessed">Unprocessed</option>
+                <option value="UNRATED">Needs Review</option>
+                <option value="YES">Approved</option>
+                <option value="MAYBE">Maybe</option>
+                <option value="NO">Rejected</option>
+              </select>
+              <button id="cleanupNoBtn" class="btn-ghost small" title="Move all NO-rated results in this project to trash">🗑 Clear NO</button>
+            </div>
           </div>
+          <label class="upload-drop" id="uploadDrop">
+            + Upload images (or paste)
+            <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+          </label>
+          <label class="checkbox-row" title="After upload, immediately queue a generation using the prompt currently in the details panel">
+            <input id="autoGenOnUploadToggle" type="checkbox" />
+            Auto-generate with current prompt
+          </label>
+          <div id="uploadStatus" class="status-line"></div>
+          <div class="sidebar-controls-row">
+            <button id="multiSelectToggleBtn" class="btn-ghost small">☑ Select</button>
+            <span id="multiSelectBar" class="multi-select-bar" style="display:none">
+              <span id="multiSelectCount"></span>
+              <button id="multiSelectMoveBtn" class="btn-ghost small">Move</button>
+            </span>
+          </div>
+          <div id="imageList" class="image-list"></div>
         </div>
-        <label class="upload-drop" id="uploadDrop">
-          + Upload images (or paste)
-          <input id="uploadInput" type="file" accept="image/*" multiple hidden />
-        </label>
-        <label class="checkbox-row" title="After upload, immediately queue a generation using the prompt currently in the details panel">
-          <input id="autoGenOnUploadToggle" type="checkbox" />
-          Auto-generate with current prompt
-        </label>
-        <div id="uploadStatus" class="status-line"></div>
-        <div class="sidebar-controls-row">
-          <button id="multiSelectToggleBtn" class="btn-ghost small">☑ Select</button>
-          <span id="multiSelectBar" class="multi-select-bar" style="display:none">
-            <span id="multiSelectCount"></span>
-            <button id="multiSelectMoveBtn" class="btn-ghost small">Move</button>
-          </span>
+        <div id="referencesTabPanel" style="display:none">
+          <p class="dup-section-hint reference-tab-hint">Reference images are a separate per-project library used only as extra ComfyUI generation inputs -- they don't show up in the main image list.</p>
+          <label class="upload-drop" id="referenceUploadDrop">
+            + Add reference image (or paste)
+            <input id="referenceUploadInput" type="file" accept="image/*" multiple hidden />
+          </label>
+          <div id="referenceUploadStatus" class="status-line"></div>
+          <div id="referenceLibraryGrid" class="reference-library-grid"></div>
         </div>
-        <div id="imageList" class="image-list"></div>
       </div>
       <div class="panel-edge panel-edge-sidebar">
         <div class="panel-resize-handle" id="sidebarResizeHandle"></div>
@@ -98,6 +113,7 @@
           <label>Name</label>
           <input id="displayNameInput" type="text" />
         </div>
+        <div id="provenanceLine" class="provenance-line" style="display:none"></div>
         <div class="field">
           <label>Comment</label>
           <textarea id="commentInput" rows="2"></textarea>
@@ -126,6 +142,11 @@
             <option value="2:3">2:3</option>
             <option value="3:4">3:4</option>
           </select>
+        </div>
+        <div class="field" id="referenceImagesField" style="display:none">
+          <label>Reference images <span class="hint">(ComfyUI only, up to 2)</span></label>
+          <div id="referenceImageList" class="reference-image-list"></div>
+          <button id="addReferenceImageBtn" class="btn-ghost small" type="button">+ Add reference image</button>
         </div>
         <div class="field-row">
           <button id="generateBtn" class="btn-primary">✨ Generate</button>

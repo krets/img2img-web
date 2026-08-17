@@ -24,6 +24,17 @@ class ImageFromUrlIn(BaseModel):
     url: str
 
 
+class ReferenceImageUpdateIn(BaseModel):
+    display_name: Optional[str] = None
+
+
+class ReferenceImageCropIn(BaseModel):
+    crop_x: int
+    crop_y: int
+    crop_w: int
+    crop_h: int
+
+
 class MoveImagesIn(BaseModel):
     image_ids: list[str]
     target_project_id: str
@@ -51,6 +62,9 @@ class GenerateRequestIn(BaseModel):
     model: Optional[str] = None
     aspect_ratio: Optional[str] = None
     max_dim: Optional[int] = None
+    # ComfyUI only -- ids into this project's reference-image library (see
+    # routers/references.py), passed as extra reference inputs.
+    reference_image_ids: Optional[list[str]] = None
 
 
 class EvaluationIn(BaseModel):

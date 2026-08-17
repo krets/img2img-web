@@ -71,6 +71,29 @@ export const api = {
   mergeImages: (keepId, removeIds) =>
     request("POST", "/images/merge", { json: { keep_id: keepId, remove_ids: removeIds } }),
 
+  // Reference images (per-project prep library, distinct from source images)
+  listReferenceImages: (projectId) => request("GET", `/projects/${projectId}/reference-images`),
+  uploadReferenceImage: (projectId, { file, displayName, cropBox }) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (displayName) form.append("display_name", displayName);
+    if (cropBox) {
+      form.append("crop_x", Math.round(cropBox.x));
+      form.append("crop_y", Math.round(cropBox.y));
+      form.append("crop_w", Math.round(cropBox.w));
+      form.append("crop_h", Math.round(cropBox.h));
+    }
+    return request("POST", `/projects/${projectId}/reference-images`, { form });
+  },
+  updateReferenceImage: (refId, body) => request("PUT", `/reference-images/${refId}`, { json: body }),
+  recropReferenceImage: (refId, cropBox) =>
+    request("PUT", `/reference-images/${refId}/crop`, {
+      json: { crop_x: Math.round(cropBox.x), crop_y: Math.round(cropBox.y), crop_w: Math.round(cropBox.w), crop_h: Math.round(cropBox.h) },
+    }),
+  deleteReferenceImage: (refId) => request("DELETE", `/reference-images/${refId}`),
+  restoreReferenceImage: (refId) => request("POST", `/reference-images/${refId}/restore`),
+  permanentlyDeleteReferenceImage: (refId) => request("DELETE", `/reference-images/${refId}/permanent`),
+
   // Prompts
   listPrompts: () => request("GET", "/prompts"),
   createPrompt: (title, prompt_text) =>
@@ -88,6 +111,7 @@ export const api = {
   restoreResult: (resultId) => request("POST", `/results/${resultId}/restore`),
   permanentlyDeleteResult: (resultId) => request("DELETE", `/results/${resultId}/permanent`),
   trashNoResults: (projectId) => request("POST", `/projects/${projectId}/results/trash-no`),
+  promoteResultToSource: (resultId) => request("POST", `/results/${resultId}/promote-to-source`),
   getQueue: () => request("GET", "/queue"),
   getQueueLog: () => request("GET", "/queue/log"),
   cancelJob: (jobId) => request("POST", `/queue/${jobId}/cancel`),
@@ -98,4 +122,5 @@ export const api = {
   checkConnection: () => request("POST", "/config/check-connection"),
   checkComfyuiConnection: () => request("POST", "/config/check-comfyui-connection"),
   checkFalConnection: () => request("POST", "/config/check-fal-connection"),
+  getFalModels: () => request("GET", "/config/fal-models"),
 };

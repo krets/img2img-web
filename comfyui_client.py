@@ -28,6 +28,11 @@ LOAD_IMAGE_NODE = "637"
 POSITIVE_PROMPT_NODE = "515:74"
 SEED_NODE = "515:73"
 SAVE_IMAGE_NODE = "516"
+# Optional extra reference images, in slot order. The workflow's index node
+# (INDEX_NODE) tells a chain of switch nodes how many of these are "real" --
+# anything beyond that count stays wired to a blank placeholder internally.
+EXTRA_IMAGE_NODES = ["605", "638"]
+INDEX_NODE = "515:604"
 
 POLL_INTERVAL_SECONDS = 1.0
 POLL_TIMEOUT_SECONDS = 300
@@ -77,12 +82,21 @@ def _upload_image(base_url, image_path, max_dim=None):
     return response.json()["name"]
 
 
-def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, max_dim=None):
-    """Runs the Flux.2 ComfyUI workflow against a source image on disk.
-    Returns (image_bytes, revised_prompt) — revised_prompt is always None since
-    ComfyUI doesn't rewrite prompts the way the Grok API does.
+def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, max_dim=None, extra_source_paths=None):
+    """Runs the Flux.2 ComfyUI workflow against a source image on disk, plus up
+    to len(EXTRA_IMAGE_NODES) additional reference images. Returns
+    (image_bytes, revised_prompt, processing_seconds) — revised_prompt is
+    always None since ComfyUI doesn't rewrite prompts the way the Grok API
+    does. processing_seconds covers only actual GPU execution (from the
+    moment ComfyUI starts running our prompt to completion), excluding time
+    spent waiting behind other jobs in ComfyUI's own queue; it's None if
+    that moment was never observed (e.g. HTTP-polling fallback that missed
+    a very short run).
     """
     base_url = base_url.rstrip("/")
+    extra_source_paths = list(extra_source_paths or [])
+    if len(extra_source_paths) > len(EXTRA_IMAGE_NODES):
+        raise ValueError(f"ComfyUI workflow supports at most {len(EXTRA_IMAGE_NODES)} extra reference images")
 
     if jobs.is_cancelled(job_id):
         raise jobs.GenerationCancelled()
@@ -91,13 +105,20 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
     workflow = _load_workflow(workflow_path)
     uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
 
-    # Every LoadImage node gets pointed at the uploaded source image. The workflow
-    # has unused reference/mask branches (from whatever ComfyUI session it was
-    # exported from) that ComfyUI still evaluates even though a switch node
-    # discards their output, so they need a valid file to read too.
+    # Every LoadImage node gets pointed at the uploaded source image by default.
+    # The workflow has reference-image slots (EXTRA_IMAGE_NODES) that ComfyUI
+    # still evaluates even when the index node below leaves them switched out,
+    # so they need a valid file to read too -- falling back to the primary
+    # image is harmless since their output is discarded downstream in that case.
     for node in workflow.values():
         if node.get("class_type") == "LoadImage":
             node["inputs"]["image"] = uploaded_name
+
+    for node_id, extra_path in zip(EXTRA_IMAGE_NODES, extra_source_paths):
+        workflow[node_id]["inputs"]["image"] = _upload_image(base_url, extra_path, max_dim=max_dim)
+
+    if INDEX_NODE in workflow:
+        workflow[INDEX_NODE]["inputs"]["b"] = len(extra_source_paths)
 
     if POSITIVE_PROMPT_NODE in workflow:
         workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = prompt
@@ -121,6 +142,7 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
         raise jobs.GenerationCancelled()
 
     history_entry = _wait_for_result(base_url, job_id, prompt_id)
+    finished_at = time.time()
     jobs.update_job(job_id, phase="saving")
     outputs = history_entry.get("outputs", {})
     save_node_output = outputs.get(SAVE_IMAGE_NODE)
@@ -129,7 +151,11 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
 
     image_info = save_node_output["images"][0]
     image_bytes = _download_image(base_url, image_info)
-    return image_bytes, None
+
+    job = jobs.get_job(job_id)
+    processing_started_at = job.get("processing_started_at") if job else None
+    processing_seconds = (finished_at - processing_started_at) if processing_started_at else None
+    return image_bytes, None, processing_seconds
 
 
 def _wait_for_result(base_url, job_id, prompt_id):
@@ -153,6 +179,7 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
     """
     ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://") + f"/ws?clientId={job_id}"
     deadline = time.time() + POLL_TIMEOUT_SECONDS
+    processing_started = False
     with _ws_connect(ws_url, open_timeout=WS_OPEN_TIMEOUT_SECONDS) as ws:
         while time.time() < deadline:
             if jobs.is_cancelled(job_id):
@@ -178,6 +205,9 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
 
             msg_type = msg.get("type")
             if msg_type == "progress":
+                if not processing_started:
+                    jobs.update_job(job_id, processing_started_at=time.time())
+                    processing_started = True
                 jobs.update_job(job_id, phase="running", value=msg_data.get("value", 0), max=msg_data.get("max", 0))
             elif msg_type == "executing":
                 if msg_data.get("prompt_id") == prompt_id and msg_data.get("node") is None:
@@ -188,6 +218,9 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
                             return entry
                         time.sleep(0.5)
                     return None
+                if not processing_started:
+                    jobs.update_job(job_id, processing_started_at=time.time())
+                    processing_started = True
                 jobs.update_job(job_id, phase="running")
             elif msg_type == "execution_error":
                 raise RuntimeError(f"ComfyUI execution failed: {msg_data}")
@@ -196,6 +229,7 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
 
 def _wait_for_result_http(base_url, job_id, prompt_id):
     deadline = time.time() + POLL_TIMEOUT_SECONDS
+    processing_started = False
     while time.time() < deadline:
         if jobs.is_cancelled(job_id):
             _cancel_on_comfyui(base_url, prompt_id)
@@ -203,6 +237,14 @@ def _wait_for_result_http(base_url, job_id, prompt_id):
         entry = _fetch_history(base_url, prompt_id)
         if entry:
             return entry
+        if not processing_started:
+            try:
+                running_ids = _fetch_queue_running_ids(base_url)
+            except Exception:
+                running_ids = set()
+            if prompt_id in running_ids:
+                jobs.update_job(job_id, processing_started_at=time.time())
+                processing_started = True
         jobs.update_job(job_id, phase="running")
         time.sleep(POLL_INTERVAL_SECONDS)
     raise RuntimeError(f"Timed out waiting for ComfyUI to finish prompt {prompt_id}")
@@ -218,10 +260,9 @@ def _cancel_on_comfyui(base_url, prompt_id):
     state regardless, and there's nothing more the caller can do here.
     """
     try:
-        state = requests.get(f"{base_url}/queue", timeout=REQUEST_TIMEOUT_SECONDS).json()
+        running_ids = _fetch_queue_running_ids(base_url)
     except Exception:
         return
-    running_ids = {entry[1] for entry in state.get("queue_running", [])}
     try:
         if prompt_id in running_ids:
             requests.post(f"{base_url}/interrupt", timeout=REQUEST_TIMEOUT_SECONDS)
@@ -229,6 +270,11 @@ def _cancel_on_comfyui(base_url, prompt_id):
             requests.post(f"{base_url}/queue", json={"delete": [prompt_id]}, timeout=REQUEST_TIMEOUT_SECONDS)
     except Exception:
         pass
+
+
+def _fetch_queue_running_ids(base_url):
+    state = requests.get(f"{base_url}/queue", timeout=REQUEST_TIMEOUT_SECONDS).json()
+    return {entry[1] for entry in state.get("queue_running", [])}
 
 
 def _fetch_history(base_url, prompt_id):

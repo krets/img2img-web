@@ -679,6 +679,17 @@ button:hover { border-color: #565a68; }
 .modal .field { margin-bottom: 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
+.modal:has(.settings-section) { width: 480px; }
+.settings-section { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid #2a2c35; }
+.settings-section:last-of-type { border-bottom: none; margin-bottom: 4px; padding-bottom: 0; }
+.settings-section-title { font-size: 14px; font-weight: 600; color: #e6e6eb; margin-bottom: 12px; }
+.settings-section-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.settings-section-actions .status-line { margin: 0; }
+.settings-section-actions + .status-line { margin-top: 6px; }
+.field-hint { font-size: 11px; color: #6b6f7d; word-break: break-all; }
+.fal-model-row { display: flex; gap: 6px; align-items: center; }
+.fal-model-row select { flex: 1; }
+
 .modal:has(.crop-stage-wrap) { width: 600px; }
 .crop-stage-wrap { display: flex; justify-content: center; }
 .crop-stage { position: relative; touch-action: none; }

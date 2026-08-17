@@ -1810,52 +1810,68 @@ els.settingsBtn.addEventListener("click", async () => {
   const config = await api.getConfig();
   const modal = openModal(`
     <h3>Settings</h3>
-    <div class="field">
-      <label>xAI API Key ${config.has_api_key ? `(current: ${config.xai_api_key})` : ""}</label>
-      <input id="mKey" type="password" placeholder="Enter to replace..." />
-    </div>
-    <div class="field"><label>Default Model</label><input id="mModel" type="text" value="${config.default_model}" /></div>
-    <div class="field"><label>Default Max Dimension</label><input id="mMaxDim" type="number" value="${config.default_max_dim}" /></div>
-    <div id="mConnStatus" class="status-line"></div>
-    <hr />
-    <div class="field">
-      <label>Default Engine</label>
-      <select id="mEngine">
-        <option value="grok" ${config.default_engine === "grok" ? "selected" : ""}>Grok</option>
-        <option value="comfyui" ${config.default_engine === "comfyui" ? "selected" : ""}>ComfyUI (local)</option>
-        <option value="fal" ${config.default_engine === "fal" ? "selected" : ""}>fal.ai</option>
-      </select>
-    </div>
-    <div class="field"><label>ComfyUI URL</label><input id="mComfyUrl" type="text" value="${config.comfyui_url}" /></div>
-    <div class="field"><label>ComfyUI Workflow File</label><input id="mComfyWorkflow" type="text" value="${config.comfyui_workflow_path}" /></div>
-    <div id="mComfyConnStatus" class="status-line"></div>
-    <hr />
-    <div class="field">
-      <label>fal.ai API Key ${config.has_fal_api_key ? `(current: ${config.fal_api_key})` : ""}</label>
-      <input id="mFalKey" type="password" placeholder="Enter to replace..." />
-    </div>
-    <div class="field">
-      <label>fal.ai Model</label>
-      <div style="display:flex; gap:6px; align-items:center;">
-        <select id="mFalModel" style="flex:1;">
-          ${falModelSelectHtml(config.fal_model)}
-        </select>
-        <button id="mFalModelRefresh" class="btn-ghost small" type="button">Refresh from fal.ai</button>
+    <div class="settings-section">
+      <div class="settings-section-title">Grok (xAI)</div>
+      <div class="field">
+        <label>API Key</label>
+        ${config.has_api_key ? `<div class="field-hint">Current: ${config.xai_api_key}</div>` : ""}
+        <input id="mKey" type="password" placeholder="Enter to replace..." />
       </div>
-      <input
-        id="mFalModelCustom"
-        type="text"
-        placeholder="e.g. fal-ai/your-model-id"
-        style="display:${isKnownFalModel(config.fal_model) ? "none" : "block"}; margin-top:6px;"
-        value="${isKnownFalModel(config.fal_model) ? "" : escapeHtml(config.fal_model || "")}"
-      />
-      <div id="mFalModelsStatus" class="status-line"></div>
+      <div class="field"><label>Default Model</label><input id="mModel" type="text" value="${config.default_model}" /></div>
+      <div class="field"><label>Default Max Dimension</label><input id="mMaxDim" type="number" value="${config.default_max_dim}" /></div>
+      <div class="settings-section-actions">
+        <button id="mCheck" class="btn-ghost small">Check Connection</button>
+        <div id="mConnStatus" class="status-line"></div>
+      </div>
     </div>
-    <div id="mFalConnStatus" class="status-line"></div>
+    <div class="settings-section">
+      <div class="settings-section-title">Default Engine &amp; ComfyUI</div>
+      <div class="field">
+        <label>Default Engine</label>
+        <select id="mEngine">
+          <option value="grok" ${config.default_engine === "grok" ? "selected" : ""}>Grok</option>
+          <option value="comfyui" ${config.default_engine === "comfyui" ? "selected" : ""}>ComfyUI (local)</option>
+          <option value="fal" ${config.default_engine === "fal" ? "selected" : ""}>fal.ai</option>
+        </select>
+      </div>
+      <div class="field"><label>ComfyUI URL</label><input id="mComfyUrl" type="text" value="${config.comfyui_url}" /></div>
+      <div class="field"><label>ComfyUI Workflow File</label><input id="mComfyWorkflow" type="text" value="${config.comfyui_workflow_path}" /></div>
+      <div class="settings-section-actions">
+        <button id="mCheckComfy" class="btn-ghost small">Check Connection</button>
+        <button id="mComfyFree" class="btn-ghost small" title="Unload models and clear ComfyUI's execution cache">Unload Models</button>
+      </div>
+      <div id="mComfyConnStatus" class="status-line"></div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">fal.ai</div>
+      <div class="field">
+        <label>API Key</label>
+        ${config.has_fal_api_key ? `<div class="field-hint">Current: ${config.fal_api_key}</div>` : ""}
+        <input id="mFalKey" type="password" placeholder="Enter to replace..." />
+      </div>
+      <div class="field">
+        <label>Model</label>
+        <div class="fal-model-row">
+          <select id="mFalModel">
+            ${falModelSelectHtml(config.fal_model)}
+          </select>
+          <button id="mFalModelRefresh" class="btn-ghost small" type="button">Refresh from fal.ai</button>
+        </div>
+        <input
+          id="mFalModelCustom"
+          type="text"
+          placeholder="e.g. fal-ai/your-model-id"
+          style="display:${isKnownFalModel(config.fal_model) ? "none" : "block"}; margin-top:6px;"
+          value="${isKnownFalModel(config.fal_model) ? "" : escapeHtml(config.fal_model || "")}"
+        />
+        <div id="mFalModelsStatus" class="status-line"></div>
+      </div>
+      <div class="settings-section-actions">
+        <button id="mCheckFal" class="btn-ghost small">Check Connection</button>
+        <div id="mFalConnStatus" class="status-line"></div>
+      </div>
+    </div>
     <div class="modal-actions">
-      <button id="mCheck" class="btn-ghost">Check Grok Connection</button>
-      <button id="mCheckComfy" class="btn-ghost">Check ComfyUI Connection</button>
-      <button id="mCheckFal" class="btn-ghost">Check fal.ai Connection</button>
       <button id="mCancel" class="btn-ghost">Close</button>
       <button id="mSave" class="btn-primary">Save</button>
     </div>
@@ -1891,6 +1907,11 @@ els.settingsBtn.addEventListener("click", async () => {
   modal.querySelector("#mCheckComfy").addEventListener("click", async () => {
     modal.querySelector("#mComfyConnStatus").textContent = "Checking...";
     const res = await api.checkComfyuiConnection();
+    modal.querySelector("#mComfyConnStatus").textContent = res.message;
+  });
+  modal.querySelector("#mComfyFree").addEventListener("click", async () => {
+    modal.querySelector("#mComfyConnStatus").textContent = "Unloading models and freeing cache...";
+    const res = await api.comfyuiFree();
     modal.querySelector("#mComfyConnStatus").textContent = res.message;
   });
   modal.querySelector("#mCheckFal").addEventListener("click", async () => {

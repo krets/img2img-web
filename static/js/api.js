@@ -121,6 +121,7 @@ export const api = {
   updateConfig: (body) => request("PUT", "/config", { json: body }),
   checkConnection: () => request("POST", "/config/check-connection"),
   checkComfyuiConnection: () => request("POST", "/config/check-comfyui-connection"),
+  comfyuiFree: () => request("POST", "/config/comfyui-free"),
   checkFalConnection: () => request("POST", "/config/check-fal-connection"),
   getFalModels: () => request("GET", "/config/fal-models"),
 };

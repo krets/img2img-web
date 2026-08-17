@@ -316,3 +316,25 @@ def check_connection(base_url):
     if response.status_code == 200:
         return True, "Connected."
     return False, f"Unexpected response: {response.status_code}"
+
+
+def free_memory(base_url):
+    """Hits ComfyUI's own /free endpoint to unload models and clear the node
+    execution cache -- the same thing its "Unload Models" / "Free model and
+    node cache" menu items do. Handy for self-managed ComfyUI instances
+    sharing a GPU with other work, where you don't want models sitting
+    resident in VRAM between generations.
+    """
+    if not base_url:
+        return False, "No ComfyUI URL configured."
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/free",
+            json={"unload_models": True, "free_memory": True},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        return False, f"Network error: {e}"
+    if response.status_code == 200:
+        return True, "Models unloaded and cache freed."
+    return False, f"Unexpected response: {response.status_code}"

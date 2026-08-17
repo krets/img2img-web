@@ -67,6 +67,13 @@ def check_comfyui_connection():
     return {"ok": ok, "message": message}
 
 
+@router.post("/comfyui-free")
+def comfyui_free():
+    config = cfg.load_config()
+    ok, message = comfyui_client.free_memory(config["comfyui_url"])
+    return {"ok": ok, "message": message}
+
+
 @router.post("/check-fal-connection")
 def check_fal_connection():
     ok, message = fal_client.check_connection(cfg.get_fal_api_key())

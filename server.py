@@ -82,4 +82,9 @@ if __name__ == "__main__":
         cfg.set_db_path(args.db)
     if os.getenv("OPEN_BROWSER") == "1":
         threading.Timer(1.0, lambda: _open_browser(args.port)).start()
-    uvicorn.run(app, host=HOST, port=args.port)
+    # Without a timeout, uvicorn's graceful shutdown waits indefinitely for
+    # existing connections to go idle -- a browser tab left open polling
+    # /api/queue every 1.2s (see pollQueue in app.js) keeps its connection
+    # perpetually "active", so Ctrl-C would hang at "Shutting down" forever
+    # instead of just force-closing it after a short grace period.
+    uvicorn.run(app, host=HOST, port=args.port, timeout_graceful_shutdown=3)

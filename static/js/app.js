@@ -378,6 +378,34 @@ async function loadImages() {
   renderImageList();
 }
 
+// Rating a result changes only that one result's evaluation. Refetching and
+// re-rendering the whole sidebar list for that (as loadImages() does) costs a
+// query with per-image correlated subqueries and a full DOM patch pass, so it
+// scales with total library size instead of with what actually changed. Most
+// ratings don't need any of that: the sort/filter order in the sidebar is
+// only affected when the *active* result of an image is re-rated under a
+// sort/filter that depends on evaluation. Everywhere else, patch the chit's
+// evaluation in local state and re-render the list from memory.
+function ratingAffectsSidebarOrder(img, resultId) {
+  if (!img || img.active_result_id !== resultId) return false;
+  if (state.sort === "evaluation") return true;
+  return ["YES", "NO", "MAYBE", "UNRATED"].includes(state.filter);
+}
+
+async function applyRatingToSidebar(imageId, resultId, value) {
+  const img = state.images.find((i) => i.id === imageId);
+  if (ratingAffectsSidebarOrder(img, resultId)) {
+    await loadImages();
+    return;
+  }
+  if (img) {
+    const entry = (img.result_evaluations || []).find((r) => r.id === resultId);
+    if (entry) entry.evaluation = value;
+    if (img.active_result_id === resultId) img.active_evaluation = value;
+    renderImageList();
+  }
+}
+
 async function loadReferenceImages() {
   if (!state.currentProjectId) return;
   state.referenceImages = await api.listReferenceImages(state.currentProjectId);
@@ -1065,7 +1093,7 @@ function renderResultGrid(results, activeId) {
       const resultId = btn.dataset.rate;
       const value = btn.dataset.value;
       await api.setEvaluation(resultId, value);
-      await loadImages();
+      await applyRatingToSidebar(targetImageId, resultId, value);
       if (state.currentImageId === targetImageId) {
         state.currentImage = await api.getImage(targetImageId);
         renderDetails();
@@ -1908,7 +1936,7 @@ async function setEvaluation(value) {
   const active = results.find((r) => r.is_active_result) || results[0];
   if (!active) return;
   await api.setEvaluation(active.id, value);
-  await loadImages();
+  await applyRatingToSidebar(targetImageId, active.id, value);
   if (state.currentImageId === targetImageId) {
     state.currentImage = await api.getImage(targetImageId);
     renderDetails();

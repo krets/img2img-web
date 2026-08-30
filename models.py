@@ -66,6 +66,11 @@ class GenerateRequestIn(BaseModel):
     engine: Optional[Literal["grok", "comfyui", "fal"]] = None
     model: Optional[str] = None
     aspect_ratio: Optional[str] = None
+    # Only used by engines that don't accept aspect_ratio natively (ComfyUI,
+    # fal.ai) -- see aspect_fit.py. Ignored for Grok, which reframes the
+    # output itself via the API's own aspect_ratio param.
+    aspect_mode: Optional[Literal["crop", "expand"]] = None
+    aspect_pin: Optional[Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"]] = None
     max_dim: Optional[int] = None
     # Ids into this project's reference-image library (see routers/references.py),
     # passed as extra reference inputs. Supported by all engines, though not

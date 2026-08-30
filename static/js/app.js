@@ -74,6 +74,10 @@ const els = {
   promptTextarea: document.getElementById("promptTextarea"),
   engineSelect: document.getElementById("engineSelect"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
+  aspectControlsRow: document.getElementById("aspectControlsRow"),
+  aspectPinGroup: document.getElementById("aspectPinGroup"),
+  aspectExpandCheckbox: document.getElementById("aspectExpandCheckbox"),
+  aspectExpandLabel: document.getElementById("aspectExpandLabel"),
   referenceImagesField: document.getElementById("referenceImagesField"),
   referenceImageList: document.getElementById("referenceImageList"),
   addReferenceImageBtn: document.getElementById("addReferenceImageBtn"),
@@ -1401,6 +1405,38 @@ updateReferenceImagesVisibility();
 renderReferenceImages();
 
 // ---------------------------------------------------------------------------
+// Aspect-ratio crop/expand controls -- only meaningful for engines that don't
+// accept an aspect_ratio request param natively (ComfyUI, fal.ai). Grok
+// reframes the output itself via the API's own param, so these stay hidden
+// for it. "Crop" (default) cuts into the image from the pinned spot; "Expand"
+// grows the canvas instead and fills the new space with a blurred copy of
+// the image, pinned the same way -- see aspect_fit.py for the actual math.
+// ---------------------------------------------------------------------------
+function updateAspectControlsVisibility() {
+  const hasAspect = !!els.aspectRatioSelect.value;
+  const engine = els.engineSelect.value;
+  els.aspectControlsRow.style.display = hasAspect && engine !== "grok" ? "flex" : "none";
+}
+
+function getAspectPin() {
+  const active = els.aspectPinGroup.querySelector(".aspect-pin-btn.active");
+  return active ? active.dataset.pin : "center";
+}
+
+els.aspectPinGroup.querySelectorAll(".aspect-pin-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    els.aspectPinGroup.querySelectorAll(".aspect-pin-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+  });
+});
+els.aspectExpandCheckbox.addEventListener("change", () => {
+  els.aspectExpandLabel.classList.toggle("active", els.aspectExpandCheckbox.checked);
+});
+els.aspectRatioSelect.addEventListener("change", updateAspectControlsVisibility);
+els.engineSelect.addEventListener("change", updateAspectControlsVisibility);
+updateAspectControlsVisibility();
+
+// ---------------------------------------------------------------------------
 // References sidebar tab -- this project's reference-image library: upload
 // (with a just-in-time crop step per file), recrop later from the untouched
 // original, rename via the crop title, and delete. Separate pool from the
@@ -1659,6 +1695,8 @@ async function enqueueGeneration(imageId) {
     adhoc_prompt_text: promptText,
     engine,
     aspect_ratio: aspectRatio,
+    aspect_mode: aspectRatio ? (els.aspectExpandCheckbox.checked ? "expand" : "crop") : null,
+    aspect_pin: aspectRatio ? getAspectPin() : null,
     reference_image_ids: state.referenceImageIds.length ? state.referenceImageIds : undefined,
   });
   mergeQueueJob(job);
@@ -2820,6 +2858,7 @@ function debounce(fn, ms) {
   const config = await api.getConfig();
   els.engineSelect.value = config.default_engine;
   updateReferenceImagesVisibility();
+  updateAspectControlsVisibility();
   pollQueue();
   setInterval(pollQueue, 1200);
 })();

@@ -3,6 +3,7 @@ import time
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+import aspect_fit
 import comfyui_client
 import config as cfg
 import db
@@ -171,18 +172,35 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
 def _run_generation(job_id, image, body, engine, config, source_path, reference_paths=None):
     model = None
     aspect_ratio = None
+    aspect_mode = None
     comfyui_processing_seconds = None
     max_dim = body.max_dim or config["default_max_dim"]
     start_time = time.time()
+    fitted_source_path = None
     try:
         jobs.update_job(job_id, status="running")
+
+        if engine in ("comfyui", "fal") and body.aspect_ratio:
+            # Neither engine accepts an aspect_ratio request param -- unlike
+            # Grok, they just return an image shaped like whatever they're
+            # given -- so fit the source to the target ratio locally first.
+            aspect_ratio = body.aspect_ratio
+            aspect_mode = body.aspect_mode or aspect_fit.DEFAULT_MODE
+            aspect_pin = body.aspect_pin or aspect_fit.DEFAULT_PIN
+            try:
+                fitted_source_path = aspect_fit.prepare_source_file(source_path, aspect_ratio, aspect_mode, aspect_pin)
+            except Exception as e:
+                raise RuntimeError(f"Failed to fit source image to aspect ratio: {e}") from e
+            effective_source_path = fitted_source_path or source_path
+        else:
+            effective_source_path = source_path
 
         if engine == "comfyui":
             try:
                 image_bytes, revised_prompt, comfyui_processing_seconds = comfyui_client.generate_image_edit(
                     base_url=config["comfyui_url"],
                     workflow_path=cfg.comfyui_workflow_path(config),
-                    source_path=source_path,
+                    source_path=effective_source_path,
                     prompt=body.adhoc_prompt_text,
                     job_id=job_id,
                     max_dim=max_dim,
@@ -197,7 +215,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
             try:
                 image_bytes, revised_prompt = fal_client.generate_image_edit(
                     api_key=cfg.get_fal_api_key(),
-                    source_path=source_path,
+                    source_path=effective_source_path,
                     prompt=body.adhoc_prompt_text,
                     model=model,
                     max_dim=max_dim,
@@ -229,6 +247,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
                 "engine": engine,
                 "model": model,
                 "aspect_ratio": aspect_ratio,
+                "aspect_mode": aspect_mode,
             },
         )
         result = db.create_result(
@@ -249,6 +268,9 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
         jobs.cancel_job(job_id)
     except Exception as e:
         jobs.finish_job(job_id, error=str(e))
+    finally:
+        if fitted_source_path is not None:
+            fitted_source_path.unlink(missing_ok=True)
 
 
 @router.get("/api/results/{result_id}/file")

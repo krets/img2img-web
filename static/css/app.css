@@ -496,6 +496,28 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .field-row select { flex: 1; }
 
 .reference-image-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.aspect-controls-row { align-items: center; }
+.aspect-pin-group { display: flex; gap: 4px; }
+.aspect-pin-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  background: #1d1f27; border: 1px solid #33353f; border-radius: 6px;
+  color: #8b8d98;
+}
+.aspect-pin-btn svg { width: 18px; height: 18px; }
+.aspect-pin-btn rect { fill: none; stroke: currentColor; stroke-width: 1.4; }
+.aspect-pin-btn circle { fill: currentColor; }
+.aspect-pin-btn:hover { border-color: #565a68; color: #e6e6eb; }
+.aspect-pin-btn.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
+.aspect-expand-toggle {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px; height: 28px; font-size: 12px; color: #8b8d98;
+  background: #1d1f27; border: 1px solid #33353f; border-radius: 6px; cursor: pointer; user-select: none;
+}
+.aspect-expand-toggle:hover { border-color: #565a68; color: #e6e6eb; }
+.aspect-expand-toggle.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
+.aspect-expand-toggle input { display: none; }
+.aspect-expand-toggle svg { stroke: currentColor; fill: none; stroke-width: 1.4; stroke-linecap: round; }
 .reference-image-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid #33353f; }
 .reference-image-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .reference-image-thumb-remove {

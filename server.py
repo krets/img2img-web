@@ -87,4 +87,7 @@ if __name__ == "__main__":
     # /api/queue every 1.2s (see pollQueue in app.js) keeps its connection
     # perpetually "active", so Ctrl-C would hang at "Shutting down" forever
     # instead of just force-closing it after a short grace period.
-    uvicorn.run(app, host=HOST, port=args.port, timeout_graceful_shutdown=3)
+    # use_colors=False: Windows PowerShell's console host doesn't reliably
+    # render uvicorn's ANSI color codes, showing literal escape-code garbage
+    # instead of colored log lines.
+    uvicorn.run(app, host=HOST, port=args.port, timeout_graceful_shutdown=3, use_colors=False)

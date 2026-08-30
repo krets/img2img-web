@@ -62,6 +62,14 @@ def _model_spec(model):
     return MODEL_SPECS.get(model, DEFAULT_MODEL_SPEC)
 
 
+def supports_multiple_images(model):
+    """True if this model's request shape takes an `image_urls` array (the
+    Kontext family only exposes a singular `image_url` field and can't take
+    extra reference images at all).
+    """
+    return _model_spec(model)["image_field"] == "image_urls"
+
+
 # fal.ai's model-search API buckets everything under a broad "image-to-image"
 # category -- upscalers, background removal, segmentation, inpainting/outpainting,
 # vectorizers, etc all land there alongside actual prompt-driven edit models.
@@ -131,12 +139,15 @@ def list_edit_models(api_key=None, max_pages=10):
     return results
 
 
-def generate_image_edit(api_key, source_path, prompt, model=None, max_dim=1024):
-    """Runs a single image-to-image edit against a source file on disk via fal.ai.
+def generate_image_edit(api_key, source_path, prompt, model=None, max_dim=1024, extra_source_paths=None):
+    """Runs an image-to-image edit against a source file on disk via fal.ai,
+    optionally with extra reference images (only supported by models whose
+    spec uses the `image_urls` array field -- see supports_multiple_images).
     Returns (image_bytes, revised_prompt) -- fal doesn't rewrite prompts the
     way the Grok API does, so revised_prompt is always None.
     """
     model = model or DEFAULT_MODEL
+    extra_source_paths = list(extra_source_paths or [])
     image_data_uri = load_and_preprocess_image(source_path, max_dim=max_dim)
 
     headers = {
@@ -145,9 +156,12 @@ def generate_image_edit(api_key, source_path, prompt, model=None, max_dim=1024):
     }
     spec = _model_spec(model)
     if spec["image_field"] == "image_url":
+        if extra_source_paths:
+            raise ValueError(f"Model '{model}' only accepts a single input image and can't take reference images.")
         image_field = {"image_url": image_data_uri}
     else:
-        image_field = {"image_urls": [image_data_uri]}
+        extra_data_uris = [load_and_preprocess_image(p, max_dim=max_dim) for p in extra_source_paths]
+        image_field = {"image_urls": [image_data_uri, *extra_data_uris]}
     payload = {"prompt": prompt, **image_field, **spec["safety_extra"]}
 
     try:

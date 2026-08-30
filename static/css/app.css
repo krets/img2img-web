@@ -7,7 +7,7 @@ html, body {
   font-family: 'Segoe UI', Inter, system-ui, sans-serif;
 }
 
-button, input, select, textarea {
+button, input, select, textarea, a.btn-ghost, a.btn-primary {
   font-family: inherit;
   color: inherit;
   background: #1d1f27;
@@ -15,8 +15,9 @@ button, input, select, textarea {
   border-radius: 6px;
   padding: 6px 10px;
 }
-button { cursor: pointer; }
-button:hover { border-color: #565a68; }
+button, a.btn-ghost, a.btn-primary { cursor: pointer; }
+button:hover, a.btn-ghost:hover, a.btn-primary:hover { border-color: #565a68; }
+a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-decoration: none; }
 
 #topbar {
   height: 52px;
@@ -50,6 +51,14 @@ button:hover { border-color: #565a68; }
 }
 .btn-danger:hover { background: #7f1d1d; color: white; }
 .btn-danger.small { padding: 2px 8px; font-size: 12px; }
+.btn-warn {
+  background: rgba(180,83,9,0.12);
+  border: 1px solid #b45309;
+  color: #fbbf24;
+  font-weight: 600;
+}
+.btn-warn:hover { background: #b45309; color: #1a1c23; border-color: #fbbf24; }
+.btn-warn.small { padding: 2px 8px; font-size: 12px; }
 
 #layout {
   position: relative;
@@ -190,20 +199,54 @@ button:hover { border-color: #565a68; }
 .image-item .meta .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chits-slot { display: contents; }
 .image-item-check { flex-shrink: 0; width: 16px; height: 16px; margin: 0; accent-color: #8B5CF6; }
-.image-item-ref-btn {
+.item-menu-btn {
   flex-shrink: 0; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
-  background: transparent; border: none; border-radius: 4px; color: #9ea2b0; cursor: pointer; font-size: 13px;
+  background: transparent; border: none; border-radius: 4px; color: #9ea2b0; cursor: pointer; font-size: 15px;
   padding: 0; opacity: 0; transition: opacity 0.15s;
 }
-.image-item:hover .image-item-ref-btn { opacity: 1; }
-.image-item-ref-btn:hover { background: rgba(139,92,246,0.25); color: #e6e6eb; }
+.image-item:hover .item-menu-btn { opacity: 1; }
+.item-menu-btn:hover, .item-menu-btn.menu-open { background: rgba(139,92,246,0.25); color: #e6e6eb; opacity: 1; }
+
+/* Popover opened by a .item-menu-btn / .tile-menu-btn -- rendered into
+   document.body (see openItemMenu() in app.js) so it escapes any scrolling
+   ancestor's overflow:hidden/auto clipping, and positioned via inline
+   left/top computed from the trigger button's own bounding rect. */
+.item-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 200px;
+  background: #1d1f27;
+  border: 1px solid #33353f;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.item-menu-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: #e6e6eb;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.item-menu-option:hover { background: rgba(139,92,246,0.2); }
+.item-menu-option.danger { color: #fca5a5; }
+.item-menu-option.danger:hover { background: #7f1d1d; color: white; }
 
 .reference-library-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px;
   flex: 1; min-height: 0; overflow-y: auto; align-content: start;
 }
 .reference-library-item { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; border: 1px solid #33353f; }
-.reference-library-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.reference-library-item img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .reference-library-item-name {
   position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 5px; font-size: 10px;
   background: rgba(0,0,0,0.6); color: #e6e6eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -454,7 +497,7 @@ button:hover { border-color: #565a68; }
 
 .reference-image-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .reference-image-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid #33353f; }
-.reference-image-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.reference-image-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .reference-image-thumb-remove {
   position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; line-height: 18px; text-align: center;
   background: rgba(20,20,24,0.85); color: #e6e6eb; border-radius: 50%; cursor: pointer; font-size: 12px;
@@ -466,6 +509,8 @@ button:hover { border-color: #565a68; }
 .picker-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .picker-item.selected { border-color: #8B5CF6; }
 .picker-item.disabled { opacity: 0.35; cursor: not-allowed; }
+.picker-item .reference-library-item-actions { opacity: 0; }
+.picker-item:hover .reference-library-item-actions { opacity: 1; }
 .status-line { font-size: 12px; color: #9ea2b0; margin: -6px 0 12px; min-height: 16px; display: flex; align-items: center; gap: 6px; }
 .spinner {
   width: 10px;
@@ -499,53 +544,7 @@ button:hover { border-color: #565a68; }
 .result-tile.active.MAYBE { border-color: #f59e0b; }
 .result-tile.active.NO { border-color: #ef4444; }
 .result-tile.active.UNRATED { border-color: #3b82f6; }
-.result-tile-delete {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(0,0,0,0.7);
-  color: #fff;
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.result-tile:hover .result-tile-delete { opacity: 1; }
-.result-tile-delete:hover { background: #7f1d1d; }
-
 .result-tile-copy {
-  position: absolute;
-  top: 4px;
-  left: 48px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(0,0,0,0.7);
-  color: #fff;
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-  padding: 0;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.result-tile:hover .result-tile-copy { opacity: 1; }
-.result-tile-copy:hover { background: rgba(139,92,246,0.85); }
-
-.result-tile-reference {
   position: absolute;
   top: 4px;
   left: 4px;
@@ -565,13 +564,16 @@ button:hover { border-color: #565a68; }
   opacity: 0;
   transition: opacity 0.15s;
 }
-.result-tile:hover .result-tile-reference { opacity: 1; }
-.result-tile-reference:hover { background: rgba(139,92,246,0.85); }
+.result-tile:hover .result-tile-copy { opacity: 1; }
+.result-tile-copy:hover { background: rgba(139,92,246,0.85); }
 
-.result-tile-promote {
+/* Kebab "more actions" trigger, overlaid on a tile's thumbnail (unlike
+   .item-menu-btn, which sits in a plain list row and so needs no backdrop
+   of its own to stay legible). */
+.tile-menu-btn {
   position: absolute;
   top: 4px;
-  left: 26px;
+  right: 4px;
   width: 20px;
   height: 20px;
   border-radius: 50%;
@@ -581,15 +583,15 @@ button:hover { border-color: #565a68; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1;
   padding: 0;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
 }
-.result-tile:hover .result-tile-promote { opacity: 1; }
-.result-tile-promote:hover { background: rgba(139,92,246,0.85); }
+.result-tile:hover .tile-menu-btn { opacity: 1; }
+.tile-menu-btn:hover, .tile-menu-btn.menu-open { background: rgba(139,92,246,0.85); }
 
 .result-tile-engine {
   position: absolute;
@@ -689,6 +691,42 @@ button:hover { border-color: #565a68; }
 .field-hint { font-size: 11px; color: #6b6f7d; word-break: break-all; }
 .fal-model-row { display: flex; gap: 6px; align-items: center; }
 .fal-model-row select { flex: 1; }
+
+.modal:has(.lightbox-img) { width: auto; max-width: 92vw; }
+.lightbox-stage { position: relative; display: flex; align-items: center; justify-content: center; }
+.lightbox-img { display: block; max-width: 88vw; max-height: 78vh; border-radius: 6px; }
+.lightbox-nav-btn {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 1;
+  width: 36px; height: 36px; border-radius: 50%; font-size: 20px; line-height: 1; padding: 0;
+  background: rgba(20,20,24,0.75); display: flex; align-items: center; justify-content: center;
+}
+.lightbox-nav-btn:hover { background: rgba(139,92,246,0.85); }
+.lightbox-nav-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+.lightbox-nav-prev { left: 8px; }
+.lightbox-nav-next { right: 8px; }
+.lightbox-position { font-size: 12px; color: #9ea2b0; margin-right: auto; }
+
+.modal:has(.report-grid) { width: 900px; max-width: 94vw; }
+.report-header { display: flex; justify-content: space-between; align-items: baseline; margin: -4px 0 10px; }
+.report-count { font-size: 12px; color: #9ea2b0; }
+.report-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px;
+  max-height: 58vh; overflow-y: auto; padding-right: 2px;
+}
+.report-item { position: relative; border-radius: 6px; overflow: hidden; border: 2px solid #33353f; cursor: zoom-in; background: #14141a; }
+.report-item.YES { border-color: #22c55e; }
+.report-item.MAYBE { border-color: #f59e0b; }
+.report-item.NO { border-color: #ef4444; }
+.report-item.UNRATED { border-color: #3b82f6; }
+.report-item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.report-item-name {
+  padding: 3px 5px; font-size: 10px; color: #e6e6eb; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; background: rgba(0,0,0,0.35);
+}
+/* Side-by-side composites are wide (source+result), so give them room
+   instead of the square crop used for plain result thumbnails. */
+.report-grid.sbs { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.report-grid.sbs .report-item img { aspect-ratio: auto; object-fit: contain; max-height: 160px; background: #0d0d10; }
 
 .modal:has(.crop-stage-wrap) { width: 600px; }
 .crop-stage-wrap { display: flex; justify-content: center; }

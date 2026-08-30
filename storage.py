@@ -4,6 +4,7 @@ import hashlib
 import io
 import re
 import shutil
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -224,9 +225,32 @@ def move_result_image(old_project_id, new_project_id, file_name):
         shutil.move(str(src), str(cfg.project_result_dir(new_project_id) / file_name))
 
 
+def copy_source_image(old_project_id, new_project_id, file_name):
+    """Duplicates a source image file into another project's folder under a
+    fresh unique name -- keeps the original untouched (unlike move_source_image)
+    and avoids any name collision with the original or with itself if copied
+    into the same project. Returns the new file name.
+    """
+    src = source_image_path(old_project_id, file_name)
+    slug_part = file_name.split("_", 1)[1] if "_" in file_name else file_name
+    new_file_name = f"{uuid.uuid4().hex}_{slug_part}"
+    shutil.copy2(str(src), str(source_image_path(new_project_id, new_file_name)))
+    return new_file_name
+
+
+def copy_result_image(old_project_id, new_project_id, file_name):
+    src = result_image_path(old_project_id, file_name)
+    slug_part = file_name.split("_", 1)[1] if "_" in file_name else file_name
+    new_file_name = f"{uuid.uuid4().hex}_{slug_part}"
+    shutil.copy2(str(src), str(result_image_path(new_project_id, new_file_name)))
+    return new_file_name
+
+
 def clear_thumbnail(kind, project_id, item_id):
     (_thumbnail_dir(kind, project_id) / f"{item_id}.jpg").unlink(missing_ok=True)
     (_thumbnail_dir(kind, project_id) / f"{item_id}_preview.jpg").unlink(missing_ok=True)
+    if kind == "results":
+        (_thumbnail_dir("results_sbs", project_id) / f"{item_id}.jpg").unlink(missing_ok=True)
 
 
 def delete_project_dirs(project_id):
@@ -270,6 +294,21 @@ def build_export_zip(project_slug, status_filter, mode, results, source_paths):
                 zf.writestr(arcname, buf.getvalue())
 
     return zip_path
+
+
+def get_or_create_side_by_side(project_id, result_id, source_path, result_path):
+    """Returns a cached preview of the source+result composite that export's
+    side_by_side mode would produce for this result, generating it on first
+    request. Lets the export report show exactly what that mode will export
+    without re-compositing on every grid render.
+    """
+    combo_path = _thumbnail_dir("results_sbs", project_id) / f"{result_id}.jpg"
+    if not combo_path.exists():
+        composite = _make_side_by_side(source_path, result_path)
+        if composite is None:
+            return None
+        composite.save(combo_path, format="JPEG", quality=88)
+    return combo_path
 
 
 def _make_side_by_side(source_path, result_path):

@@ -40,6 +40,11 @@ class MoveImagesIn(BaseModel):
     target_project_id: str
 
 
+class CopyImagesIn(BaseModel):
+    image_ids: list[str]
+    target_project_id: str
+
+
 class MergeImagesIn(BaseModel):
     keep_id: str
     remove_ids: list[str]
@@ -62,8 +67,9 @@ class GenerateRequestIn(BaseModel):
     model: Optional[str] = None
     aspect_ratio: Optional[str] = None
     max_dim: Optional[int] = None
-    # ComfyUI only -- ids into this project's reference-image library (see
-    # routers/references.py), passed as extra reference inputs.
+    # Ids into this project's reference-image library (see routers/references.py),
+    # passed as extra reference inputs. Supported by all engines, though not
+    # every fal.ai model accepts more than one input image.
     reference_image_ids: Optional[list[str]] = None
 
 

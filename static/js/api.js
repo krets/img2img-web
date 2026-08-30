@@ -68,6 +68,8 @@ export const api = {
   getDuplicates: (projectId) => request("GET", `/projects/${projectId}/duplicates`),
   moveImages: (imageIds, targetProjectId) =>
     request("POST", "/images/move", { json: { image_ids: imageIds, target_project_id: targetProjectId } }),
+  copyImages: (imageIds, targetProjectId) =>
+    request("POST", "/images/copy", { json: { image_ids: imageIds, target_project_id: targetProjectId } }),
   mergeImages: (keepId, removeIds) =>
     request("POST", "/images/merge", { json: { keep_id: keepId, remove_ids: removeIds } }),
 
@@ -124,4 +126,8 @@ export const api = {
   comfyuiFree: () => request("POST", "/config/comfyui-free"),
   checkFalConnection: () => request("POST", "/config/check-fal-connection"),
   getFalModels: () => request("GET", "/config/fal-models"),
+
+  // Export
+  previewExport: (projectId, statusFilter) =>
+    request("GET", `/projects/${projectId}/export/preview?status_filter=${statusFilter}`),
 };

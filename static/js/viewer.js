@@ -105,15 +105,37 @@ export function initABViewer(container) {
   // for this element; the upgrade only applies if it's still current, so a
   // slow load for an image the user has since navigated away from can't
   // clobber whatever loaded after it.
-  function loadProgressive(imgEl, fullUrl) {
+  //
+  // onGiveUp fires if the full-res load keeps failing after retries (e.g. a
+  // transient network hiccup, or the browser's per-host connection limit
+  // starving it behind other in-flight thumbnail/preview requests). Without
+  // it, setImages()'s loadedSourceUrl/loadedResultUrl tracking -- set
+  // optimistically before the load actually succeeds -- would mark this url
+  // as "loaded" even though the <img> never got a real image, leaving it
+  // stuck showing nothing (the panel's dark background, i.e. "black") until
+  // the user happened to navigate to a different image and back.
+  function loadProgressive(imgEl, fullUrl, onGiveUp) {
     imgEl.dataset.pendingFull = fullUrl;
     const previewUrl = previewUrlFor(fullUrl);
     if (previewUrl) imgEl.src = previewUrl;
-    const upgrade = new Image();
-    upgrade.onload = () => {
-      if (imgEl.dataset.pendingFull === fullUrl) imgEl.src = fullUrl;
+    let attempt = 0;
+    const tryLoad = () => {
+      const upgrade = new Image();
+      upgrade.onload = () => {
+        if (imgEl.dataset.pendingFull === fullUrl) imgEl.src = fullUrl;
+      };
+      upgrade.onerror = () => {
+        if (imgEl.dataset.pendingFull !== fullUrl) return; // superseded; drop it
+        attempt += 1;
+        if (attempt <= 2) {
+          setTimeout(tryLoad, 500 * attempt);
+        } else {
+          onGiveUp?.();
+        }
+      };
+      upgrade.src = fullUrl;
     };
-    upgrade.src = fullUrl;
+    tryLoad();
   }
 
   function updateStageDisplay() {
@@ -271,14 +293,18 @@ export function initABViewer(container) {
       empty.style.display = "none";
       if (sourceUrl !== loadedSourceUrl) {
         loadedSourceUrl = sourceUrl;
-        loadProgressive(base, sourceUrl);
+        loadProgressive(base, sourceUrl, () => {
+          if (loadedSourceUrl === sourceUrl) loadedSourceUrl = null;
+        });
       }
       currentResultUrl = resultUrl || null;
       hasResult = !!resultUrl;
       if (resultUrl) {
         if (resultUrl !== loadedResultUrl) {
           loadedResultUrl = resultUrl;
-          loadProgressive(resultImg, resultUrl);
+          loadProgressive(resultImg, resultUrl, () => {
+            if (loadedResultUrl === resultUrl) loadedResultUrl = null;
+          });
         }
         overlay.style.visibility = "visible";
         handle.style.display = DRAG_MODES.has(mode) ? "block" : "none";

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 import db
 import storage
-from models import ImageFromUrlIn, ImageUpdateIn, MergeImagesIn, MoveImagesIn
+from models import CopyImagesIn, ImageFromUrlIn, ImageUpdateIn, MergeImagesIn, MoveImagesIn
 
 router = APIRouter(tags=["images"])
 
@@ -147,6 +147,61 @@ def move_images(body: MoveImagesIn):
         moved.append(image_id)
 
     return {"moved": moved, "target_project_id": body.target_project_id}
+
+
+@router.post("/api/images/copy")
+def copy_images(body: CopyImagesIn):
+    if not db.get_project(body.target_project_id):
+        raise HTTPException(404, "Target project not found")
+
+    copied = []
+    for image_id in body.image_ids:
+        image = db.get_image(image_id)
+        if not image:
+            continue
+
+        new_file_name = storage.copy_source_image(image["project_id"], body.target_project_id, image["file_name"])
+        new_image = db.create_image(
+            project_id=body.target_project_id,
+            file_name=new_file_name,
+            display_name=image["display_name"],
+            width=image["width"],
+            height=image["height"],
+            comment=image["comment"],
+        )
+
+        active_result_id = None
+        # oldest first, so create_result's "clear other actives on this image_id"
+        # side effect leaves the newest (last one inserted) active, matching
+        # the eventual explicit set_active_result() call below for correctness
+        # regardless of insert order.
+        for result in reversed(db.list_results_for_image(image_id)):
+            new_result_file_name = storage.copy_result_image(
+                image["project_id"], body.target_project_id, result["file_path"]
+            )
+            new_result = db.create_result(
+                image_id=new_image["id"],
+                file_path=new_result_file_name,
+                prompt_id=result["prompt_id"],
+                adhoc_prompt_text=result["adhoc_prompt_text"],
+                engine=result["engine"],
+                model=result["model"],
+                aspect_ratio=result["aspect_ratio"],
+                max_dim=result["max_dim"],
+                revised_prompt=result["revised_prompt"],
+                media_type=result["media_type"],
+                duration_seconds=result["duration_seconds"],
+            )
+            db.update_evaluation(new_result["id"], result["evaluation"])
+            if result["is_active_result"]:
+                active_result_id = new_result["id"]
+
+        if active_result_id:
+            db.set_active_result(active_result_id)
+
+        copied.append(new_image["id"])
+
+    return {"copied": copied, "target_project_id": body.target_project_id}
 
 
 @router.post("/api/images/merge")

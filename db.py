@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 
@@ -105,25 +106,33 @@ CREATE INDEX IF NOT EXISTS idx_reference_images_project ON reference_images(proj
 CREATE INDEX IF NOT EXISTS idx_reference_images_deleted_at ON reference_images(is_deleted, deleted_at);
 """
 
-_connection = None
+_db_path = None
+_local = threading.local()
 
 
 def new_id():
     return uuid.uuid4().hex
 
 
-def init_db(db_path: Path):
-    """Opens (creating if needed) the SQLite DB at db_path and applies the schema."""
-    global _connection
-    conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30)
+def _connect(db_path):
+    conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_db(db_path: Path):
+    """Opens (creating if needed) the SQLite DB at db_path and applies the schema."""
+    global _db_path
+    _db_path = db_path
+    conn = _connect(db_path)
     conn.executescript(TABLES_SCHEMA)
     _migrate(conn)
     conn.executescript(INDEXES_SCHEMA)
     conn.commit()
-    _connection = conn
+    _local.connection = conn
     return conn
 
 
@@ -221,9 +230,27 @@ def _migrate_unrated_evaluation(conn):
 
 
 def get_connection():
-    if _connection is None:
+    """Returns a connection private to the calling thread.
+
+    FastAPI runs sync route handlers (all the `def get_x` endpoints in
+    routers/*.py) in a threadpool, and the app previously shared one
+    sqlite3.Connection across all of them via check_same_thread=False.
+    sqlite3 connections aren't safe for concurrent statement execution from
+    multiple threads, and under bursts of parallel requests (e.g. the AB
+    viewer firing near-simultaneous preview + full-res image fetches) that
+    produced intermittent, unexplained 404s -- get_image()/get_result()
+    would spuriously return no row for an id that plainly existed a moment
+    later. WAL mode (set below) already lets separate connections to the
+    same file read concurrently without contention, so each thread just
+    gets its own lazily-created connection instead of sharing one.
+    """
+    if _db_path is None:
         raise RuntimeError("Database not initialized. Call init_db() first.")
-    return _connection
+    conn = getattr(_local, "connection", None)
+    if conn is None:
+        conn = _connect(_db_path)
+        _local.connection = conn
+    return conn
 
 
 # ---------------------------------------------------------------------------

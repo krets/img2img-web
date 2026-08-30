@@ -112,6 +112,22 @@ const clipboardAvailable = !!(navigator.clipboard && window.isSecureContext);
 // notified so it doesn't hang waiting for a save that will never come.
 let modalOnClose = null;
 
+// Stack of "redraw the previous step" callbacks for multi-step modal flows
+// (e.g. export filters -> report -> per-result lightbox). A step pushes a
+// closure that redraws itself onto this stack right before navigating to the
+// next step; modalBack() pops and calls it. Escape and backdrop-click both go
+// through modalBack() rather than closeModal() directly, so backing out of a
+// nested step (like a zoomed-in preview) returns to the step underneath
+// instead of discarding the whole flow -- only backing out of the outermost
+// step (empty stack) actually closes the modal.
+let modalBackStack = [];
+
+// { prev, next } functions set by openImageLightbox when it's given
+// navigation callbacks (currently just the export report's item-by-item
+// preview) -- lets the global keydown handler below move to the
+// previous/next item on ArrowLeft/ArrowRight while a lightbox is open.
+let lightboxNav = null;
+
 function openModal(html) {
   els.modalContent.innerHTML = html;
   els.modalOverlay.style.display = "flex";
@@ -120,15 +136,32 @@ function openModal(html) {
 function closeModal() {
   els.modalOverlay.style.display = "none";
   els.modalContent.innerHTML = "";
+  modalBackStack = [];
+  lightboxNav = null;
   const onClose = modalOnClose;
   modalOnClose = null;
   if (onClose) onClose();
 }
+function modalBack() {
+  lightboxNav = null;
+  const step = modalBackStack.pop();
+  if (step) step();
+  else closeModal();
+}
 els.modalOverlay.addEventListener("click", (e) => {
-  if (e.target === els.modalOverlay) closeModal();
+  if (e.target === els.modalOverlay) modalBack();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && els.modalOverlay.style.display !== "none") closeModal();
+  if (els.modalOverlay.style.display === "none") return;
+  if (e.key === "Escape") {
+    modalBack();
+  } else if (lightboxNav && e.key === "ArrowLeft" && lightboxNav.prev) {
+    e.preventDefault();
+    lightboxNav.prev();
+  } else if (lightboxNav && e.key === "ArrowRight" && lightboxNav.next) {
+    e.preventDefault();
+    lightboxNav.next();
+  }
 });
 
 // Styled stand-in for window.confirm(), matching the app's own modal chrome
@@ -157,6 +190,76 @@ function openConfirmModal({ title, message, confirmLabel = "Confirm", cancelLabe
       resolve(true);
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Item menu -- a small "more actions" popover for image-list rows and result
+// tiles, triggered by a kebab (⋮) button. Rendered into document.body (not
+// the row/tile itself) so it isn't clipped by the scrolling list/grid it's
+// anchored to, and positioned from the trigger's own bounding rect.
+// ---------------------------------------------------------------------------
+let openItemMenuEl = null;
+let openItemMenuCleanup = null;
+
+function closeItemMenu() {
+  if (openItemMenuEl) {
+    openItemMenuEl.remove();
+    openItemMenuEl = null;
+  }
+  if (openItemMenuCleanup) {
+    openItemMenuCleanup();
+    openItemMenuCleanup = null;
+  }
+}
+
+// items: [{ label, danger, onClick }]. onClose (optional) fires however the
+// menu closes (item picked, outside click, Escape, scroll).
+function openItemMenu(anchorEl, items, { onClose } = {}) {
+  closeItemMenu();
+  anchorEl.classList.add("menu-open");
+
+  const menu = document.createElement("div");
+  menu.className = "item-menu";
+  menu.innerHTML = items
+    .map((it, i) => `<button type="button" class="item-menu-option ${it.danger ? "danger" : ""}" data-idx="${i}">${it.label}</button>`)
+    .join("");
+  document.body.appendChild(menu);
+  openItemMenuEl = menu;
+
+  const rect = anchorEl.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  let left = rect.right - menuRect.width;
+  left = Math.max(4, Math.min(left, window.innerWidth - menuRect.width - 4));
+  let top = rect.bottom + 4;
+  if (top + menuRect.height > window.innerHeight - 4) top = rect.top - menuRect.height - 4;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  menu.querySelectorAll(".item-menu-option").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeItemMenu();
+      items[Number(btn.dataset.idx)].onClick();
+    });
+  });
+
+  const onDocClick = (e) => {
+    if (!menu.contains(e.target)) closeItemMenu();
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") closeItemMenu();
+  };
+  const onScroll = () => closeItemMenu();
+  document.addEventListener("click", onDocClick, true);
+  document.addEventListener("keydown", onKey);
+  window.addEventListener("scroll", onScroll, true);
+  openItemMenuCleanup = () => {
+    anchorEl.classList.remove("menu-open");
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKey);
+    window.removeEventListener("scroll", onScroll, true);
+    if (onClose) onClose();
+  };
 }
 
 // Fallback for prompt-copy when navigator.clipboard is unavailable (insecure
@@ -217,10 +320,11 @@ els.newProjectBtn.addEventListener("click", () => {
       <button id="mCreate" class="btn-primary">Create</button>
     </div>
   `);
-  modal.querySelector("#mName").focus();
+  const nameInput = modal.querySelector("#mName");
+  nameInput.focus();
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
-  modal.querySelector("#mCreate").addEventListener("click", async () => {
-    const name = modal.querySelector("#mName").value.trim();
+  const createProject = async () => {
+    const name = nameInput.value.trim();
     if (!name) return;
     const description = modal.querySelector("#mDesc").value.trim();
     const project = await api.createProject(name, description);
@@ -230,6 +334,10 @@ els.newProjectBtn.addEventListener("click", () => {
     localStorage.setItem("lastProjectId", project.id);
     els.projectSwitcher.value = project.id;
     await Promise.all([loadImages(), loadReferenceImages()]);
+  };
+  modal.querySelector("#mCreate").addEventListener("click", createProject);
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") createProject();
   });
 });
 
@@ -313,10 +421,21 @@ function renderImageItemHtml(img) {
         <div class="name">${escapeHtml(img.display_name)}</div>
       </div>
       <span class="chits-slot">${renderChits(img)}</span>
-      <button class="image-item-ref-btn" data-use-ref-image="${img.id}" title="Copy as reference image">📎</button>
-      <button class="image-item-ref-btn" data-move-ref-image="${img.id}" title="Move to reference library">✂</button>
+      <button class="item-menu-btn" data-menu-image="${img.id}" title="More actions">⋮</button>
     </div>
   `;
+}
+
+function openImageItemMenu(anchorBtn, imageId) {
+  const img = state.images.find((i) => i.id === imageId);
+  if (!img) return;
+  openItemMenu(anchorBtn, [
+    { label: "📎 Copy as reference image", onClick: () => useAsReferenceFromUrl(`/api/images/${imageId}/file`, img.display_name) },
+    { label: "✂ Move to reference library", onClick: () => moveImageToReference(imageId) },
+    { label: "➜ Move to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "move") },
+    { label: "⧉ Copy to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "copy") },
+    { label: "🗑 Delete (and its results)", danger: true, onClick: () => deleteImageWithConfirm(imageId, img.display_name) },
+  ]);
 }
 
 // Single delegated listener, bound once -- lets renderImageList() patch
@@ -327,17 +446,10 @@ function bindImageListDelegation() {
   if (imageListHandlersBound) return;
   imageListHandlersBound = true;
   els.imageList.addEventListener("click", (e) => {
-    const useRefBtn = e.target.closest("[data-use-ref-image]");
-    if (useRefBtn) {
+    const menuBtn = e.target.closest("[data-menu-image]");
+    if (menuBtn) {
       e.stopPropagation();
-      const img = state.images.find((i) => i.id === useRefBtn.dataset.useRefImage);
-      if (img) useAsReferenceFromUrl(`/api/images/${img.id}/file`, img.display_name);
-      return;
-    }
-    const moveRefBtn = e.target.closest("[data-move-ref-image]");
-    if (moveRefBtn) {
-      e.stopPropagation();
-      moveImageToReference(moveRefBtn.dataset.moveRefImage);
+      openImageItemMenu(menuBtn, menuBtn.dataset.menuImage);
       return;
     }
     const itemEl = e.target.closest(".image-item");
@@ -432,10 +544,16 @@ els.multiSelectToggleBtn.addEventListener("click", () => {
   renderImageList();
 });
 
-els.multiSelectMoveBtn.addEventListener("click", () => {
+// Shared by the multi-select "Move" bar button and each image row's menu
+// ("Move to other library" / "Copy to other library") -- lets the user send
+// one or more images to an existing project or a fresh one. mode is "move"
+// (relocates, including all of the image's results) or "copy" (duplicates
+// into the target project, leaving the originals untouched).
+function openMoveOrCopyImagesModal(imageIds, mode) {
+  const verb = mode === "move" ? "Move" : "Copy";
   const otherProjects = state.projects.filter((p) => p.id !== state.currentProjectId);
   const modal = openModal(`
-    <h3>Move ${state.selectedImageIds.size} image(s)</h3>
+    <h3>${verb} ${imageIds.length} image(s)</h3>
     <div class="field">
       <label>Destination</label>
       <select id="mDestMode">
@@ -456,7 +574,7 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
     <div id="mMoveStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="mCancel" class="btn-ghost">Cancel</button>
-      <button id="mGo" class="btn-primary">Move</button>
+      <button id="mGo" class="btn-primary">${verb}</button>
     </div>
   `);
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
@@ -478,24 +596,34 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
       targetProjectId = modal.querySelector("#mDestProject").value;
       if (!targetProjectId) return;
     }
-    statusEl.textContent = "Moving...";
+    statusEl.textContent = mode === "move" ? "Moving..." : "Copying...";
     try {
-      await api.moveImages(Array.from(state.selectedImageIds), targetProjectId);
+      if (mode === "move") {
+        await api.moveImages(imageIds, targetProjectId);
+      } else {
+        await api.copyImages(imageIds, targetProjectId);
+      }
       closeModal();
-      if (state.currentImage && state.selectedImageIds.has(state.currentImageId)) {
+      if (mode === "move" && state.currentImage && imageIds.includes(state.currentImageId)) {
         state.currentImageId = null;
         state.currentImage = null;
         renderDetails();
       }
-      state.selectedImageIds.clear();
-      state.multiSelectMode = false;
-      els.multiSelectToggleBtn.classList.remove("active");
-      updateMultiSelectBar();
+      if (state.multiSelectMode) {
+        state.selectedImageIds.clear();
+        state.multiSelectMode = false;
+        els.multiSelectToggleBtn.classList.remove("active");
+        updateMultiSelectBar();
+      }
       await loadProjects();
     } catch (e) {
       statusEl.textContent = `Error: ${e.message}`;
     }
   });
+}
+
+els.multiSelectMoveBtn.addEventListener("click", () => {
+  openMoveOrCopyImagesModal(Array.from(state.selectedImageIds), "move");
 });
 
 // Chit grid: one chit per completed result (colored by evaluation), plus a
@@ -699,10 +827,10 @@ function stepImage(direction) {
   selectImage(ids[nextIdx]);
 }
 
-els.deleteImageBtn.addEventListener("click", async () => {
-  const targetImageId = state.currentImageId;
-  if (!targetImageId) return;
-  const name = state.currentImage?.display_name || "this image";
+// Shared by the details panel's "Delete Image" button and each image row's
+// menu -- moves an image (and all its results) to Trash, restorable for 2 days.
+async function deleteImageWithConfirm(imageId, displayName) {
+  const name = displayName || "this image";
   const ok = await openConfirmModal({
     title: "Move to Trash",
     message: `Move "${name}" and all of its results to Trash? You can restore it within 2 days.`,
@@ -710,13 +838,19 @@ els.deleteImageBtn.addEventListener("click", async () => {
     danger: true,
   });
   if (!ok) return;
-  await api.deleteImage(targetImageId);
-  if (state.currentImageId === targetImageId) {
+  await api.deleteImage(imageId);
+  if (state.currentImageId === imageId) {
     state.currentImageId = null;
     state.currentImage = null;
     renderDetails();
   }
   await loadImages();
+}
+
+els.deleteImageBtn.addEventListener("click", async () => {
+  const targetImageId = state.currentImageId;
+  if (!targetImageId) return;
+  await deleteImageWithConfirm(targetImageId, state.currentImage?.display_name);
 });
 
 // ---------------------------------------------------------------------------
@@ -780,11 +914,11 @@ function renderProvenanceLine(derivedFrom) {
 
 // Renders the results grid, followed by a dashed upload-dropzone card pinned
 // as the last item (secondary to the actual results, which stay newest-first).
-// Each result tile carries three hover-revealed corners: a copy-prompt icon
-// (top-left), delete (top-right), and thumbs-down/neutral/thumbs-up rating
+// Each result tile carries a copy-prompt icon (top-left, when there's a
+// prompt to copy), a "more actions" kebab (top-right, for use-as-reference/
+// use-as-new-source/delete), and thumbs-down/neutral/thumbs-up rating
 // controls (bottom-right; the tile's border color already shows the current
-// rating) -- so rating and pruning results no longer needs the old dedicated
-// sidebar buttons.
+// rating) -- so rating results no longer needs the old dedicated sidebar buttons.
 function renderResultGrid(results, activeId) {
   const uploadCardHtml = `
     <div class="result-upload-card" id="resultUploadCard" title="Upload a result image">
@@ -809,10 +943,8 @@ function renderResultGrid(results, activeId) {
         <div class="result-tile ${r.evaluation} ${activeClass}" data-id="${r.id}" title="${escapeHtml(label)}">
           <img src="/api/results/${r.id}/thumbnail" loading="lazy" />
           ${engineBadge}
-          <button class="result-tile-reference" data-use-ref-result="${r.id}" title="Use as reference image">📎</button>
-          <button class="result-tile-promote" data-promote-result="${r.id}" title="Use as new source image (keeps a link back to this result)">🔗</button>
           ${copyBtn}
-          <button class="result-tile-delete" data-delete-result="${r.id}" title="Delete result">✕</button>
+          <button class="tile-menu-btn" data-menu-result="${r.id}" title="More actions">⋮</button>
           <div class="result-tile-rating">
             <div class="rating-controls">
               <button class="rating-btn no ${r.evaluation === "NO" ? "active" : ""}" data-rate="${r.id}" data-value="NO" title="No">👎</button>
@@ -852,38 +984,53 @@ function renderResultGrid(results, activeId) {
       }
     });
   });
-  els.resultGrid.querySelectorAll("[data-delete-result]").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const targetImageId = state.currentImageId;
-      const resultId = btn.dataset.deleteResult;
-      const ok = await openConfirmModal({
-        title: "Move to Trash",
-        message: "Move this result to Trash? You can restore it within 2 days.",
-        confirmLabel: "Move to Trash",
-        danger: true,
-      });
-      if (!ok) return;
-      await api.deleteResult(resultId);
-      if (state.currentImageId === targetImageId) {
-        state.currentImage = await api.getImage(targetImageId);
-        renderDetails();
-      }
-      await loadImages();
-    });
-  });
-  els.resultGrid.querySelectorAll("[data-use-ref-result]").forEach((btn) => {
+  els.resultGrid.querySelectorAll("[data-menu-result]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const resultId = btn.dataset.useRefResult;
-      const name = state.currentImage ? `${state.currentImage.display_name} result` : "result";
-      useAsReferenceFromUrl(`/api/results/${resultId}/file`, name);
-    });
-  });
-  els.resultGrid.querySelectorAll("[data-promote-result]").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await promoteResultToSource(btn.dataset.promoteResult);
+      const resultId = btn.dataset.menuResult;
+      const result = (state.currentImage?.results || []).find((r) => r.id === resultId);
+      const promptText = result?.adhoc_prompt_text || "";
+      openItemMenu(btn, [
+        {
+          label: "📎 Use as reference image",
+          onClick: () => {
+            const name = state.currentImage ? `${state.currentImage.display_name} result` : "result";
+            useAsReferenceFromUrl(`/api/results/${resultId}/file`, name);
+          },
+        },
+        {
+          label: "🔗 Use as new source image",
+          onClick: () => promoteResultToSource(resultId),
+        },
+        ...(promptText
+          ? [
+              {
+                label: "📝 Use as current prompt",
+                onClick: () => useResultPromptAsCurrent(promptText),
+              },
+            ]
+          : []),
+        {
+          label: "🗑 Delete result",
+          danger: true,
+          onClick: async () => {
+            const targetImageId = state.currentImageId;
+            const ok = await openConfirmModal({
+              title: "Move to Trash",
+              message: "Move this result to Trash? You can restore it within 2 days.",
+              confirmLabel: "Move to Trash",
+              danger: true,
+            });
+            if (!ok) return;
+            await api.deleteResult(resultId);
+            if (state.currentImageId === targetImageId) {
+              state.currentImage = await api.getImage(targetImageId);
+              renderDetails();
+            }
+            await loadImages();
+          },
+        },
+      ]);
     });
   });
   els.resultGrid.querySelectorAll("[data-copy-prompt]").forEach((btn) => {
@@ -948,22 +1095,64 @@ function scheduleSave() {
 els.displayNameInput.addEventListener("input", scheduleSave);
 els.commentInput.addEventListener("input", scheduleSave);
 
-els.promptSelect.addEventListener("change", () => {
-  const prompt = state.prompts.find((p) => p.id === els.promptSelect.value);
-  if (prompt) els.promptTextarea.value = prompt.prompt_text;
+// The "current prompt" textarea isn't tied to any one image or project --
+// it deliberately survives switching between them (see the top-level Prompt
+// field) -- so it's persisted globally in localStorage too, restored on
+// load, and kept in sync on every edit, whether typed or set programmatically
+// (selecting a saved prompt, picking one from the palette, or pulling a past
+// result's prompt back in below) so a page refresh never silently loses
+// whatever was being drafted.
+const PROMPT_TEXT_STORAGE_KEY = "grok_img2img.currentPromptText";
+
+function setPromptText(text) {
+  els.promptTextarea.value = text;
+  localStorage.setItem(PROMPT_TEXT_STORAGE_KEY, text);
+}
+
+els.promptTextarea.addEventListener("input", () => {
+  localStorage.setItem(PROMPT_TEXT_STORAGE_KEY, els.promptTextarea.value);
 });
 
+const savedPromptText = localStorage.getItem(PROMPT_TEXT_STORAGE_KEY);
+if (savedPromptText) els.promptTextarea.value = savedPromptText;
+
+els.promptSelect.addEventListener("change", () => {
+  const prompt = state.prompts.find((p) => p.id === els.promptSelect.value);
+  if (prompt) setPromptText(prompt.prompt_text);
+});
+
+// "Use as current prompt" (result tile menu): pulls a past result's actual
+// prompt back into the draft textarea for re-running/tweaking. Resets the
+// saved-prompt dropdown to ad-hoc, since the result's prompt text may not
+// match that prompt's current saved text (or may not have come from a saved
+// prompt at all).
+function useResultPromptAsCurrent(promptText) {
+  els.promptSelect.value = "";
+  setPromptText(promptText);
+}
+
 // ---------------------------------------------------------------------------
-// Reference images (ComfyUI only) -- up to MAX_REFERENCE_IMAGES images picked
-// from this project's reference-image library (the References sidebar tab,
-// a separate pool from source images) and sent alongside the source image on
-// generate. Selection persists across image switches, same as the
-// engine/aspect-ratio selects.
+// Reference images -- up to MAX_REFERENCE_IMAGES images picked from this
+// project's reference-image library (the References sidebar tab, a separate
+// pool from source images) and sent alongside the source image on generate.
+// Supported by all engines (ComfyUI, Grok, and fal.ai models whose request
+// shape takes an image array -- an unsupported fal model errors out at
+// generate time with a message naming the model). Selection persists across
+// image switches, same as the engine/aspect-ratio selects.
 // ---------------------------------------------------------------------------
 const MAX_REFERENCE_IMAGES = 2;
 
+// Cache-busts the thumbnail URL whenever the crop box changes, so a recrop
+// is reflected immediately instead of the browser reusing whatever it last
+// fetched for that same URL -- this also doubles as a visual confirmation
+// that a crop was actually saved (the thumbnail visibly updates).
+function refThumbUrl(ref) {
+  const crop = ref.crop_x != null ? `${ref.crop_x}-${ref.crop_y}-${ref.crop_w}-${ref.crop_h}` : "full";
+  return `/api/reference-images/${ref.id}/thumbnail?v=${crop}`;
+}
+
 function updateReferenceImagesVisibility() {
-  els.referenceImagesField.style.display = els.engineSelect.value === "comfyui" ? "flex" : "none";
+  els.referenceImagesField.style.display = "flex";
 }
 
 function renderReferenceImages() {
@@ -973,7 +1162,7 @@ function renderReferenceImages() {
       const label = escapeHtml(ref ? ref.display_name : "");
       return `
         <div class="reference-image-thumb" title="${label}">
-          <img src="/api/reference-images/${id}/thumbnail" loading="lazy" />
+          <img src="${ref ? refThumbUrl(ref) : `/api/reference-images/${id}/thumbnail`}" loading="lazy" data-view-ref="${id}" />
           <span class="reference-image-thumb-remove" data-remove-ref="${id}" title="Remove">✕</span>
         </div>
       `;
@@ -985,6 +1174,53 @@ function renderReferenceImages() {
       renderReferenceImages();
     });
   });
+  els.referenceImageList.querySelectorAll("[data-view-ref]").forEach((img) => {
+    img.addEventListener("click", () => {
+      const id = img.dataset.viewRef;
+      const ref = state.referenceImages.find((r) => r.id === id);
+      openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
+    });
+  });
+}
+
+// Full-size view of an image (reference-image library/picker/thumb strip and
+// the export report grid all open the same lightbox rather than duplicating
+// zoom UI). Uses modalBack() for its dismiss action/Escape/backdrop-click, so
+// when a caller has pushed a "redraw my view" step onto modalBackStack before
+// opening this, backing out returns to that view instead of losing it --
+// callers that open the lightbox directly (nothing pushed) get a plain
+// "Close" that fully dismisses, same as before.
+//
+// onPrev/onNext, if given, wire both on-image chevrons and the ArrowLeft/
+// ArrowRight keys (via the global keydown handler + lightboxNav) to step
+// between items without leaving the lightbox -- used by the export report to
+// flip through its filtered result set. Navigating does not touch
+// modalBackStack, so however many items the user pages through, a single
+// Back/Escape still returns straight to the grid.
+function openImageLightbox(url, title, { onPrev, onNext, position } = {}) {
+  const hasBack = modalBackStack.length > 0;
+  const navBtns =
+    onPrev || onNext
+      ? `
+      <button class="lightbox-nav-btn lightbox-nav-prev" id="mPrev" title="Previous (←)" ${onPrev ? "" : "disabled"}>‹</button>
+      <button class="lightbox-nav-btn lightbox-nav-next" id="mNext" title="Next (→)" ${onNext ? "" : "disabled"}>›</button>
+    `
+      : "";
+  const modal = openModal(`
+    <div class="lightbox-stage">
+      ${navBtns}
+      <img class="lightbox-img" src="${url}" alt="${escapeHtml(title || "")}" />
+    </div>
+    <div class="modal-actions">
+      ${position ? `<span class="lightbox-position">${escapeHtml(position)}</span>` : ""}
+      <a class="btn-ghost" href="${url}" target="_blank" rel="noopener">↗ Open</a>
+      <button id="mCancel" class="btn-ghost">${hasBack ? "← Back" : "Close"}</button>
+    </div>
+  `);
+  modal.querySelector("#mCancel").addEventListener("click", modalBack);
+  if (onPrev) modal.querySelector("#mPrev").addEventListener("click", onPrev);
+  if (onNext) modal.querySelector("#mNext").addEventListener("click", onNext);
+  lightboxNav = onPrev || onNext ? { prev: onPrev, next: onNext } : null;
 }
 
 function openReferenceImagePicker() {
@@ -1011,7 +1247,10 @@ function openReferenceImagePicker() {
       const disabled = !selected && state.referenceImageIds.length >= MAX_REFERENCE_IMAGES;
       return `
         <div class="picker-item ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}" data-picker-id="${ref.id}" title="${escapeHtml(ref.display_name)}">
-          <img src="/api/reference-images/${ref.id}/thumbnail" loading="lazy" />
+          <img src="${refThumbUrl(ref)}" loading="lazy" />
+          <div class="reference-library-item-actions">
+            <button class="reference-library-item-btn" data-view-picker-ref="${ref.id}" title="View full size">🔍</button>
+          </div>
         </div>
       `;
     })
@@ -1029,6 +1268,14 @@ function openReferenceImagePicker() {
       }
       renderReferenceImages();
       openReferenceImagePicker(); // re-render the grid with updated selection state
+    });
+  });
+  grid.querySelectorAll("[data-view-picker-ref]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.viewPickerRef;
+      const ref = state.referenceImages.find((r) => r.id === id);
+      openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
     });
   });
 }
@@ -1179,8 +1426,9 @@ function renderReferenceLibrary() {
     .map(
       (ref) => `
         <div class="reference-library-item" title="${escapeHtml(ref.display_name)}">
-          <img src="/api/reference-images/${ref.id}/thumbnail" loading="lazy" />
+          <img src="${refThumbUrl(ref)}" loading="lazy" data-view-ref="${ref.id}" />
           <div class="reference-library-item-actions">
+            <button class="reference-library-item-btn" data-view-ref-btn="${ref.id}" title="View full size">🔍</button>
             <button class="reference-library-item-btn" data-crop-ref="${ref.id}" title="Crop">✂</button>
             <button class="reference-library-item-btn danger" data-delete-ref="${ref.id}" title="Delete">✕</button>
           </div>
@@ -1189,6 +1437,13 @@ function renderReferenceLibrary() {
       `
     )
     .join("");
+  els.referenceLibraryGrid.querySelectorAll("[data-view-ref], [data-view-ref-btn]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.viewRef || el.dataset.viewRefBtn;
+      const ref = state.referenceImages.find((r) => r.id === id);
+      openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
+    });
+  });
   els.referenceLibraryGrid.querySelectorAll("[data-crop-ref]").forEach((btn) => {
     btn.addEventListener("click", () => recropReferenceImage(btn.dataset.cropRef));
   });
@@ -1399,13 +1654,12 @@ async function enqueueGeneration(imageId) {
   const promptId = els.promptSelect.value || null;
   const aspectRatio = els.aspectRatioSelect.value || null;
   const engine = els.engineSelect.value;
-  const referenceImageIds = engine === "comfyui" ? state.referenceImageIds : [];
   const job = await api.generateResult(imageId, {
     prompt_id: promptId,
     adhoc_prompt_text: promptText,
     engine,
     aspect_ratio: aspectRatio,
-    reference_image_ids: referenceImageIds.length ? referenceImageIds : undefined,
+    reference_image_ids: state.referenceImageIds.length ? state.referenceImageIds : undefined,
   });
   mergeQueueJob(job);
   return job;
@@ -1673,7 +1927,7 @@ function renderPromptList() {
       const prompt = state.prompts.find((p) => p.id === el.dataset.id);
       if (!prompt) return;
       els.promptSelect.value = prompt.id;
-      els.promptTextarea.value = prompt.prompt_text;
+      setPromptText(prompt.prompt_text);
     });
   });
   els.promptList.querySelectorAll("[data-edit]").forEach((el) => {
@@ -1838,7 +2092,7 @@ els.settingsBtn.addEventListener("click", async () => {
       <div class="field"><label>ComfyUI Workflow File</label><input id="mComfyWorkflow" type="text" value="${config.comfyui_workflow_path}" /></div>
       <div class="settings-section-actions">
         <button id="mCheckComfy" class="btn-ghost small">Check Connection</button>
-        <button id="mComfyFree" class="btn-ghost small" title="Unload models and clear ComfyUI's execution cache">Unload Models</button>
+        <button id="mComfyFree" class="btn-warn small" title="Unload models and clear ComfyUI's execution cache">⏏ Unload Models</button>
       </div>
       <div id="mComfyConnStatus" class="status-line"></div>
     </div>
@@ -2218,7 +2472,7 @@ async function renderTrashModal(statusMessage = "") {
         .map(
           (ref) => `
       <div class="trash-item">
-        <img src="/api/reference-images/${ref.id}/thumbnail" loading="lazy" />
+        <img src="${refThumbUrl(ref)}" loading="lazy" />
         <span class="trash-name">${escapeHtml(ref.display_name)}</span>
         <span class="trash-meta">Deleted ${formatDeletedAt(ref.deleted_at)} · ${daysRemaining(ref.deleted_at)}d left</span>
         <button class="btn-ghost small" data-restore-reference="${ref.id}">Restore</button>
@@ -2363,41 +2617,130 @@ async function renderTrashModal(statusMessage = "") {
 // Export
 // ---------------------------------------------------------------------------
 
+const STATUS_FILTER_LABELS = { YES: "Approved (YES)", ALL: "All evaluated", MAYBE: "Maybe", NO: "Rejected" };
+const EXPORT_MODE_LABELS = { clean: "Clean (result images only)", side_by_side: "Side-by-Side (A/B pairs)" };
+
 els.exportBtn.addEventListener("click", () => {
+  modalBackStack = []; // fresh flow -- Escape/backdrop from the filter step should fully close
+  showExportFilter();
+});
+
+function showExportFilter(statusFilter = "YES", mode = "clean") {
   const modal = openModal(`
     <h3>Export Results</h3>
     <div class="field">
       <label>Status Filter</label>
       <select id="mStatus">
-        <option value="YES">Approved (YES)</option>
-        <option value="ALL">All evaluated</option>
-        <option value="MAYBE">Maybe</option>
-        <option value="NO">Rejected</option>
+        ${Object.entries(STATUS_FILTER_LABELS)
+          .map(([v, label]) => `<option value="${v}" ${v === statusFilter ? "selected" : ""}>${label}</option>`)
+          .join("")}
       </select>
     </div>
     <div class="field">
       <label>Format</label>
       <select id="mMode">
-        <option value="clean">Clean (result images only)</option>
-        <option value="side_by_side">Side-by-Side (A/B pairs)</option>
+        ${Object.entries(EXPORT_MODE_LABELS)
+          .map(([v, label]) => `<option value="${v}" ${v === mode ? "selected" : ""}>${label}</option>`)
+          .join("")}
       </select>
     </div>
-    <div id="mExportStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="mCancel" class="btn-ghost">Cancel</button>
-      <button id="mGo" class="btn-primary">Export</button>
+      <button id="mGo" class="btn-primary">Generate Report</button>
     </div>
   `);
-  modal.querySelector("#mCancel").addEventListener("click", closeModal);
+  modal.querySelector("#mCancel").addEventListener("click", modalBack);
+  modal.querySelector("#mGo").addEventListener("click", () => {
+    const sf = modal.querySelector("#mStatus").value;
+    const md = modal.querySelector("#mMode").value;
+    modalBackStack.push(() => showExportFilter(sf, md));
+    showExportReport(sf, md);
+  });
+}
+
+// Scrollable preview of exactly what the chosen filters will export, with the
+// actual zip download available right from the report -- so the user can
+// eyeball the result set before committing to (potentially large) export. In
+// side_by_side mode, both the grid thumbnails and the per-item lightbox show
+// the actual source+result composite the zip will contain, not just the bare
+// result -- otherwise "preview" wouldn't show what side-by-side mode does.
+async function showExportReport(statusFilter, mode) {
+  const modal = openModal(`<h3>Export Report</h3><p class="dup-section-hint">Loading…</p>`);
+  let results = [];
+  try {
+    results = await api.previewExport(state.currentProjectId, statusFilter);
+  } catch (e) {
+    modal.innerHTML = `<h3>Export Report</h3><p class="dup-section-hint">Error: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  renderExportReportBody(statusFilter, mode, results);
+}
+
+// Opens the lightbox on results[index], wired with wraparound prev/next so
+// arrow keys/chevrons page through the whole filtered set (see the report's
+// data-view-result click handler and openImageLightbox's onPrev/onNext).
+function showResultLightbox(statusFilter, mode, results, index) {
+  const r = results[index];
+  const isSbs = mode === "side_by_side";
+  const url = isSbs ? `/api/results/${r.id}/side-by-side` : `/api/results/${r.id}/file`;
+  const wrap = (i) => (i + results.length) % results.length;
+  openImageLightbox(url, r.image_display_name, {
+    onPrev: results.length > 1 ? () => showResultLightbox(statusFilter, mode, results, wrap(index - 1)) : undefined,
+    onNext: results.length > 1 ? () => showResultLightbox(statusFilter, mode, results, wrap(index + 1)) : undefined,
+    position: results.length > 1 ? `${index + 1} / ${results.length}` : undefined,
+  });
+}
+
+// (Re)draws the report's body -- grid + actions -- into the modal container.
+// Split out from showExportReport so that backing out of the per-result
+// lightbox (which takes over the whole modal body) can redraw the
+// already-fetched result set instead of refetching it.
+function renderExportReportBody(statusFilter, mode, results) {
+  const modal = els.modalContent;
+  const isSbs = mode === "side_by_side";
+  const previewUrl = (id) => (isSbs ? `/api/results/${id}/side-by-side` : `/api/results/${id}/thumbnail`);
+  const itemsHtml = results.length
+    ? results
+        .map((r) => {
+          const label = `${escapeHtml(r.image_display_name)} — ${r.evaluation} — ${new Date(r.date_generated).toLocaleString()}`;
+          return `
+            <div class="report-item ${r.evaluation}" data-view-result="${r.id}" title="${label}">
+              <img src="${previewUrl(r.id)}" loading="lazy" />
+              <div class="report-item-name">${escapeHtml(r.image_display_name)}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<p class="dup-section-hint">No results match this filter.</p>`;
+
+  modal.innerHTML = `
+    <h3>Export Report</h3>
+    <div class="report-header">
+      <span class="report-count">${results.length} result${results.length === 1 ? "" : "s"} — ${STATUS_FILTER_LABELS[statusFilter]} — ${EXPORT_MODE_LABELS[mode]}</span>
+    </div>
+    <div class="report-grid ${isSbs ? "sbs" : ""}">${itemsHtml}</div>
+    <div id="mExportStatus" class="status-line"></div>
+    <div class="modal-actions">
+      <button id="mBack" class="btn-ghost">← Back</button>
+      <button id="mGo" class="btn-primary" ${results.length ? "" : "disabled"}>${results.length ? `Export ZIP (${results.length})` : "Export ZIP"}</button>
+    </div>
+  `;
+
+  modal.querySelector("#mBack").addEventListener("click", modalBack);
+  modal.querySelectorAll("[data-view-result]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const index = results.findIndex((x) => x.id === el.dataset.viewResult);
+      modalBackStack.push(() => renderExportReportBody(statusFilter, mode, results));
+      showResultLightbox(statusFilter, mode, results, index);
+    });
+  });
   modal.querySelector("#mGo").addEventListener("click", async () => {
-    const status_filter = modal.querySelector("#mStatus").value;
-    const mode = modal.querySelector("#mMode").value;
     modal.querySelector("#mExportStatus").textContent = "Building export...";
     try {
       const res = await fetch(`/api/projects/${state.currentProjectId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status_filter, mode }),
+        body: JSON.stringify({ status_filter: statusFilter, mode }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const blob = await res.blob();
@@ -2410,24 +2753,33 @@ els.exportBtn.addEventListener("click", () => {
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-      closeModal();
+      modal.querySelector("#mExportStatus").textContent = "Export downloaded.";
     } catch (e) {
       modal.querySelector("#mExportStatus").textContent = `Error: ${e.message}`;
     }
   });
-});
+}
 
 // ---------------------------------------------------------------------------
 // Hotkeys & utils
 // ---------------------------------------------------------------------------
 
+// Gallery hotkeys act on the currently selected image, which sits behind
+// any open modal -- without this guard, arrow keys meant for a lightbox
+// (e.g. paging through the export report) would also step the background
+// image selection underneath it.
+function whenNoModal(fn) {
+  return () => {
+    if (els.modalOverlay.style.display === "none") fn();
+  };
+}
 initHotkeys({
-  onYes: () => setEvaluation("YES"),
-  onNo: () => setEvaluation("NO"),
-  onMaybe: () => setEvaluation("MAYBE"),
-  onPrev: () => stepImage(-1),
-  onNext: () => stepImage(1),
-  onFocusPrompt: () => els.promptTextarea.focus(),
+  onYes: whenNoModal(() => setEvaluation("YES")),
+  onNo: whenNoModal(() => setEvaluation("NO")),
+  onMaybe: whenNoModal(() => setEvaluation("MAYBE")),
+  onPrev: whenNoModal(() => stepImage(-1)),
+  onNext: whenNoModal(() => stepImage(1)),
+  onFocusPrompt: whenNoModal(() => els.promptTextarea.focus()),
 });
 
 // Formats a duration in seconds as e.g. "45s", "3m 12s", "1h 05m". Used both

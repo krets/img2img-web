@@ -14,12 +14,21 @@ from grok_img2img import (
 )
 
 
-def generate_image_edit(api_key, source_path, prompt, model=None, aspect_ratio=None, max_dim=1024):
-    """Runs a single image-to-image edit against a source file on disk.
+MAX_TOTAL_IMAGES = 3  # xAI's Grok Imagine API accepts at most 3 input images
+
+
+def generate_image_edit(api_key, source_path, prompt, model=None, aspect_ratio=None, max_dim=1024, extra_source_paths=None):
+    """Runs an image-to-image edit against a source file on disk, optionally
+    with up to MAX_TOTAL_IMAGES - 1 extra reference images.
     Returns (image_bytes, revised_prompt).
     """
     model = model or DEFAULT_MODEL
+    extra_source_paths = list(extra_source_paths or [])
+    if 1 + len(extra_source_paths) > MAX_TOTAL_IMAGES:
+        raise ValueError(f"At most {MAX_TOTAL_IMAGES} total input images are supported")
     image_input = load_and_preprocess_image(source_path, max_dim=max_dim)
+    if extra_source_paths:
+        image_input = [image_input] + [load_and_preprocess_image(p, max_dim=max_dim) for p in extra_source_paths]
     response_data = call_grok_img2img(
         api_key=api_key,
         prompt=prompt,

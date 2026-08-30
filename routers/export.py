@@ -8,6 +8,14 @@ from models import ExportRequestIn
 router = APIRouter(tags=["export"])
 
 
+@router.get("/api/projects/{project_id}/export/preview")
+def export_preview(project_id: str, status_filter: str = "YES"):
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    return db.list_results_by_status(project_id, status=status_filter)
+
+
 @router.post("/api/projects/{project_id}/export")
 def export_project(project_id: str, body: ExportRequestIn):
     project = db.get_project(project_id)

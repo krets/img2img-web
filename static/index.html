@@ -71,7 +71,7 @@
           <div id="imageList" class="image-list"></div>
         </div>
         <div id="referencesTabPanel" style="display:none">
-          <p class="dup-section-hint reference-tab-hint">Reference images are a separate per-project library used only as extra ComfyUI generation inputs -- they don't show up in the main image list.</p>
+          <p class="dup-section-hint reference-tab-hint">Reference images are a separate per-project library used as extra generation inputs (ComfyUI, Grok, and most fal.ai models) -- they don't show up in the main image list.</p>
           <label class="upload-drop" id="referenceUploadDrop">
             + Add reference image (or paste)
             <input id="referenceUploadInput" type="file" accept="image/*" multiple hidden />
@@ -144,7 +144,7 @@
           </select>
         </div>
         <div class="field" id="referenceImagesField" style="display:none">
-          <label>Reference images <span class="hint">(ComfyUI only, up to 2)</span></label>
+          <label>Reference images <span class="hint">(up to 2; not all fal.ai models support these)</span></label>
           <div id="referenceImageList" class="reference-image-list"></div>
           <button id="addReferenceImageBtn" class="btn-ghost small" type="button">+ Add reference image</button>
         </div>

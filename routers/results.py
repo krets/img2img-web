@@ -132,9 +132,15 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
 
     reference_paths = []
     if body.reference_image_ids:
-        if engine != "comfyui":
-            raise HTTPException(400, "Reference images are only supported with the ComfyUI engine")
-        max_refs = len(comfyui_client.EXTRA_IMAGE_NODES)
+        if engine == "comfyui":
+            max_refs = len(comfyui_client.EXTRA_IMAGE_NODES)
+        elif engine == "grok":
+            max_refs = grok_client.MAX_TOTAL_IMAGES - 1
+        else:
+            fal_model = body.model or config["fal_model"]
+            if not fal_client.supports_multiple_images(fal_model):
+                raise HTTPException(400, f"Model '{fal_model}' only accepts a single input image and can't take reference images.")
+            max_refs = grok_client.MAX_TOTAL_IMAGES - 1  # no documented fal limit; match the UI's shared cap
         if len(body.reference_image_ids) > max_refs:
             raise HTTPException(400, f"At most {max_refs} reference images are supported")
         for ref_id in body.reference_image_ids:
@@ -195,6 +201,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
                     prompt=body.adhoc_prompt_text,
                     model=model,
                     max_dim=max_dim,
+                    extra_source_paths=reference_paths,
                 )
             except Exception as e:
                 raise RuntimeError(f"fal.ai request failed: {e}") from e
@@ -209,6 +216,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
                     model=model,
                     aspect_ratio=aspect_ratio,
                     max_dim=max_dim,
+                    extra_source_paths=reference_paths,
                 )
             except Exception as e:
                 raise RuntimeError(f"Grok API request failed: {e}") from e
@@ -279,6 +287,26 @@ def get_result_preview(result_id: str):
         raise HTTPException(404, "Result file missing on disk")
     preview_path = storage.get_or_create_preview("results", image["project_id"], result_id, path)
     return FileResponse(preview_path, media_type="image/jpeg")
+
+
+@router.get("/api/results/{result_id}/side-by-side")
+def get_result_side_by_side(result_id: str):
+    """Preview of the source+result composite that export's side_by_side mode
+    produces for this result -- used by the export report so users can see
+    what that mode will actually export before running it.
+    """
+    result = db.get_result(result_id)
+    if not result:
+        raise HTTPException(404, "Result not found")
+    image = db.get_image(result["image_id"])
+    result_path = storage.result_image_path(image["project_id"], result["file_path"])
+    source_path = storage.source_image_path(image["project_id"], image["file_name"])
+    if not result_path.exists() or not source_path.exists():
+        raise HTTPException(404, "Source or result file missing on disk")
+    combo_path = storage.get_or_create_side_by_side(image["project_id"], result_id, source_path, result_path)
+    if combo_path is None:
+        raise HTTPException(404, "Could not build side-by-side preview")
+    return FileResponse(combo_path, media_type="image/jpeg")
 
 
 @router.post("/api/results/{result_id}/promote-to-source")

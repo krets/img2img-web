@@ -367,15 +367,38 @@ els.deleteProjectBtn.addEventListener("click", async () => {
 // Images
 // ---------------------------------------------------------------------------
 
+// Bumped on every write to state.images -- a full reload (loadImages) or a
+// local patch (applyRatingToSidebar) alike. loadImages() captures this before
+// its fetch and checks it again after: if a local patch (or another load)
+// landed while the fetch was in flight, its response is now stale relative
+// to what the user already sees, so it's discarded instead of clobbering the
+// newer state. Without this, a rating applied while an unrelated loadImages()
+// call (e.g. the queue poller noticing a finished job) was still in flight
+// could be silently overwritten the moment that older fetch resolved --
+// intermittently, since it depends on request timing.
+let imagesEpoch = 0;
+
 async function loadImages() {
   if (!state.currentProjectId) return;
-  state.images = await api.listImages(state.currentProjectId, {
+  const epoch = ++imagesEpoch;
+  const images = await api.listImages(state.currentProjectId, {
     sort: state.sort,
     filter: state.filter,
     search: state.search,
   });
+  if (epoch !== imagesEpoch) return; // superseded by a newer load or local patch; discard
+  state.images = images;
   applyQueueOrdering();
   renderImageList();
+}
+
+// True when the sidebar's current sort/filter depends on which evaluation is
+// "active" for an image (sort by evaluation reads eval_rank; the YES/NO/MAYBE/
+// UNRATED filters match on the active result's evaluation). Only in that case
+// can rating or re-activating a result actually move/hide a row -- otherwise
+// it's purely cosmetic (a chit color) and a local patch is safe.
+function sidebarOrderDependsOnEvaluation() {
+  return state.sort === "evaluation" || ["YES", "NO", "MAYBE", "UNRATED"].includes(state.filter);
 }
 
 // Rating a result changes only that one result's evaluation. Refetching and
@@ -386,15 +409,9 @@ async function loadImages() {
 // only affected when the *active* result of an image is re-rated under a
 // sort/filter that depends on evaluation. Everywhere else, patch the chit's
 // evaluation in local state and re-render the list from memory.
-function ratingAffectsSidebarOrder(img, resultId) {
-  if (!img || img.active_result_id !== resultId) return false;
-  if (state.sort === "evaluation") return true;
-  return ["YES", "NO", "MAYBE", "UNRATED"].includes(state.filter);
-}
-
 async function applyRatingToSidebar(imageId, resultId, value) {
   const img = state.images.find((i) => i.id === imageId);
-  if (ratingAffectsSidebarOrder(img, resultId)) {
+  if (img && img.active_result_id === resultId && sidebarOrderDependsOnEvaluation()) {
     await loadImages();
     return;
   }
@@ -402,8 +419,27 @@ async function applyRatingToSidebar(imageId, resultId, value) {
     const entry = (img.result_evaluations || []).find((r) => r.id === resultId);
     if (entry) entry.evaluation = value;
     if (img.active_result_id === resultId) img.active_evaluation = value;
+    imagesEpoch++; // invalidate any in-flight loadImages() fetch older than this patch
     renderImageList();
   }
+}
+
+// Switching which result is "active" (clicking a tile, or a chit in the
+// sidebar) is the same story as rating: cheap locally, but loadImages() pays
+// for the whole library every time. Here *any* switch can change which
+// evaluation counts as active, so (unlike rating) it's not narrowed to "only
+// if resultId was already active".
+async function applyActivateResultToSidebar(imageId, resultId) {
+  const img = state.images.find((i) => i.id === imageId);
+  if (!img || sidebarOrderDependsOnEvaluation()) {
+    await loadImages();
+    return;
+  }
+  img.active_result_id = resultId;
+  const entry = (img.result_evaluations || []).find((r) => r.id === resultId);
+  if (entry) img.active_evaluation = entry.evaluation;
+  imagesEpoch++;
+  renderImageList();
 }
 
 async function loadReferenceImages() {
@@ -543,11 +579,13 @@ async function selectImageResult(imageId, resultId) {
     await selectImage(imageId);
     if (state.currentImageId !== imageId) return; // navigated away before this resolved
   }
+  els.detailsContent.classList.add("loading");
   await api.activateResult(resultId);
-  await loadImages();
+  await applyActivateResultToSidebar(imageId, resultId);
   if (state.currentImageId === imageId) {
     state.currentImage = await api.getImage(imageId);
     renderDetails();
+    els.detailsContent.classList.remove("loading");
   }
 }
 
@@ -834,8 +872,14 @@ document.addEventListener("paste", async (e) => {
 
 async function selectImage(id) {
   state.currentImageId = id;
-  els.generateStatus.textContent = "";
-  updateGenerateStatusForCurrentImage();
+  // Give instant feedback that the switch was initiated, rather than leaving
+  // the sidebar/details panel looking unchanged until the metadata fetch
+  // below resolves: highlight the new row right away, and dim the (still
+  // stale) details panel with a spinner until fresh data replaces it.
+  renderImageList();
+  els.generateStatus.innerHTML = `<span class="spinner"></span><span>Loading...</span>`;
+  updateGenerateStatusForCurrentImage(); // overwrites with real job status, if any, from local queue state
+  els.detailsContent.classList.add("loading");
   // The source image only depends on `id`, not on the metadata fetch below --
   // kick off its (progressive) load right away instead of making the viewer
   // wait on a network round-trip it doesn't need. renderDetails() below will
@@ -844,6 +888,9 @@ async function selectImage(id) {
   const image = await api.getImage(id);
   if (state.currentImageId !== id) return; // user navigated away before this resolved
   state.currentImage = image;
+  els.detailsContent.classList.remove("loading");
+  els.generateStatus.textContent = "";
+  updateGenerateStatusForCurrentImage();
   renderImageList();
   renderDetails();
 }
@@ -1008,11 +1055,18 @@ function renderResultGrid(results, activeId) {
     el.addEventListener("click", async () => {
       const targetImageId = state.currentImageId;
       const resultId = el.dataset.id;
+      // Instant feedback: highlight the clicked tile and dim the panel right
+      // away, rather than leaving the click looking like it did nothing while
+      // activate/reload/refetch run in sequence below.
+      els.resultGrid.querySelectorAll(".result-tile.active").forEach((t) => t.classList.remove("active"));
+      el.classList.add("active");
+      els.detailsContent.classList.add("loading");
       await api.activateResult(resultId);
-      await loadImages();
+      await applyActivateResultToSidebar(targetImageId, resultId);
       if (state.currentImageId === targetImageId) {
         state.currentImage = await api.getImage(targetImageId);
         renderDetails();
+        els.detailsContent.classList.remove("loading");
       }
     });
   });

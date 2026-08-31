@@ -544,6 +544,7 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+#detailsContent.loading { opacity: 0.5; transition: opacity 0.1s ease; pointer-events: none; }
 .revised-prompt { font-size: 12px; color: #9ea2b0; font-style: italic; white-space: pre-wrap; }
 
 .result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }

@@ -7,6 +7,21 @@ html, body {
   font-family: 'Segoe UI', Inter, system-ui, sans-serif;
 }
 
+/* Scrollbars: thin, rounded, dark. WebKit/Blink get hover states; Firefox falls back to the standard properties. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #33353f;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #565a68; background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: #33353f transparent; }
+}
+
 button, input, select, textarea, a.btn-ghost, a.btn-primary {
   font-family: inherit;
   color: inherit;

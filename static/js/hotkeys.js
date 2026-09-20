@@ -85,6 +85,13 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
+    title: "Prompts",
+    rows: [
+      { keys: ["Enter"], desc: "In the prompt list's filter box: pick the top match" },
+      { keys: ["Esc"], desc: "Close the prompt list, or cancel a delete" },
+    ],
+  },
+  {
     title: "Upload",
     rows: [
       { keys: ["Ctrl+V"], desc: "Paste an image (or image URL) into the current tab" },

@@ -108,18 +108,6 @@
         <button class="panel-collapse-btn" id="detailsCollapseBtn" title="Collapse details panel">›</button>
         <div class="panel-resize-handle" id="detailsResizeHandle"></div>
       </div>
-      <div class="panel-section" id="promptPaletteSection">
-        <div class="panel-header">
-          <span>Prompt Palette <span id="promptCount" class="prompt-count"></span></span>
-          <span class="panel-header-actions">
-            <button id="newPromptBtn" class="btn-ghost small">+ New</button>
-            <button id="promptPaletteToggleBtn" class="btn-ghost small" title="Collapse/expand prompt palette">▾</button>
-          </span>
-        </div>
-        <input id="promptFilterInput" type="text" class="prompt-filter" placeholder="Filter prompts..." />
-        <div id="promptList" class="prompt-list"></div>
-      </div>
-
       <div id="detailsEmpty" class="empty-state">Select an image to see details.</div>
       <div id="detailsContent" style="display:none">
         <div class="field">
@@ -134,9 +122,13 @@
 
         <div class="field">
           <label>Prompt</label>
-          <select id="promptSelect">
-            <option value="">— ad-hoc —</option>
-          </select>
+          <div class="prompt-menu" id="promptMenu">
+            <button id="promptMenuBtn" class="prompt-menu-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Pick, edit or delete saved prompts">
+              <span id="promptMenuName" class="prompt-menu-name adhoc">— ad-hoc —</span>
+              <span class="prompt-menu-caret">▾</span>
+            </button>
+            <div id="promptPanel" class="project-panel prompt-panel" style="display:none"></div>
+          </div>
           <textarea id="promptTextarea" rows="15" placeholder="Describe the edit..."></textarea>
         </div>
         <div class="field-row">

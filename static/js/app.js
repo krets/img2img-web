@@ -10,8 +10,7 @@ const state = {
   currentImageId: null,
   currentImage: null, // full detail incl. results
   prompts: [],
-  promptFilter: "",
-  promptPaletteCollapsed: localStorage.getItem("grok_img2img.promptPaletteCollapsed") === "1",
+  selectedPromptId: null, // saved prompt last picked from the dropdown; null = ad-hoc
   sort: "recent_result",
   filter: "all",
   search: "",
@@ -85,19 +84,16 @@ const els = {
   multiSelectCount: document.getElementById("multiSelectCount"),
   multiSelectMoveBtn: document.getElementById("multiSelectMoveBtn"),
   imageList: document.getElementById("imageList"),
-  newPromptBtn: document.getElementById("newPromptBtn"),
-  promptList: document.getElementById("promptList"),
-  promptCount: document.getElementById("promptCount"),
-  promptFilterInput: document.getElementById("promptFilterInput"),
-  promptPaletteSection: document.getElementById("promptPaletteSection"),
-  promptPaletteToggleBtn: document.getElementById("promptPaletteToggleBtn"),
   viewer: document.getElementById("viewer"),
   detailsEmpty: document.getElementById("detailsEmpty"),
   detailsContent: document.getElementById("detailsContent"),
   displayNameInput: document.getElementById("displayNameInput"),
   provenanceLine: document.getElementById("provenanceLine"),
   commentInput: document.getElementById("commentInput"),
-  promptSelect: document.getElementById("promptSelect"),
+  promptMenu: document.getElementById("promptMenu"),
+  promptMenuBtn: document.getElementById("promptMenuBtn"),
+  promptMenuName: document.getElementById("promptMenuName"),
+  promptPanel: document.getElementById("promptPanel"),
   promptTextarea: document.getElementById("promptTextarea"),
   engineSelect: document.getElementById("engineSelect"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
@@ -2009,18 +2005,14 @@ els.promptTextarea.addEventListener("input", () => {
 const savedPromptText = localStorage.getItem(PROMPT_TEXT_STORAGE_KEY);
 if (savedPromptText) els.promptTextarea.value = savedPromptText;
 
-els.promptSelect.addEventListener("change", () => {
-  const prompt = state.prompts.find((p) => p.id === els.promptSelect.value);
-  if (prompt) setPromptText(prompt.prompt_text);
-});
-
 // "Use as current prompt" (result tile menu): pulls a past result's actual
 // prompt back into the draft textarea for re-running/tweaking. Resets the
 // saved-prompt dropdown to ad-hoc, since the result's prompt text may not
 // match that prompt's current saved text (or may not have come from a saved
 // prompt at all).
 function useResultPromptAsCurrent(promptText) {
-  els.promptSelect.value = "";
+  state.selectedPromptId = null;
+  renderPromptMenuButton();
   setPromptText(promptText);
 }
 
@@ -2631,7 +2623,7 @@ async function generate() {
 // upload-time auto-generation.
 async function enqueueGeneration(imageId) {
   const promptText = els.promptTextarea.value.trim();
-  const promptId = els.promptSelect.value || null;
+  const promptId = state.selectedPromptId;
   const engine = els.engineSelect.value;
   const aspectRatio = engine === "grok" ? els.aspectRatioSelect.value || null : null;
   const job = await api.generateResult(imageId, {
@@ -2938,92 +2930,210 @@ async function setEvaluation(value) {
 // Prompt palette
 // ---------------------------------------------------------------------------
 
+// A virtual dropdown in the details panel's Prompt field, built like the
+// project manager panel: the button shows the picked prompt, the panel lists
+// every saved prompt with edit/delete, and picking one fills the textarea.
+const promptPanel = {
+  open: false,
+  filter: "",
+  confirmDeleteId: null,
+};
+
 async function loadPrompts() {
   state.prompts = await api.listPrompts();
-  renderPromptList();
-  renderPromptSelectOptions();
+  // The picked prompt may have just been deleted.
+  if (!state.prompts.some((p) => p.id === state.selectedPromptId)) state.selectedPromptId = null;
+  renderPromptMenuButton();
+  if (promptPanel.open) renderPromptPanelRows();
 }
 
-function renderPromptSelectOptions() {
-  const previous = els.promptSelect.value;
-  els.promptSelect.innerHTML =
-    `<option value="">— ad-hoc —</option>` +
-    state.prompts.map((p) => `<option value="${p.id}">${escapeHtml(p.title)}</option>`).join("");
-  if (state.prompts.some((p) => p.id === previous)) els.promptSelect.value = previous;
+function renderPromptMenuButton() {
+  const selected = state.prompts.find((p) => p.id === state.selectedPromptId);
+  els.promptMenuName.textContent = selected ? selected.title : "— ad-hoc —";
+  els.promptMenuName.classList.toggle("adhoc", !selected);
 }
 
-function filteredPrompts() {
-  const q = state.promptFilter.trim().toLowerCase();
-  if (!q) return state.prompts;
-  return state.prompts.filter(
-    (p) => p.title.toLowerCase().includes(q) || p.prompt_text.toLowerCase().includes(q)
+function openPromptPanel() {
+  promptPanel.open = true;
+  promptPanel.filter = "";
+  promptPanel.confirmDeleteId = null;
+  els.promptMenuBtn.setAttribute("aria-expanded", "true");
+  els.promptPanel.style.display = "flex";
+  els.promptPanel.innerHTML = `
+    <div class="project-panel-head">
+      <input id="promptFilterInput" class="project-panel-search" type="text" placeholder="Filter prompts..." autocomplete="off" />
+      <button id="promptNewBtn" class="btn-ghost small" type="button">+ New</button>
+    </div>
+    <div class="project-panel-subhead">
+      <span id="promptAllTitle" class="project-section-title"></span>
+    </div>
+    <div id="promptPanelList" class="project-panel-list"></div>
+    <div id="promptPanelStatus" class="project-panel-status"></div>
+  `;
+  // The details panel scrolls, so cap the height to the room left below the button.
+  const room = window.innerHeight - els.promptMenuBtn.getBoundingClientRect().bottom - 16;
+  els.promptPanel.style.maxHeight = `${Math.max(240, room)}px`;
+  renderPromptPanelRows();
+  els.promptPanel.querySelector("#promptFilterInput").focus();
+}
+
+function closePromptPanel() {
+  if (!promptPanel.open) return;
+  promptPanel.open = false;
+  promptPanel.confirmDeleteId = null;
+  els.promptMenuBtn.setAttribute("aria-expanded", "false");
+  els.promptPanel.style.display = "none";
+  els.promptPanel.innerHTML = "";
+}
+
+function setPromptPanelStatus(message) {
+  const el = els.promptPanel.querySelector("#promptPanelStatus");
+  if (el) el.textContent = message || "";
+}
+
+// Row markup reuses the project panel's .project-row styles.
+function renderPromptRow(p) {
+  const cls = `project-row${p.id === state.selectedPromptId ? " current" : ""}`;
+
+  if (promptPanel.confirmDeleteId === p.id) {
+    return `
+      <div class="${cls} confirming" data-prompt-id="${p.id}">
+        <div class="project-row-main">
+          <div class="project-row-name">Delete “${escapeHtml(p.title)}”?</div>
+          <div class="project-row-desc">This cannot be undone. Results already generated with it keep their prompt text.</div>
+        </div>
+        <div class="project-row-actions visible">
+          <button class="btn-ghost small" type="button" data-action="cancel-delete">Cancel</button>
+          <button class="btn-danger small" type="button" data-action="confirm-delete">Delete</button>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="${cls}" data-prompt-id="${p.id}" title="${escapeAttr(p.prompt_text)}">
+      <div class="project-row-main">
+        <div class="project-row-name">${escapeHtml(p.title)}</div>
+        <div class="project-row-desc">${escapeHtml(p.prompt_text)}</div>
+      </div>
+      <div class="project-row-actions">
+        <button class="project-row-btn" type="button" data-action="edit" title="Edit prompt">✎</button>
+        <button class="project-row-btn danger" type="button" data-action="delete" title="Delete prompt">✕</button>
+      </div>
+    </div>`;
+}
+
+// Redraws just the rows, so typing in the filter keeps its focus.
+function renderPromptPanelRows() {
+  const listEl = els.promptPanel.querySelector("#promptPanelList");
+  if (!listEl) return;
+
+  const needle = promptPanel.filter.trim().toLowerCase();
+  const matches = state.prompts.filter(
+    (p) => !needle || p.title.toLowerCase().includes(needle) || p.prompt_text.toLowerCase().includes(needle)
   );
+
+  els.promptPanel.querySelector("#promptAllTitle").textContent = needle
+    ? `${matches.length} of ${plural(state.prompts.length, "prompt")}`
+    : `Saved prompts (${state.prompts.length})`;
+
+  // Ad-hoc clears the pick without touching the textarea. Not offered while
+  // filtering, where it would sit above the matches.
+  const adhocRow = needle
+    ? ""
+    : `
+    <div class="project-row${state.selectedPromptId ? "" : " current"}" data-adhoc>
+      <div class="project-row-main">
+        <div class="project-row-name">— ad-hoc —</div>
+        <div class="project-row-desc">Use the text below without a saved prompt</div>
+      </div>
+    </div>`;
+  listEl.innerHTML =
+    adhocRow +
+    (matches.length
+      ? matches.map(renderPromptRow).join("")
+      : `<div class="empty-state">${state.prompts.length ? "No prompts match." : "No saved prompts yet."}</div>`);
 }
 
-function renderPromptList() {
-  const filtered = filteredPrompts();
-  els.promptCount.textContent =
-    filtered.length === state.prompts.length ? `(${state.prompts.length})` : `(${filtered.length}/${state.prompts.length})`;
-
-  els.promptList.innerHTML = filtered
-    .map(
-      (p) => `
-      <div class="prompt-item" data-id="${p.id}">
-        <span class="title" title="${escapeHtml(p.prompt_text)}">${escapeHtml(p.title)}</span>
-        <span class="prompt-item-actions">
-          <button class="prompt-item-btn edit" data-edit="${p.id}" title="Edit prompt">✎</button>
-          <button class="prompt-item-btn del" data-del="${p.id}" title="Delete prompt">✕</button>
-        </span>
-      </div>`
-    )
-    .join("");
-
-  els.promptList.querySelectorAll(".prompt-item").forEach((el) => {
-    el.addEventListener("click", (e) => {
-      if (e.target.closest("[data-edit], [data-del]")) return;
-      const prompt = state.prompts.find((p) => p.id === el.dataset.id);
-      if (!prompt) return;
-      els.promptSelect.value = prompt.id;
-      setPromptText(prompt.prompt_text);
-    });
-  });
-  els.promptList.querySelectorAll("[data-edit]").forEach((el) => {
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const prompt = state.prompts.find((p) => p.id === el.dataset.edit);
-      if (prompt) openPromptModal(prompt);
-    });
-  });
-  els.promptList.querySelectorAll("[data-del]").forEach((el) => {
-    el.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const ok = await openConfirmModal({
-        title: "Delete Prompt",
-        message: "Delete this prompt? This cannot be undone.",
-        confirmLabel: "Delete",
-        danger: true,
-      });
-      if (!ok) return;
-      await api.deletePrompt(el.dataset.del);
-      await loadPrompts();
-    });
-  });
+function selectPrompt(id) {
+  const prompt = state.prompts.find((p) => p.id === id);
+  state.selectedPromptId = prompt ? prompt.id : null;
+  if (prompt) setPromptText(prompt.prompt_text);
+  renderPromptMenuButton();
+  closePromptPanel();
+  els.promptMenuBtn.focus();
 }
 
-function applyPromptPaletteCollapsed() {
-  els.promptPaletteSection.classList.toggle("collapsed", state.promptPaletteCollapsed);
-  els.promptPaletteToggleBtn.textContent = state.promptPaletteCollapsed ? "▸" : "▾";
+async function deletePrompt(id) {
+  promptPanel.confirmDeleteId = null;
+  try {
+    await api.deletePrompt(id);
+    await loadPrompts();
+  } catch (e) {
+    setPromptPanelStatus(`Delete failed: ${e.message}`);
+    renderPromptPanelRows();
+    return;
+  }
+  setPromptPanelStatus("");
 }
-els.promptPaletteToggleBtn.addEventListener("click", () => {
-  state.promptPaletteCollapsed = !state.promptPaletteCollapsed;
-  localStorage.setItem("grok_img2img.promptPaletteCollapsed", state.promptPaletteCollapsed ? "1" : "0");
-  applyPromptPaletteCollapsed();
+
+els.promptMenuBtn.addEventListener("click", () => {
+  if (promptPanel.open) closePromptPanel();
+  else openPromptPanel();
 });
-applyPromptPaletteCollapsed();
 
-els.promptFilterInput.addEventListener("input", (e) => {
-  state.promptFilter = e.target.value;
-  renderPromptList();
+els.promptPanel.addEventListener("input", (e) => {
+  if (e.target.id !== "promptFilterInput") return;
+  promptPanel.filter = e.target.value;
+  renderPromptPanelRows();
+});
+
+els.promptPanel.addEventListener("keydown", (e) => {
+  // Enter in the filter box picks the top match.
+  if (e.key !== "Enter" || e.target.id !== "promptFilterInput") return;
+  const first = els.promptPanel.querySelector("#promptPanelList .project-row[data-prompt-id]");
+  if (first) selectPrompt(first.dataset.promptId);
+});
+
+els.promptPanel.addEventListener("click", (e) => {
+  if (e.target.id === "promptNewBtn") {
+    closePromptPanel();
+    openPromptModal(null);
+    return;
+  }
+  const row = e.target.closest(".project-row");
+  if (!row) return;
+  const id = row.dataset.promptId;
+  const action = e.target.closest("[data-action]")?.dataset.action;
+
+  if (action === "edit") {
+    const prompt = state.prompts.find((p) => p.id === id);
+    closePromptPanel();
+    if (prompt) openPromptModal(prompt);
+  } else if (action === "delete") {
+    promptPanel.confirmDeleteId = id;
+    renderPromptPanelRows();
+  } else if (action === "cancel-delete") {
+    promptPanel.confirmDeleteId = null;
+    renderPromptPanelRows();
+  } else if (action === "confirm-delete") {
+    deletePrompt(id);
+  } else if (!row.classList.contains("confirming")) {
+    selectPrompt(id);
+  }
+});
+
+document.addEventListener("mousedown", (e) => {
+  if (promptPanel.open && !els.promptMenu.contains(e.target)) closePromptPanel();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !promptPanel.open) return;
+  if (promptPanel.confirmDeleteId) {
+    promptPanel.confirmDeleteId = null;
+    renderPromptPanelRows();
+  } else {
+    closePromptPanel();
+    els.promptMenuBtn.focus();
+  }
 });
 
 // Shared New/Edit modal -- textarea sized generously (15 rows x 80 cols,
@@ -3053,8 +3163,6 @@ function openPromptModal(existing) {
     await loadPrompts();
   });
 }
-
-els.newPromptBtn.addEventListener("click", () => openPromptModal(null));
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -3917,6 +4025,10 @@ function escapeHtml(str) {
   div.textContent = str ?? "";
   return div.innerHTML;
 }
+// For values inside a quoted HTML attribute, where escapeHtml alone leaves `"` intact.
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, "&quot;");
+}
 function debounce(fn, ms) {
   let t;
   return (...args) => {
@@ -3942,7 +4054,3 @@ function debounce(fn, ms) {
   pollQueue();
   setInterval(pollQueue, 1200);
 })();
-// For values inside a quoted HTML attribute, where escapeHtml alone leaves `"` intact.
-function escapeAttr(str) {
-  return escapeHtml(str).replace(/"/g, "&quot;");
-}

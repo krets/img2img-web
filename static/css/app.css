@@ -463,21 +463,18 @@ kbd {
   to { background-position: 0 0, 100% 0; }
 }
 
-.panel-header-actions { display: flex; align-items: center; gap: 4px; }
-.prompt-count { font-weight: 400; color: #6b6f7d; text-transform: none; letter-spacing: normal; font-size: 12px; }
-.prompt-filter { width: 100%; margin-bottom: 6px; font-size: 12px; padding: 5px 8px; }
-#promptPaletteSection.collapsed .prompt-filter,
-#promptPaletteSection.collapsed .prompt-list { display: none; }
-
-.prompt-list { display: flex; flex-direction: column; gap: 4px; max-height: 30vh; overflow-y: auto; }
-.prompt-item { padding: 6px; border-radius: 6px; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
-.prompt-item:hover { background: #21232c; }
-.prompt-item .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.prompt-item-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.prompt-item-btn { opacity: 0.5; background: none; border: none; padding: 0; font-size: 12px; line-height: 1; }
-.prompt-item-btn:hover { opacity: 1; }
-.prompt-item-btn.del:hover { color: #fca5a5; }
-.prompt-item-btn.edit:hover { color: #c4b5fd; }
+/* Prompt dropdown in the details panel: same virtual-dropdown pattern as the
+   project manager above, and its panel reuses the .project-panel / .project-row
+   styles. Only the position and width differ -- it spans the details panel
+   rather than hanging off the topbar. */
+.prompt-menu { position: relative; }
+.prompt-menu-btn { display: flex; align-items: center; gap: 8px; width: 100%; font-weight: 600; }
+.prompt-menu-btn[aria-expanded="true"] { border-color: #8B5CF6; }
+.prompt-menu-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-menu-name.adhoc { font-weight: 400; color: #9ea2b0; }
+.prompt-menu-caret { flex-shrink: 0; font-size: 11px; color: #9ea2b0; }
+.prompt-panel { top: calc(100% + 4px); width: 100%; max-height: none; }
+.prompt-panel .project-panel-list { min-height: 80px; }
 
 .prompt-edit-textarea {
   font-family: ui-monospace, "SF Mono", Consolas, "Cascadia Code", monospace;
@@ -695,9 +692,6 @@ kbd {
   border-left: 1px solid #2a2c35;
   padding: 14px;
   overflow-y: auto;
-}
-#detailsPanel > .panel-section:first-child {
-  margin: -14px -14px 14px;
 }
 .empty-state { color: #6b6f7d; margin-top: 20px; text-align: center; }
 .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }

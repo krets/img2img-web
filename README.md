@@ -7,7 +7,7 @@ A local desktop-style app for managing, generating, and reviewing bulk image-to-
 ## Features
 
 - **Multi-Project Library:** Organize source images and results into separate projects (e.g. one big backlog + several smaller side projects), switchable from the project menu in the top bar, which lists every project with its source/result/reference counts, keeps the 4 most recently opened at the top, and lets you rename or trash a project in place.
-- **Global Prompt Palette:** Save, edit, and reuse prompt text across every project.
+- **Global Prompt Palette:** Save, edit, and reuse prompt text across every project. It's a dropdown on the details panel's Prompt field: picking a prompt fills the text box, and you can create, edit or delete prompts from the same list.
 - **Bulk Ingestion:** Drag-and-drop or file-browser upload of source images into the current project.
 - **Review Workflow:** Three-tier evaluation (YES / MAYBE / NO) with hotkeys (`y` / `m` / `n`, arrow keys to move between images), and a draggable **A/B comparison slider** (source vs. result).
 - **Crop / Pre-process Source:** The crop button in the viewer's mode bar opens an editor to rotate the source in 90° steps and crop it to a region that can extend past the image edges (padded with a solid color or a blurred copy of the image). Works with every engine. Only the settings are stored — the original source file is never modified — and the processed image (cached) is what gets sent to the service.

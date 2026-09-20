@@ -3031,7 +3031,7 @@ els.promptFilterInput.addEventListener("input", (e) => {
 function openPromptModal(existing) {
   const modal = openModal(`
     <h3>${existing ? "Edit Prompt" : "New Prompt"}</h3>
-    <div class="field"><label>Title</label><input id="mTitle" type="text" value="${existing ? escapeHtml(existing.title) : ""}" /></div>
+    <div class="field"><label>Title</label><input id="mTitle" type="text" value="${existing ? escapeAttr(existing.title) : ""}" /></div>
     <div class="field"><label>Prompt Text</label><textarea id="mText" class="prompt-edit-textarea" rows="15" cols="80">${existing ? escapeHtml(existing.prompt_text) : ""}</textarea></div>
     <div class="modal-actions">
       <button id="mCancel" class="btn-ghost">Cancel</button>
@@ -3942,3 +3942,7 @@ function debounce(fn, ms) {
   pollQueue();
   setInterval(pollQueue, 1200);
 })();
+// For values inside a quoted HTML attribute, where escapeHtml alone leaves `"` intact.
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, "&quot;");
+}

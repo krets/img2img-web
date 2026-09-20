@@ -389,28 +389,57 @@ els.deleteProjectBtn.addEventListener("click", async () => {
 // Images
 // ---------------------------------------------------------------------------
 
-// Bumped on every write to state.images -- a full reload (loadImages) or a
-// local patch (applyRatingToSidebar) alike. loadImages() captures this before
-// its fetch and checks it again after: if a local patch (or another load)
-// landed while the fetch was in flight, its response is now stale relative
-// to what the user already sees, so it's discarded instead of clobbering the
-// newer state. Without this, a rating applied while an unrelated loadImages()
-// call (e.g. the queue poller noticing a finished job) was still in flight
-// could be silently overwritten the moment that older fetch resolved --
-// intermittently, since it depends on request timing.
-let imagesEpoch = 0;
+// Two things can race a loadImages() fetch: a newer loadImages() call, and a
+// local patch (a rating / active-result change applied straight to
+// state.images, see below).
+//  - A newer load carries fresher data than an older one, so an older response
+//    that resolves after it must not overwrite it. A superseded load just waits
+//    for the newest one, so callers (upload, job-finished refresh) still only
+//    return once the list actually reflects their change.
+//  - A local patch is applied only after its PUT resolved, so a load that
+//    *started* before the patch may have read the pre-PUT value. Such a load
+//    must not discard the patch (or vice versa) -- it replays the patches made
+//    since it started onto its fresh data. Discarding the whole response
+//    instead is what made newly uploaded images and just-finished generations
+//    intermittently fail to appear: whatever that load was fetching was thrown
+//    away, and nothing retried it.
+let latestImagesLoad = 0; // id of the most recently started loadImages()
+let latestImagesLoadPromise = null;
+let loadsInFlight = 0;
+let patchSeq = 0;
+const localPatches = []; // { seq, apply(images) } made while any load was in flight
 
-async function loadImages() {
-  if (!state.currentProjectId) return;
-  const epoch = ++imagesEpoch;
-  const images = await api.listImages(state.currentProjectId, {
-    sort: state.sort,
-    filter: state.filter,
-    search: state.search,
-  });
-  if (epoch !== imagesEpoch) return; // superseded by a newer load or local patch; discard
-  state.images = images;
-  applyQueueOrdering();
+function loadImages() {
+  if (!state.currentProjectId) return Promise.resolve();
+  const loadId = ++latestImagesLoad;
+  const patchesBefore = patchSeq;
+  loadsInFlight++;
+  latestImagesLoadPromise = (async () => {
+    try {
+      const images = await api.listImages(state.currentProjectId, {
+        sort: state.sort,
+        filter: state.filter,
+        search: state.search,
+      });
+      if (loadId !== latestImagesLoad) return latestImagesLoadPromise.catch(() => {});
+      for (const p of localPatches) if (p.seq > patchesBefore) p.apply(images);
+      state.images = images;
+      applyQueueOrdering();
+      renderImageList();
+    } finally {
+      if (--loadsInFlight === 0) localPatches.length = 0;
+    }
+  })();
+  return latestImagesLoadPromise;
+}
+
+// Applies `apply(images)` to the current list now, and remembers it so any
+// loadImages() fetch already in flight replays it onto its (possibly stale)
+// response instead of clobbering it.
+function patchImagesLocally(apply) {
+  apply(state.images);
+  patchSeq++;
+  if (loadsInFlight) localPatches.push({ seq: patchSeq, apply });
   renderImageList();
 }
 
@@ -438,11 +467,13 @@ async function applyRatingToSidebar(imageId, resultId, value) {
     return;
   }
   if (img) {
-    const entry = (img.result_evaluations || []).find((r) => r.id === resultId);
-    if (entry) entry.evaluation = value;
-    if (img.active_result_id === resultId) img.active_evaluation = value;
-    imagesEpoch++; // invalidate any in-flight loadImages() fetch older than this patch
-    renderImageList();
+    patchImagesLocally((images) => {
+      const target = images.find((i) => i.id === imageId);
+      if (!target) return;
+      const entry = (target.result_evaluations || []).find((r) => r.id === resultId);
+      if (entry) entry.evaluation = value;
+      if (target.active_result_id === resultId) target.active_evaluation = value;
+    });
   }
 }
 
@@ -457,11 +488,13 @@ async function applyActivateResultToSidebar(imageId, resultId) {
     await loadImages();
     return;
   }
-  img.active_result_id = resultId;
-  const entry = (img.result_evaluations || []).find((r) => r.id === resultId);
-  if (entry) img.active_evaluation = entry.evaluation;
-  imagesEpoch++;
-  renderImageList();
+  patchImagesLocally((images) => {
+    const target = images.find((i) => i.id === imageId);
+    if (!target) return;
+    target.active_result_id = resultId;
+    const entry = (target.result_evaluations || []).find((r) => r.id === resultId);
+    if (entry) target.active_evaluation = entry.evaluation;
+  });
 }
 
 async function loadReferenceImages() {

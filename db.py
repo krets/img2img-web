@@ -101,6 +101,13 @@ CREATE INDEX IF NOT EXISTS idx_results_prompt       ON results(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_results_evaluation   ON results(evaluation);
 CREATE INDEX IF NOT EXISTS idx_results_active       ON results(image_id, is_active_result);
 CREATE INDEX IF NOT EXISTS idx_results_deleted_at   ON results(is_deleted, deleted_at);
+-- Covers list_images()'s per-image subqueries (count / latest date / chit list)
+-- entirely from the index. Without it the planner picked idx_results_deleted_at
+-- (is_deleted=0 matches nearly every row) for each of them, scanning the whole
+-- results table once per image row: ~5s for a 245-image project in a 9k-result
+-- library, vs ~3ms with this. It needs its own name -- older DBs already have a
+-- single-column idx_results_image, which IF NOT EXISTS would silently keep.
+CREATE INDEX IF NOT EXISTS idx_results_image_live   ON results(image_id, is_deleted, date_generated, id, evaluation);
 CREATE INDEX IF NOT EXISTS idx_projects_deleted_at  ON projects(is_deleted, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_reference_images_project ON reference_images(project_id, is_deleted);
 CREATE INDEX IF NOT EXISTS idx_reference_images_deleted_at ON reference_images(is_deleted, deleted_at);

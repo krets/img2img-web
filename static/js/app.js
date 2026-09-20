@@ -722,7 +722,19 @@ function renderImageList() {
     const nameEl = el.querySelector(".name");
     if (nameEl) nameEl.textContent = img.display_name;
     const chitsEl = el.querySelector(".chits-slot");
-    if (chitsEl) chitsEl.innerHTML = renderChits(img);
+    if (chitsEl) {
+      // Rewriting innerHTML replaces the chit nodes, which restarts their CSS
+      // animations (the pulses looked like a sawtooth, snapping back every
+      // poll tick) and dismisses any open tooltip. Skip it unless something
+      // other than the elapsed-time tooltip text changed, so a tick with no
+      // real change leaves the DOM alone.
+      const html = renderChits(img);
+      const sig = html.replace(/ title="[^"]*"/g, "");
+      if (chitsEl.dataset.sig !== sig) {
+        chitsEl.innerHTML = html;
+        chitsEl.dataset.sig = sig;
+      }
+    }
   }
 }
 

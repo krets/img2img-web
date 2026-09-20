@@ -320,16 +320,28 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .chit.NO { background: #ef4444; }
 .chit.UNRATED { background: #3b82f6; }
 /* .pending covers all in-flight jobs; .queued/.running further distinguish
-   "waiting its turn" (static, dim) from "actively generating" (pulsing
-   gradient), and .cancelling flags one on its way out once cancel's been
-   requested -- distinct from both, and from .error below. */
-.chit.pending.queued {
-  border: 1px solid transparent;
+   "waiting its turn" (dim, slow border pulse) from "actively generating"
+   (pulsing gradient), and .cancelling flags one on its way out once cancel's
+   been requested -- distinct from both, and from .error below. */
+.result-tile.pending-tile.queued {
   background:
-    linear-gradient(#15111d, #15111d) padding-box,
-    linear-gradient(90deg, #EC4899, #8B5CF6, #EC4899, #8B5CF6, #EC4899) border-box;
+    linear-gradient(#150f20, #150f20) padding-box,
+    linear-gradient(90deg, #251339, #8045c4, #251339, #8045c4, #251339) border-box;
   background-size: 100% 100%, 200% 100%;
   animation: pending-border-march 4s linear infinite;
+}
+/* Gradients on an 11px chit can't move smoothly (position/angle changes
+   land in whole-pixel steps), so a queued chit is a dim fill with a border
+   that slowly fades dark <-> light instead -- far slower than the running
+   chit's 1.1s pulse. */
+.chit.pending.queued {
+  background: #150f20;
+  border: 1px solid #251339;
+  animation: chit-queued-pulse 3.6s ease-in-out infinite;
+}
+@keyframes chit-queued-pulse {
+  0%, 100% { border-color: #251339; }
+  50% { border-color: #8045c4; }
 }
 .chit.pending.running {
   background: linear-gradient(90deg, #EC4899, #8B5CF6);
@@ -341,10 +353,10 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
 }
-/* Queued items reuse the running pink/purple gradient, but only on a border
-   around a dim fill (padding-box layer over a border-box gradient layer).
-   The gradient is two full periods wide and shifts by exactly one, so the
-   loop is seamless. */
+/* Queued tiles get a border that sweeps between dark and light purple
+   (padding-box fill layer over a border-box gradient layer). The dark-to-light
+   swing is what makes the slow march readable. The gradient is two full
+   periods wide and shifts by exactly one, so the loop is seamless. */
 @keyframes pending-border-march {
   from { background-position: 0 0, 0% 0; }
   to { background-position: 0 0, 100% 0; }
@@ -629,14 +641,7 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   justify-content: center;
   gap: 8px;
 }
-.result-tile.pending-tile.queued {
-  border: 2px solid transparent;
-  background:
-    linear-gradient(#15111d, #15111d) padding-box,
-    linear-gradient(90deg, #EC4899, #8B5CF6, #EC4899, #8B5CF6, #EC4899) border-box;
-  background-size: 100% 100%, 200% 100%;
-  animation: pending-border-march 4s linear infinite;
-}
+.result-tile.pending-tile.queued { border: 2px solid transparent; }
 .result-tile.pending-tile.running {
   background: linear-gradient(120deg, rgba(236,72,153,0.12), rgba(139,92,246,0.12));
   animation: chit-pulse 1.4s ease-in-out infinite;

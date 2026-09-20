@@ -1205,12 +1205,15 @@ async function selectImageResult(imageId, resultId) {
     if (state.currentImageId !== imageId) return; // navigated away before this resolved
   }
   els.detailsContent.classList.add("loading");
-  await api.activateResult(resultId);
-  await applyActivateResultToSidebar(imageId, resultId);
-  if (state.currentImageId === imageId) {
-    state.currentImage = await api.getImage(imageId);
-    renderDetails();
-    els.detailsContent.classList.remove("loading");
+  try {
+    await api.activateResult(resultId);
+    await applyActivateResultToSidebar(imageId, resultId);
+    if (state.currentImageId === imageId) {
+      state.currentImage = await api.getImage(imageId);
+      renderDetails();
+    }
+  } finally {
+    if (state.currentImageId === imageId) els.detailsContent.classList.remove("loading");
   }
 }
 
@@ -1849,7 +1852,8 @@ function renderResultGrid(results, activeId, imageId) {
     await attachResultFile(file);
   });
 
-  els.resultGrid.querySelectorAll(".result-tile").forEach((el) => {
+  // Standby tiles also carry .result-tile but have no result to activate.
+  els.resultGrid.querySelectorAll(".result-tile:not(.pending-tile)").forEach((el) => {
     el.addEventListener("click", async () => {
       const targetImageId = state.currentImageId;
       const resultId = el.dataset.id;
@@ -1859,12 +1863,17 @@ function renderResultGrid(results, activeId, imageId) {
       els.resultGrid.querySelectorAll(".result-tile.active").forEach((t) => t.classList.remove("active"));
       el.classList.add("active");
       els.detailsContent.classList.add("loading");
-      await api.activateResult(resultId);
-      await applyActivateResultToSidebar(targetImageId, resultId);
-      if (state.currentImageId === targetImageId) {
-        state.currentImage = await api.getImage(targetImageId);
-        renderDetails();
-        els.detailsContent.classList.remove("loading");
+      try {
+        await api.activateResult(resultId);
+        await applyActivateResultToSidebar(targetImageId, resultId);
+        if (state.currentImageId === targetImageId) {
+          state.currentImage = await api.getImage(targetImageId);
+          renderDetails();
+        }
+      } finally {
+        // Never leave the panel dimmed and unclickable if a request fails
+        // (unless another selectImage has taken over the loading state).
+        if (state.currentImageId === targetImageId) els.detailsContent.classList.remove("loading");
       }
     });
   });

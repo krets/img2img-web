@@ -22,7 +22,27 @@ const state = {
   referenceImages: [], // this project's reference-image library (separate pool from images/source)
   referenceImageIds: [], // ids picked from referenceImages for the current generation, persists like engine/aspect ratio
   sidebarTab: "images", // "images" | "references"
+  // Lineage: images promoted from a result carry parent_image_id; when
+  // grouping is on they're nested under that parent in the sidebar.
+  groupByLineage: localStorage.getItem("grok_img2img.groupByLineage") !== "0",
+  collapsedImageIds: loadCollapsedImageIds(), // parents whose children are hidden
+  compareAgainstId: null, // ancestor image id shown as the viewer's base instead of the current image's own source
 };
+
+function loadCollapsedImageIds() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("grok_img2img.collapsedImageIds")) || []);
+  } catch {
+    return new Set();
+  }
+}
+function saveCollapsedImageIds() {
+  try {
+    localStorage.setItem("grok_img2img.collapsedImageIds", JSON.stringify([...state.collapsedImageIds]));
+  } catch {
+    // storage full/unavailable -- collapse state just won't persist
+  }
+}
 
 // job ids we've already reacted to a done/error transition for, so the
 // finished-job grace window (server keeps them ~10s) doesn't retrigger a reload.
@@ -37,12 +57,14 @@ const els = {
   settingsBtn: document.getElementById("settingsBtn"),
   searchInput: document.getElementById("searchInput"),
   sortSelect: document.getElementById("sortSelect"),
+  lineageToggleBtn: document.getElementById("lineageToggleBtn"),
   filterSelect: document.getElementById("filterSelect"),
   uploadDrop: document.getElementById("uploadDrop"),
   uploadInput: document.getElementById("uploadInput"),
   autoGenOnUploadToggle: document.getElementById("autoGenOnUploadToggle"),
   uploadStatus: document.getElementById("uploadStatus"),
   cleanupNoBtn: document.getElementById("cleanupNoBtn"),
+  refreshImagesBtn: document.getElementById("refreshImagesBtn"),
   imagesTabBtn: document.getElementById("imagesTabBtn"),
   referencesTabBtn: document.getElementById("referencesTabBtn"),
   imagesTabPanel: document.getElementById("imagesTabPanel"),
@@ -475,23 +497,145 @@ function applyQueueOrdering() {
   state.images = [...active, ...rest];
 }
 
-function renderImageItemHtml(img) {
+// Flattens state.images into the rows the sidebar actually shows, as
+// { img, depth, childCount, collapsed }. With lineage grouping on, each image
+// derived from a result is nested (any depth) under its parent -- but only
+// when the parent is itself in the current list; a child whose parent is
+// filtered out, searched away, trashed or in another project just appears as
+// a top-level row. Families are positioned where their best-ranked member
+// sits in the server's sort order, so "Latest Result" still surfaces a family
+// whose newest child was just generated.
+function buildImageDisplayList() {
+  if (!state.groupByLineage) {
+    return state.images.map((img) => ({ img, depth: 0, childCount: 0, collapsed: false }));
+  }
+  const order = new Map(state.images.map((img, i) => [img.id, i]));
+  const children = new Map();
+  const roots = [];
+  for (const img of state.images) {
+    const pid = img.parent_image_id;
+    if (pid && pid !== img.id && order.has(pid)) {
+      if (!children.has(pid)) children.set(pid, []);
+      children.get(pid).push(img);
+    } else {
+      roots.push(img);
+    }
+  }
+
+  const rankOf = (img, seen = new Set()) => {
+    seen.add(img.id);
+    let best = order.get(img.id);
+    for (const c of children.get(img.id) || []) {
+      if (!seen.has(c.id)) best = Math.min(best, rankOf(c, seen));
+    }
+    return best;
+  };
+  const rank = new Map(roots.map((r) => [r.id, rankOf(r)]));
+  roots.sort((a, b) => rank.get(a.id) - rank.get(b.id));
+
+  const countDescendants = (img, seen = new Set()) => {
+    seen.add(img.id);
+    let n = 0;
+    for (const c of children.get(img.id) || []) {
+      if (!seen.has(c.id)) n += 1 + countDescendants(c, seen);
+    }
+    return n;
+  };
+
+  const out = [];
+  const visited = new Set();
+  const emit = (img, depth, hidden) => {
+    if (visited.has(img.id)) return;
+    visited.add(img.id);
+    const childCount = countDescendants(img);
+    const collapsed = childCount > 0 && state.collapsedImageIds.has(img.id);
+    if (!hidden) out.push({ img, depth, childCount, collapsed });
+    for (const c of children.get(img.id) || []) emit(c, depth + 1, hidden || collapsed);
+  };
+  for (const r of roots) emit(r, 0, false);
+  // merge_images can in principle leave a parent loop with no root; never drop rows.
+  for (const img of state.images) emit(img, 0, false);
+  return out;
+}
+
+// Un-collapses every ancestor of an image so it's visible in the list
+// (e.g. right after promoting a result, or jumping via a lineage link).
+function revealImageInList(imageId) {
+  if (!state.groupByLineage) return;
+  const byId = new Map(state.images.map((i) => [i.id, i]));
+  let changed = false;
+  const seen = new Set();
+  let cur = byId.get(imageId);
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const parent = cur.parent_image_id && byId.get(cur.parent_image_id);
+    if (parent && state.collapsedImageIds.delete(parent.id)) changed = true;
+    cur = parent;
+  }
+  if (changed) saveCollapsedImageIds();
+}
+
+function renderImageItemHtml({ img, depth, childCount, collapsed }) {
   const selected = img.id === state.currentImageId ? "selected" : "";
   const checked = state.selectedImageIds.has(img.id) ? "checked" : "";
   const checkbox = state.multiSelectMode
     ? `<input type="checkbox" class="image-item-check" data-id="${img.id}" ${checked} />`
     : "";
+  // A derived image shown at the top level means its parent isn't in this list.
+  const orphanBadge =
+    depth === 0 && state.groupByLineage && img.parent_image_id
+      ? `<span class="lineage-orphan" title="Derived from another image that isn't in this list">↳</span>`
+      : "";
   return `
-    <div class="image-item ${selected}" data-id="${img.id}">
+    <div class="image-item ${selected}" data-id="${img.id}" data-depth="${depth}" style="--depth:${depth}">
       ${checkbox}
       <img src="/api/images/${img.id}/thumbnail" loading="lazy" />
       <div class="meta">
-        <div class="name">${escapeHtml(img.display_name)}</div>
+        <div class="name">${escapeHtml(img.display_name)}${orphanBadge}</div>
       </div>
       <span class="chits-slot">${renderChits(img)}</span>
       <button class="item-menu-btn" data-menu-image="${img.id}" title="More actions">⋮</button>
     </div>
   `;
+}
+
+// The expand/collapse control for a parent: a text-free strip of lines drawn
+// directly under the parent's row, inside the parent's group (see
+// renderImageListHtml). Collapsed = 1-3 solid lines (one per hidden image,
+// capped at 3) hinting that entries are tucked away; expanded = a single
+// dashed line, in the same spot, that collapses the group again. The hidden
+// count lives in the tooltip rather than in visible text.
+function renderLineageHandle({ img, depth, childCount, collapsed }) {
+  const noun = `derived image${childCount === 1 ? "" : "s"}`;
+  const title = collapsed
+    ? `${childCount} hidden ${noun} — click to expand`
+    : `Click to collapse ${childCount} ${noun}`;
+  const lineCount = collapsed ? Math.min(childCount, 3) : 1;
+  const lines = `<span class="lineage-line"></span>`.repeat(lineCount);
+  return `<button class="lineage-handle ${collapsed ? "collapsed" : "expanded"}" data-toggle-lineage="${img.id}" aria-expanded="${!collapsed}" aria-label="${title}" title="${title}" style="--depth:${depth}">${lines}</button>`;
+}
+
+// Turns the flat display list into markup. Every image that has derived
+// images becomes a tinted, top/bottom-bordered "lineage group" wrapping the
+// parent row, its handle and (when expanded) its descendants -- which may
+// themselves be groups -- so ownership reads at a glance. A group closes when
+// the next row is at the same or a shallower depth.
+function renderImageListHtml(rows) {
+  const open = []; // depth of each currently open group
+  let html = "";
+  for (const row of rows) {
+    while (open.length && open[open.length - 1] >= row.depth) {
+      html += "</div>";
+      open.pop();
+    }
+    if (row.childCount) {
+      html += `<div class="lineage-group">`;
+      open.push(row.depth);
+    }
+    html += renderImageItemHtml(row);
+    if (row.childCount) html += renderLineageHandle(row);
+  }
+  return html + "</div>".repeat(open.length);
 }
 
 function openImageItemMenu(anchorBtn, imageId) {
@@ -520,6 +664,15 @@ function bindImageListDelegation() {
       openImageItemMenu(menuBtn, menuBtn.dataset.menuImage);
       return;
     }
+    const lineageBtn = e.target.closest("[data-toggle-lineage]");
+    if (lineageBtn) {
+      e.stopPropagation();
+      const id = lineageBtn.dataset.toggleLineage;
+      if (!state.collapsedImageIds.delete(id)) state.collapsedImageIds.add(id);
+      saveCollapsedImageIds();
+      renderImageList();
+      return;
+    }
     const itemEl = e.target.closest(".image-item");
     if (!itemEl) return;
     const imageId = itemEl.dataset.id;
@@ -542,11 +695,13 @@ let lastImageListSignature = null;
 
 function renderImageList() {
   bindImageListDelegation();
-  const ids = state.images.map((img) => img.id);
-  const signature = `${state.multiSelectMode}|${ids.join(",")}`;
+  const rows = buildImageDisplayList();
+  const signature = `${state.multiSelectMode}|${rows
+    .map((r) => `${r.img.id}:${r.depth}:${r.childCount}:${r.collapsed ? 1 : 0}:${r.img.parent_image_id || ""}`)
+    .join(",")}`;
 
   if (signature !== lastImageListSignature) {
-    els.imageList.innerHTML = state.images.map(renderImageItemHtml).join("");
+    els.imageList.innerHTML = renderImageListHtml(rows);
     lastImageListSignature = signature;
     return;
   }
@@ -697,8 +852,12 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
 });
 
 // Chit grid: one chit per completed result (colored by evaluation), plus a
-// pulsing chit for each in-flight job and an error chit for recently-failed
-// ones, so the sidebar row doubles as a quick per-image progress readout.
+// chit for each in-flight job -- dim/static while queued, pulsing while
+// running, a distinct color once cancellation's been requested -- and an
+// error chit for recently-failed ones, so the sidebar row doubles as a quick
+// per-image progress readout. A cancelled job gets no chit of its own: once
+// the server confirms it's actually gone, it should just disappear rather
+// than linger as a separate "cancelled" indicator.
 function renderChits(img) {
   const completedChits = (img.result_evaluations || []).map(
     (r) => `<span class="chit ${r.evaluation}" data-result-id="${r.id}" title="${r.evaluation}"></span>`
@@ -706,15 +865,12 @@ function renderChits(img) {
   const jobsForImage = state.queue.filter((j) => j.image_id === img.id);
   const pendingChits = jobsForImage
     .filter((j) => j.status === "queued" || j.status === "running")
-    .map((j) => `<span class="chit pending" title="Generating... (${formatElapsed(jobElapsedSeconds(j))})"></span>`);
+    .map((j) => `<span class="chit pending ${jobDisplayState(j)}" title="${escapeHtml(formatJobStatus(j))}"></span>`);
   const errorChits = jobsForImage
     .filter((j) => j.status === "error")
     .map((j) => `<span class="chit error" title="${escapeHtml(j.error || "Generation failed")}"></span>`);
-  const cancelledChits = jobsForImage
-    .filter((j) => j.status === "cancelled")
-    .map(() => `<span class="chit cancelled" title="Cancelled"></span>`);
 
-  const chits = [...completedChits, ...pendingChits, ...errorChits, ...cancelledChits];
+  const chits = [...completedChits, ...pendingChits, ...errorChits];
   if (!chits.length) return `<span class="badge NONE">NEW</span>`;
   return `<div class="chit-grid">${chits.join("")}</div>`;
 }
@@ -723,6 +879,20 @@ els.searchInput.addEventListener("input", debounce(() => {
   state.search = els.searchInput.value.trim();
   loadImages();
 }, 250));
+function syncLineageToggleBtn() {
+  els.lineageToggleBtn.classList.toggle("active", state.groupByLineage);
+}
+syncLineageToggleBtn();
+els.lineageToggleBtn.addEventListener("click", () => {
+  state.groupByLineage = !state.groupByLineage;
+  try {
+    localStorage.setItem("grok_img2img.groupByLineage", state.groupByLineage ? "1" : "0");
+  } catch {
+    // preference just won't persist
+  }
+  syncLineageToggleBtn();
+  renderImageList();
+});
 els.sortSelect.addEventListener("change", () => {
   state.sort = els.sortSelect.value;
   loadImages();
@@ -871,7 +1041,9 @@ document.addEventListener("paste", async (e) => {
 });
 
 async function selectImage(id) {
+  if (state.currentImageId !== id) state.compareAgainstId = null;
   state.currentImageId = id;
+  revealImageInList(id);
   // Give instant feedback that the switch was initiated, rather than leaving
   // the sidebar/details panel looking unchanged until the metadata fetch
   // below resolves: highlight the new row right away, and dim the (still
@@ -884,6 +1056,7 @@ async function selectImage(id) {
   // kick off its (progressive) load right away instead of making the viewer
   // wait on a network round-trip it doesn't need. renderDetails() below will
   // fill in the result image once metadata resolves.
+  abViewer.setCompareOptions([], null);
   abViewer.setImages(`/api/images/${id}/file`, null);
   const image = await api.getImage(id);
   if (state.currentImageId !== id) return; // user navigated away before this resolved
@@ -896,7 +1069,7 @@ async function selectImage(id) {
 }
 
 function stepImage(direction) {
-  const ids = state.images.map((i) => i.id);
+  const ids = buildImageDisplayList().map((r) => r.img.id); // visible order, so collapsed children are skipped
   const idx = ids.indexOf(state.currentImageId);
   if (idx === -1) {
     if (ids.length) selectImage(ids[0]);
@@ -955,15 +1128,48 @@ function renderDetails() {
   els.resultCount.textContent = results.length;
   const active = results.find((r) => r.is_active_result) || results[0] || null;
 
-  renderResultGrid(results, active?.id);
+  renderResultGrid(results, active?.id, img.id);
 
-  const sourceUrl = `/api/images/${img.id}/file`;
-  const resultUrl = active ? `/api/results/${active.id}/file` : null;
-  abViewer.setImages(sourceUrl, resultUrl);
+  syncViewer();
 
   const revisedPromptText = active?.revised_prompt ? `Grok revised prompt: "${active.revised_prompt}"` : "";
   const durationText = active?.duration_seconds ? `Generated in ${formatElapsed(active.duration_seconds)}` : "";
   els.revisedPrompt.textContent = [revisedPromptText, durationText].filter(Boolean).join(" — ");
+}
+
+// Pushes the current image into the A/B viewer. The left/base image is the
+// image's own source unless the user picked an ancestor in the "Compare with"
+// dropdown -- for a chain of incremental edits that shows the cumulative
+// change rather than just the last step.
+function syncViewer() {
+  const img = state.currentImage;
+  if (!img) return;
+  const results = img.results || [];
+  const active = results.find((r) => r.is_active_result) || results[0] || null;
+  const ancestors = img.derived_from?.ancestors || [];
+  if (state.compareAgainstId && !ancestors.some((a) => a.id === state.compareAgainstId)) {
+    state.compareAgainstId = null;
+  }
+  const options = ancestors.map((a, i) => ({
+    id: a.id,
+    label: `${ancestorRelation(i, ancestors.length)}: ${a.display_name}${a.is_deleted ? " (in trash)" : ""}`,
+  }));
+  abViewer.setCompareOptions(options, state.compareAgainstId, setCompareAgainst);
+  const baseUrl = `/api/images/${state.compareAgainstId || img.id}/file`;
+  const resultUrl = active ? `/api/results/${active.id}/file` : null;
+  abViewer.setImages(baseUrl, resultUrl);
+}
+
+function ancestorRelation(index, total) {
+  if (index === 0) return "Parent";
+  if (index === 1) return "Grandparent";
+  return index === total - 1 ? `Root (${index + 1} back)` : `${index + 1} back`;
+}
+
+function setCompareAgainst(id) {
+  state.compareAgainstId = id || null;
+  syncViewer();
+  renderProvenanceLine(state.currentImage?.derived_from);
 }
 
 // Shows the "chain of custody" for an image promoted from a result (via the
@@ -980,13 +1186,42 @@ function renderProvenanceLine(derivedFrom) {
   const sourceLink = sourceName
     ? `<a href="#" data-jump-to-image="${derivedFrom.source_image_id}">${escapeHtml(sourceName)}</a>`
     : "a since-deleted image";
-  els.provenanceLine.innerHTML = `↳ Derived from a result of ${sourceLink}${promptText}`;
+
+  // Full lineage, root first, ending at this image -- only worth a second line
+  // when there's more than the immediate parent (which the line above names).
+  const ancestors = derivedFrom.ancestors || [];
+  let lineageHtml = "";
+  if (ancestors.length > 1) {
+    const crumbs = [...ancestors].reverse().map(
+      (a) => `<a href="#" data-jump-to-image="${a.id}">${escapeHtml(a.display_name)}</a>`
+    );
+    crumbs.push(`<strong>${escapeHtml(state.currentImage?.display_name || "this image")}</strong>`);
+    lineageHtml = `<div class="lineage-trail">Lineage: ${crumbs.join(" › ")}</div>`;
+  }
+
+  // Shortcut into the viewer's "Compare with" dropdown, so the option is
+  // discoverable from where the parent is already mentioned.
+  const parentId = ancestors[0]?.id;
+  const comparing = parentId && state.compareAgainstId === parentId;
+  const compareHtml = parentId
+    ? ` <a href="#" class="lineage-compare" data-compare-parent="${comparing ? "" : parentId}">${
+        comparing ? "✕ stop comparing" : "⇄ compare with parent"
+      }</a>`
+    : "";
+
+  els.provenanceLine.innerHTML = `↳ Derived from a result of ${sourceLink}${promptText}${compareHtml}${lineageHtml}`;
   els.provenanceLine.style.display = "block";
-  const link = els.provenanceLine.querySelector("[data-jump-to-image]");
-  if (link) {
+  els.provenanceLine.querySelectorAll("[data-jump-to-image]").forEach((link) => {
     link.addEventListener("click", (e) => {
       e.preventDefault();
       selectImage(link.dataset.jumpToImage);
+    });
+  });
+  const compareLink = els.provenanceLine.querySelector("[data-compare-parent]");
+  if (compareLink) {
+    compareLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      setCompareAgainst(compareLink.dataset.compareParent);
     });
   }
 }
@@ -998,13 +1233,85 @@ function renderProvenanceLine(derivedFrom) {
 // use-as-new-source/delete), and thumbs-down/neutral/thumbs-up rating
 // controls (bottom-right; the tile's border color already shows the current
 // rating) -- so rating results no longer needs the old dedicated sidebar buttons.
-function renderResultGrid(results, activeId) {
+//
+// Pending jobs for `imageId`, keyed the same way both the full render and
+// the lightweight poll-tick patch (below) build their markup and decide
+// whether anything actually changed.
+function pendingJobsFor(imageId) {
+  return state.queue.filter((j) => j.image_id === imageId && (j.status === "queued" || j.status === "running"));
+}
+
+function pendingTilesSignature(jobs) {
+  return jobs.map((j) => `${j.id}:${jobDisplayState(j)}`).join(",");
+}
+
+const PENDING_TILE_LABELS = { queued: "Queued…", running: "Generating…", cancelling: "Cancelling…" };
+
+function renderPendingTileHtml(j) {
+  const displayState = jobDisplayState(j);
+  // No point offering to cancel something already cancelling.
+  const cancelBtn =
+    j.engine === "comfyui" && displayState !== "cancelling"
+      ? `<button class="pending-tile-cancel" data-cancel-standby-job="${j.id}" title="Cancel this ComfyUI job">✕</button>`
+      : "";
+  return `
+    <div class="result-tile pending-tile ${displayState}" title="${escapeHtml(formatJobStatus(j))}">
+      <span class="spinner"></span>
+      <span class="pending-tile-label">${PENDING_TILE_LABELS[displayState]}</span>
+      ${cancelBtn}
+    </div>
+  `;
+}
+
+// Marks the job cancelling in local state and re-renders its chit/tile
+// immediately (unique color, no more cancel button) instead of leaving the
+// click looking like it did nothing until the next ~1.2s poll happens to
+// notice. Server confirmation (or a failure, which reverts the flag) still
+// arrives the normal way through polling.
+function wirePendingTileCancelButtons(container) {
+  container.querySelectorAll("[data-cancel-standby-job]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const jobId = btn.dataset.cancelStandbyJob;
+      const job = state.queue.find((j) => j.id === jobId);
+      if (job) job.cancel_requested = true;
+      updatePendingTiles(job?.image_id);
+      renderImageList();
+      try {
+        await api.cancelJob(jobId);
+      } catch (err) {
+        if (job) job.cancel_requested = false;
+        updatePendingTiles(job?.image_id);
+        renderImageList();
+      }
+    });
+  });
+}
+
+// Tracks what the #pendingTiles container currently shows, so a routine poll
+// tick with no actual change to the job set can skip touching the DOM there
+// (see updatePendingTiles below).
+let lastPendingTilesImageId = null;
+let lastPendingTilesSignature = null;
+
+// Also renders a standby tile (matching the sidebar's "pending" chit) for
+// each queued/running job targeting `imageId`, pinned before the actual
+// results -- so a job that's still in flight shows up here as visibly busy
+// instead of the panel looking unchanged until it completes. Dim/static
+// while queued, pulsing once actually running; ComfyUI jobs (the only engine
+// that can be pulled back once submitted) get a cancel button.
+function renderResultGrid(results, activeId, imageId) {
   const uploadCardHtml = `
     <div class="result-upload-card" id="resultUploadCard" title="Upload a result image">
       <span class="result-upload-card-icon">+</span>
       <span class="result-upload-card-label">Upload</span>
     </div>
   `;
+
+  const pendingJobs = pendingJobsFor(imageId);
+  const pendingTilesHtml = `<div id="pendingTiles">${pendingJobs.map(renderPendingTileHtml).join("")}</div>`;
+  lastPendingTilesImageId = imageId;
+  lastPendingTilesSignature = pendingTilesSignature(pendingJobs);
 
   const tilesHtml = results
     .map((r) => {
@@ -1036,7 +1343,8 @@ function renderResultGrid(results, activeId) {
     })
     .join("");
 
-  els.resultGrid.innerHTML = tilesHtml + uploadCardHtml;
+  els.resultGrid.innerHTML = pendingTilesHtml + tilesHtml + uploadCardHtml;
+  wirePendingTileCancelButtons(els.resultGrid);
 
   const uploadCardEl = document.getElementById("resultUploadCard");
   uploadCardEl.addEventListener("click", () => els.uploadResultInput.click());
@@ -1753,6 +2061,13 @@ async function generate() {
     await enqueueGeneration(targetImageId);
     applyQueueOrdering();
     renderImageList();
+    if (state.currentImageId === targetImageId && state.currentImage) {
+      renderResultGrid(
+        state.currentImage.results || [],
+        state.currentImage.results?.find((r) => r.is_active_result)?.id,
+        targetImageId
+      );
+    }
     updateGenerateStatusForCurrentImage();
     renderQueueOverlay();
   } catch (e) {
@@ -1802,6 +2117,7 @@ async function pollQueue() {
   } catch (e) {
     return; // server hiccup — try again next tick
   }
+  const previousQueue = state.queue;
   state.queue = jobs;
 
   const currentIds = new Set(jobs.map((j) => j.id));
@@ -1818,6 +2134,21 @@ async function pollQueue() {
       if (job.image_id === state.currentImageId) touchedCurrentImage = true;
     }
   }
+  // A job can also disappear from /api/queue without ever being observed in a
+  // terminal state -- e.g. the tab was backgrounded and the browser throttled
+  // this poll's timer, letting the backend's brief finished-job grace window
+  // (jobs.FINISHED_GRACE_SECONDS) lapse between one poll and the next. Without
+  // this, the sidebar chit/result-panel standby tile for that job just
+  // vanishes (it's no longer "pending") while the newly-created result is
+  // never fetched, leaving a permanent gap until an unrelated reload happens
+  // to occur. Treat a previously active job going missing the same as
+  // "finished" so the library always catches up.
+  for (const job of previousQueue) {
+    if ((job.status === "queued" || job.status === "running") && !currentIds.has(job.id)) {
+      anyNewlyFinished = true;
+      if (job.image_id === state.currentImageId) touchedCurrentImage = true;
+    }
+  }
 
   if (anyNewlyFinished) {
     await loadImages();
@@ -1828,11 +2159,47 @@ async function pollQueue() {
   } else {
     applyQueueOrdering();
     renderImageList();
+    if (state.currentImage) updatePendingTiles(state.currentImageId);
   }
 
   updateGenerateStatusForCurrentImage();
   renderQueueOverlay();
 }
+
+// Patches just the #pendingTiles container in the results panel, instead of
+// the full renderResultGrid() rebuild, on every routine poll tick. Skips the
+// DOM write entirely when the pending job set hasn't actually changed (same
+// job ids, same queued-vs-running state) -- with a full rebuild, hovering a
+// standby tile made its native title tooltip blink on/off every ~1.2s poll,
+// since replacing innerHTML destroys and recreates the hovered element even
+// when its content is identical (same root cause as the sidebar thumbnail-
+// flicker fix in renderImageList() above).
+function updatePendingTiles(imageId) {
+  const pendingJobs = pendingJobsFor(imageId);
+  const signature = pendingTilesSignature(pendingJobs);
+  if (imageId === lastPendingTilesImageId && signature === lastPendingTilesSignature) return;
+  lastPendingTilesImageId = imageId;
+  lastPendingTilesSignature = signature;
+
+  const container = document.getElementById("pendingTiles");
+  if (!container) return; // results panel isn't showing this image right now
+  container.innerHTML = pendingJobs.map(renderPendingTileHtml).join("");
+  wirePendingTileCancelButtons(container);
+}
+
+// Unconditionally re-syncs the sidebar image list and job queue from the
+// server, bypassing every local-patch shortcut above -- the "did I miss an
+// update?" escape hatch for whatever those shortcuts don't cover.
+async function forceRefreshImages() {
+  els.refreshImagesBtn.disabled = true;
+  try {
+    await loadImages();
+    await pollQueue();
+  } finally {
+    els.refreshImagesBtn.disabled = false;
+  }
+}
+els.refreshImagesBtn.addEventListener("click", forceRefreshImages);
 
 function updateGenerateStatusForCurrentImage() {
   if (!state.currentImageId) return;
@@ -1851,11 +2218,36 @@ function jobElapsedSeconds(job) {
   return Date.now() / 1000 - job.created_at;
 }
 
+// "Queued" (waiting its turn, nothing happening yet) vs "running" (actively
+// generating) for display purposes. A job's top-level status is "queued"
+// only for the instant between creation and its background task starting --
+// in practice the state a user actually sees waiting is ComfyUI's own queue,
+// which this app tracks as status "running" with phase "queued" (submitted
+// to ComfyUI, not yet executing). Grok/fal have no such sub-phase, so for
+// them status alone decides.
+function jobIsQueued(job) {
+  if (job.status === "queued") return true;
+  return job.engine === "comfyui" && job.phase === "queued";
+}
+
+// Which of the three "still in the queue" visual states a job is in, for the
+// sidebar chit and results-panel standby tile alike. Cancellation is
+// cooperative (jobs.py sets cancel_requested and the generation thread
+// notices it on its next check-in), so a job can sit with cancel_requested
+// true while status is still "queued"/"running" for a moment -- that's the
+// window this needs to visibly flag as "going away" rather than looking
+// like ordinary progress.
+function jobDisplayState(job) {
+  if (job.cancel_requested) return "cancelling";
+  return jobIsQueued(job) ? "queued" : "running";
+}
+
 function formatJobStatus(job) {
   if (job.status === "done") return "Done.";
   if (job.status === "cancelled") return "Cancelled.";
   if (job.status === "error") return `Error: ${job.error || ""}`;
   const elapsed = ` (${formatElapsed(jobElapsedSeconds(job))})`;
+  if (job.cancel_requested) return `Cancelling...${elapsed}`;
   if (job.status === "queued") return `Queued...${elapsed}`;
   if (job.engine === "comfyui") {
     switch (job.phase) {

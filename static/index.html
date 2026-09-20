@@ -50,6 +50,7 @@
                 <option value="NO">Rejected</option>
               </select>
               <button id="cleanupNoBtn" class="btn-ghost small" title="Move all NO-rated results in this project to trash">🗑 Clear NO</button>
+              <button id="refreshImagesBtn" class="btn-ghost small" title="Force a full refresh of the image list, in case an update was missed">⟳</button>
             </div>
           </div>
           <label class="upload-drop" id="uploadDrop">
@@ -63,6 +64,7 @@
           <div id="uploadStatus" class="status-line"></div>
           <div class="sidebar-controls-row">
             <button id="multiSelectToggleBtn" class="btn-ghost small">☑ Select</button>
+            <button id="lineageToggleBtn" class="btn-ghost small" title="Group images under the image they were derived from (via &quot;use as new source&quot; on a result)">⑂ Lineage</button>
             <span id="multiSelectBar" class="multi-select-bar" style="display:none">
               <span id="multiSelectCount"></span>
               <button id="multiSelectMoveBtn" class="btn-ghost small">Move</button>

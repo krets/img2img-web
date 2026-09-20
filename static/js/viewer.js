@@ -9,6 +9,11 @@
  *  - diff: result layered over source with mix-blend-mode: difference
  *  - blend: opacity crossfade between the two, via a toolbar slider (not an
  *    on-image handle -- there's no natural on-image position for it)
+ *
+ * The left/"base" image is normally the selected image's own source. For an
+ * image derived from an earlier result, the host can offer ancestors as
+ * alternative bases via setCompareOptions() -- a dropdown appears in the
+ * modebar, and the host swaps the base url passed to setImages() on change.
  */
 const STORAGE_KEY = "grok_img2img.viewerMode";
 
@@ -39,7 +44,13 @@ export function initABViewer(container) {
     <div class="viewer-modebar" id="viewerModebar">
       ${MODES.map((m) => `<button class="viewer-mode-btn" data-mode="${m.id}" title="${m.title}">${m.icon}</button>`).join("")}
       <input type="range" id="blendSlider" class="viewer-blend-slider" min="0" max="100" value="50" title="Blend crossfade" style="display:none" />
-      <button class="viewer-mode-btn viewer-orientation-btn" id="orientationToggleBtn" title="Toggle row/column layout" style="display:none">⟳</button>
+      <span class="viewer-modebar-right">
+        <label class="viewer-compare" id="compareWrap" style="display:none" title="Choose which earlier version of this image to compare the result against">
+          Compare with
+          <select id="compareSelect" class="viewer-compare-select"></select>
+        </label>
+        <button class="viewer-mode-btn viewer-orientation-btn" id="orientationToggleBtn" title="Toggle row/column layout" style="display:none">⟳</button>
+      </span>
     </div>
     <div class="viewer-stage-wrap">
       <div class="ab-stage" id="abStage" data-mode="wipe-lr">
@@ -69,6 +80,10 @@ export function initABViewer(container) {
   const openBtn = container.querySelector("#abOpenBtn");
   const orientationBtn = container.querySelector("#orientationToggleBtn");
   const blendSlider = container.querySelector("#blendSlider");
+  const compareWrap = container.querySelector("#compareWrap");
+  const compareSelect = container.querySelector("#compareSelect");
+  let onCompareChange = null;
+  compareSelect.addEventListener("change", () => onCompareChange?.(compareSelect.value || null));
 
   // navigator.clipboard is only exposed in secure contexts (localhost or HTTPS);
   // over plain LAN HTTP it's undefined, so hide the button rather than let it
@@ -280,6 +295,25 @@ export function initABViewer(container) {
   applyPercent(50);
 
   return {
+    // options: [{ id, label }] of alternative base images (empty hides the
+    // dropdown); selectedId null means "this image's own source".
+    setCompareOptions(options, selectedId, onChange) {
+      onCompareChange = onChange || null;
+      compareWrap.style.display = options.length ? "inline-flex" : "none";
+      compareSelect.innerHTML = "";
+      if (!options.length) return;
+      const own = document.createElement("option");
+      own.value = "";
+      own.textContent = "This image's source";
+      compareSelect.appendChild(own);
+      for (const opt of options) {
+        const el = document.createElement("option");
+        el.value = opt.id;
+        el.textContent = opt.label;
+        compareSelect.appendChild(el);
+      }
+      compareSelect.value = selectedId || "";
+    },
     setImages(sourceUrl, resultUrl) {
       hasSource = !!sourceUrl;
       if (!sourceUrl) {

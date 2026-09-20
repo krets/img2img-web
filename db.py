@@ -486,6 +486,7 @@ def list_images(project_id, sort="recent_result", filter="all", search=None):
                    ELSE 4
                END AS eval_rank,
                (SELECT COUNT(*) FROM results WHERE results.image_id = images.id AND results.is_deleted = 0) AS result_count,
+               (SELECT parent.image_id FROM results parent WHERE parent.id = images.derived_from_result_id) AS parent_image_id,
                COALESCE(
                    (SELECT MAX(date_generated) FROM results WHERE results.image_id = images.id AND results.is_deleted = 0),
                    images.date_added

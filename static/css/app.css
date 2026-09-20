@@ -191,13 +191,36 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   padding: 6px;
   border-radius: 6px;
   cursor: pointer;
+  margin-left: calc(var(--depth, 0) * 14px); /* derived rows indent per lineage level */
 }
+.image-item:not([data-depth="0"]) { border-left: 2px solid #3a3c47; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .image-item:hover { background: #21232c; }
 .image-item.selected { background: #2a2540; }
 .image-item img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; }
 .image-item .meta { flex: 1; overflow: hidden; }
 .image-item .meta .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chits-slot { display: contents; }
+/* A parent image plus its derived images: a tinted band with top/bottom
+   borders (no side borders/padding, so thumbnails keep the list's left edge).
+   Nested groups stack their translucent tints. */
+.lineage-group {
+  display: flex; flex-direction: column; gap: 2px;
+  margin: 2px 0; padding: 2px 0;
+  background: rgba(255, 255, 255, 0.04);
+  border-top: 1px solid #383b4c; border-bottom: 1px solid #383b4c;
+}
+/* Expand/collapse strip tucked directly under the parent row it belongs to.
+   Meant to read like a drag handle: faint fixed-width lines whose colour never
+   changes; only the strip's background lights up on hover/focus. */
+.lineage-handle {
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px;
+  width: auto; margin: -2px 6px 0 calc(var(--depth, 0) * 14px + 6px); padding: 4px 0;
+  background: transparent; border: none; border-radius: 4px; cursor: pointer;
+}
+.lineage-line { display: block; height: 0; border-top: 1px solid #454858; }
+.lineage-handle.expanded .lineage-line { border-top-style: dashed; }
+.lineage-handle:hover, .lineage-handle:focus-visible { background: rgba(255, 255, 255, 0.08); outline: none; }
+.lineage-orphan { color: #8B5CF6; margin-left: 4px; }
 .image-item-check { flex-shrink: 0; width: 16px; height: 16px; margin: 0; accent-color: #8B5CF6; }
 .item-menu-btn {
   flex-shrink: 0; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
@@ -296,15 +319,35 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .chit.MAYBE { background: #f59e0b; }
 .chit.NO { background: #ef4444; }
 .chit.UNRATED { background: #3b82f6; }
-.chit.pending {
+/* .pending covers all in-flight jobs; .queued/.running further distinguish
+   "waiting its turn" (static, dim) from "actively generating" (pulsing
+   gradient), and .cancelling flags one on its way out once cancel's been
+   requested -- distinct from both, and from .error below. */
+.chit.pending.queued {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#15111d, #15111d) padding-box,
+    linear-gradient(90deg, #EC4899, #8B5CF6, #EC4899, #8B5CF6, #EC4899) border-box;
+  background-size: 100% 100%, 200% 100%;
+  animation: pending-border-march 4s linear infinite;
+}
+.chit.pending.running {
   background: linear-gradient(90deg, #EC4899, #8B5CF6);
   animation: chit-pulse 1.1s ease-in-out infinite;
 }
+.chit.pending.cancelling { background: #7c2d12; border: 1px solid #f97316; }
 .chit.error { background: #450a0a; border: 1px solid #ef4444; }
-.chit.cancelled { background: #2a2c35; border: 1px solid #6b6f7d; }
 @keyframes chit-pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
+}
+/* Queued items reuse the running pink/purple gradient, but only on a border
+   around a dim fill (padding-box layer over a border-box gradient layer).
+   The gradient is two full periods wide and shifts by exactly one, so the
+   loop is seamless. */
+@keyframes pending-border-march {
+  from { background-position: 0 0, 0% 0; }
+  to { background-position: 0 0, 100% 0; }
 }
 
 .panel-header-actions { display: flex; align-items: center; gap: 4px; }
@@ -343,13 +386,16 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap; /* the "Compare with" dropdown drops to a second row in a narrow viewer */
   padding: 6px 10px;
   border-bottom: 1px solid #2a2c35;
   background: #14151a;
 }
 .viewer-mode-btn { padding: 4px 9px; font-size: 13px; line-height: 1.2; }
 .viewer-mode-btn.active { background: rgba(139,92,246,0.25); border-color: #8B5CF6; color: #e6e6eb; }
-.viewer-orientation-btn { margin-left: auto; }
+.viewer-modebar-right { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.viewer-compare { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9ea2b0; min-width: 0; }
+.viewer-compare-select { max-width: 260px; padding: 3px 6px; font-size: 12px; }
 .viewer-blend-slider {
   flex: 1;
   max-width: 260px;
@@ -487,6 +533,9 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
 .provenance-line { font-size: 12px; color: #9ea2b0; margin: -6px 0 12px; line-height: 1.4; }
 .provenance-line a { color: #8B5CF6; }
+.provenance-line .lineage-compare { margin-left: 6px; white-space: nowrap; }
+.provenance-line .lineage-trail { margin-top: 4px; color: #9ea2b0; }
+.provenance-line .lineage-trail strong { color: #e6e6eb; font-weight: 600; }
 .provenance-line a:hover { text-decoration: underline; }
 
 .field label { font-size: 12px; color: #9ea2b0; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -548,6 +597,10 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .revised-prompt { font-size: 12px; color: #9ea2b0; font-style: italic; white-space: pre-wrap; }
 
 .result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* Groups standby tiles for JS to patch as a unit without itself becoming a
+   grid cell -- its .pending-tile children lay out as direct grid items of
+   .result-grid, same as if there were no wrapper at all. */
+#pendingTiles { display: contents; }
 .result-tile {
   position: relative;
   aspect-ratio: 1;
@@ -567,6 +620,54 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .result-tile.active.MAYBE { border-color: #f59e0b; }
 .result-tile.active.NO { border-color: #ef4444; }
 .result-tile.active.UNRATED { border-color: #3b82f6; }
+.result-tile.pending-tile {
+  position: relative;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.result-tile.pending-tile.queued {
+  border: 2px solid transparent;
+  background:
+    linear-gradient(#15111d, #15111d) padding-box,
+    linear-gradient(90deg, #EC4899, #8B5CF6, #EC4899, #8B5CF6, #EC4899) border-box;
+  background-size: 100% 100%, 200% 100%;
+  animation: pending-border-march 4s linear infinite;
+}
+.result-tile.pending-tile.running {
+  background: linear-gradient(120deg, rgba(236,72,153,0.12), rgba(139,92,246,0.12));
+  animation: chit-pulse 1.4s ease-in-out infinite;
+}
+.result-tile.pending-tile.cancelling {
+  background: rgba(249,115,22,0.16);
+  animation: chit-pulse 0.9s ease-in-out infinite;
+}
+.pending-tile-label { font-size: 11px; color: #9ea2b0; }
+.pending-tile.queued .spinner { animation-play-state: paused; opacity: 0.4; }
+.pending-tile.cancelling .spinner { border-top-color: #f97316; }
+.pending-tile-cancel {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+.pending-tile-cancel:hover { background: rgba(239,68,68,0.85); }
+.pending-tile-cancel:disabled { opacity: 0.5; cursor: default; }
 .result-tile-copy {
   position: absolute;
   top: 4px;

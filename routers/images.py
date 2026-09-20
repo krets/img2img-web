@@ -248,7 +248,35 @@ def _resolve_provenance(image):
         "source_image_id": result["image_id"],
         "source_image_display_name": source_image["display_name"] if source_image else None,
         "prompt_text": prompt_text,
+        "ancestors": _resolve_ancestors(image),
     }
+
+
+def _resolve_ancestors(image, max_depth=50):
+    """Walks derived_from_result_id -> result.image_id upward, returning the
+    image's ancestors nearest-first (parent, grandparent, ... root). Stops at
+    the first link that no longer resolves (result or image hard-deleted) or
+    if it ever revisits an image (merge_images can in principle create a loop).
+    Trashed ancestors are included and flagged, since their files are still
+    on disk and still usable for comparison until the trash is purged.
+    """
+    chain = []
+    seen = {image["id"]}
+    current = image
+    while len(chain) < max_depth:
+        result_id = current.get("derived_from_result_id")
+        result = db.get_result(result_id) if result_id else None
+        parent = db.get_image(result["image_id"]) if result else None
+        if not parent or parent["id"] in seen:
+            break
+        seen.add(parent["id"])
+        chain.append({
+            "id": parent["id"],
+            "display_name": parent["display_name"],
+            "is_deleted": bool(parent["is_deleted"]),
+        })
+        current = parent
+    return chain
 
 
 @router.get("/api/images/{image_id}")

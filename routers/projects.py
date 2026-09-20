@@ -45,7 +45,10 @@ def get_project_trash(project_id: str):
 def update_project(project_id: str, body: ProjectUpdateIn):
     if not db.get_project(project_id):
         raise HTTPException(404, "Project not found")
-    return db.update_project(project_id, name=body.name, description=body.description)
+    name = body.name.strip() if body.name is not None else None
+    if name == "":
+        raise HTTPException(400, "Project name cannot be empty")
+    return db.update_project(project_id, name=name, description=body.description)
 
 
 @router.post("/{project_id}/archive")

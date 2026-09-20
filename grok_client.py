@@ -67,3 +67,43 @@ def check_connection(api_key):
     if response.status_code in (401, 403):
         return False, "API key rejected (unauthorized)."
     return False, f"Unexpected response: {response.status_code}"
+
+
+def get_balance(api_key, management_key):
+    """Reads the remaining prepaid credit balance from xAI's Management API.
+    That API needs a management key (the inference key is rejected), but the
+    team id it wants is looked up from the inference key. Returns
+    (ok, message, balance_usd); balance_usd is None on failure.
+    """
+    if not management_key:
+        return False, "Add a management key to show the balance.", None
+    if not api_key:
+        return False, "No API key configured.", None
+    try:
+        key_info = requests.get(
+            "https://api.x.ai/v1/api-key",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        if key_info.status_code != 200:
+            return False, f"Couldn't look up the team ID (status {key_info.status_code}).", None
+        team_id = key_info.json().get("team_id")
+        if not team_id:
+            return False, "Couldn't look up the team ID from the API key.", None
+        response = requests.get(
+            f"https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/balance",
+            headers={"Authorization": f"Bearer {management_key}"},
+            timeout=10,
+        )
+    except Exception as e:
+        return False, f"Network error: {e}", None
+
+    if response.status_code in (401, 403):
+        return False, "Management key rejected (unauthorized).", None
+    if response.status_code != 200:
+        return False, f"Unexpected response: {response.status_code}", None
+    try:
+        # The ledger total is a negated amount in USD cents: -1000 means $10.00 remaining.
+        return True, "OK", -int(response.json()["total"]["val"]) / 100
+    except (ValueError, KeyError, TypeError):
+        return False, "Unexpected response shape from xAI billing API.", None

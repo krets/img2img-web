@@ -237,3 +237,32 @@ def check_connection(api_key):
     if response.status_code in (200, 422):
         return True, "Connected."
     return False, f"Unexpected response: {response.status_code}"
+
+
+def get_balance(api_key):
+    """Reads the remaining prepaid credit balance. The billing endpoint only
+    accepts an ADMIN-scope key, which also works for generation, so the one
+    configured key can serve both. Returns (ok, message, balance_usd);
+    balance_usd is None on failure.
+    """
+    if not api_key:
+        return False, "No API key configured.", None
+    try:
+        response = requests.get(
+            "https://api.fal.ai/v1/account/billing",
+            params={"expand": "credits"},
+            headers={"Authorization": f"Key {api_key}"},
+            timeout=10,
+        )
+    except Exception as e:
+        return False, f"Network error: {e}", None
+
+    if response.status_code in (401, 403):
+        return False, "Balance needs an ADMIN-scope API key (generation still works with the current one).", None
+    if response.status_code != 200:
+        return False, f"Unexpected response: {response.status_code}", None
+    try:
+        credits = response.json()["credits"]
+        return True, "OK", float(credits["current_balance"])
+    except (ValueError, KeyError, TypeError):
+        return False, "Unexpected response shape from fal.ai billing API.", None

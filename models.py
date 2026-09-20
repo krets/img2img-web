@@ -109,6 +109,7 @@ class ConfigIn(BaseModel):
     comfyui_workflow_path: Optional[str] = None
     fal_api_key: Optional[str] = None
     fal_model: Optional[str] = None
+    xai_management_key: Optional[str] = None
 
 
 class ExportRequestIn(BaseModel):

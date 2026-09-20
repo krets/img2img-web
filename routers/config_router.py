@@ -16,12 +16,15 @@ def _mask(key):
 def _masked(config):
     xai_key = config.get("xai_api_key", "")
     fal_key = config.get("fal_api_key", "")
+    xai_management_key = config.get("xai_management_key", "")
     return {
         **config,
         "xai_api_key": _mask(xai_key),
         "has_api_key": bool(xai_key),
         "fal_api_key": _mask(fal_key),
         "has_fal_api_key": bool(fal_key),
+        "xai_management_key": _mask(xai_management_key),
+        "has_xai_management_key": bool(xai_management_key),
     }
 
 
@@ -49,6 +52,8 @@ def update_config(body: ConfigIn):
         config["fal_api_key"] = body.fal_api_key
     if body.fal_model is not None:
         config["fal_model"] = body.fal_model
+    if body.xai_management_key is not None and body.xai_management_key != "":
+        config["xai_management_key"] = body.xai_management_key
     cfg.save_config(config)
     return _masked(config)
 
@@ -78,6 +83,18 @@ def comfyui_free():
 def check_fal_connection():
     ok, message = fal_client.check_connection(cfg.get_fal_api_key())
     return {"ok": ok, "message": message}
+
+
+@router.get("/balances")
+def get_balances():
+    fal_ok, fal_message, fal_balance = fal_client.get_balance(cfg.get_fal_api_key())
+    grok_ok, grok_message, grok_balance = grok_client.get_balance(
+        cfg.get_api_key(), cfg.get_xai_management_key()
+    )
+    return {
+        "fal": {"ok": fal_ok, "message": fal_message, "balance": fal_balance},
+        "grok": {"ok": grok_ok, "message": grok_message, "balance": grok_balance},
+    }
 
 
 @router.get("/fal-models")

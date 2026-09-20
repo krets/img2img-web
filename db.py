@@ -290,16 +290,27 @@ def _unique_project_slug(conn, name):
     return slug
 
 
+# Live (non-trashed) counts plus the time of the newest result (NULL until the
+# project has one), for the project manager panel. Results only count while
+# their image is live.
+_PROJECT_STATS_SELECT = """
+    SELECT p.*,
+        (SELECT COUNT(*) FROM images i
+          WHERE i.project_id = p.id AND i.is_deleted = 0) AS image_count,
+        (SELECT COUNT(*) FROM results r JOIN images i ON i.id = r.image_id
+          WHERE i.project_id = p.id AND i.is_deleted = 0 AND r.is_deleted = 0) AS result_count,
+        (SELECT COUNT(*) FROM reference_images ri
+          WHERE ri.project_id = p.id AND ri.is_deleted = 0) AS reference_count,
+        (SELECT MAX(r.date_generated) FROM results r JOIN images i ON i.id = r.image_id
+          WHERE i.project_id = p.id AND i.is_deleted = 0 AND r.is_deleted = 0) AS last_generated
+    FROM projects p
+"""
+
+
 def list_projects(include_archived=False):
     conn = get_connection()
-    if include_archived:
-        rows = conn.execute(
-            "SELECT * FROM projects WHERE is_deleted = 0 ORDER BY date_created ASC"
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM projects WHERE is_archived = 0 AND is_deleted = 0 ORDER BY date_created ASC"
-        ).fetchall()
+    where = "p.is_deleted = 0" if include_archived else "p.is_archived = 0 AND p.is_deleted = 0"
+    rows = conn.execute(f"{_PROJECT_STATS_SELECT} WHERE {where} ORDER BY p.date_created ASC").fetchall()
     return [dict(r) for r in rows]
 
 

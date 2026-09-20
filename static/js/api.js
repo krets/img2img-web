@@ -130,6 +130,7 @@ export const api = {
   comfyuiFree: () => request("POST", "/config/comfyui-free"),
   checkFalConnection: () => request("POST", "/config/check-fal-connection"),
   getFalModels: () => request("GET", "/config/fal-models"),
+  getBalances: () => request("GET", "/config/balances"),
 
   // Export
   previewExport: (projectId, statusFilter) =>

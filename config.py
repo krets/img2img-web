@@ -41,6 +41,9 @@ DEFAULT_CONFIG = {
     "comfyui_workflow_path": "comfyui_flux2_imageedit.json",
     "fal_api_key": "",
     "fal_model": "fal-ai/flux-pro/kontext",
+    # Only used to read the account balance for the Settings panel -- xAI's
+    # billing endpoint rejects the regular inference key.
+    "xai_management_key": "",
 }
 
 
@@ -81,6 +84,13 @@ def get_fal_api_key():
     if config.get("fal_api_key"):
         return config["fal_api_key"]
     return os.getenv("FAL_KEY", "")
+
+
+def get_xai_management_key():
+    config = load_config()
+    if config.get("xai_management_key"):
+        return config["xai_management_key"]
+    return os.getenv("XAI_MANAGEMENT_KEY", "")
 
 
 def comfyui_workflow_path(config=None):

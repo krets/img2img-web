@@ -49,9 +49,10 @@ function saveCollapsedImageIds() {
 const handledTerminalJobIds = new Set();
 
 const els = {
-  projectSwitcher: document.getElementById("projectSwitcher"),
-  newProjectBtn: document.getElementById("newProjectBtn"),
-  deleteProjectBtn: document.getElementById("deleteProjectBtn"),
+  projectMenu: document.getElementById("projectMenu"),
+  projectMenuBtn: document.getElementById("projectMenuBtn"),
+  projectMenuName: document.getElementById("projectMenuName"),
+  projectPanel: document.getElementById("projectPanel"),
   trashBtn: document.getElementById("trashBtn"),
   exportBtn: document.getElementById("exportBtn"),
   settingsBtn: document.getElementById("settingsBtn"),
@@ -308,34 +309,412 @@ function showPromptModal(text) {
 // Projects
 // ---------------------------------------------------------------------------
 
-async function loadProjects() {
-  state.projects = await api.listProjects();
-  els.projectSwitcher.innerHTML = state.projects
-    .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
-    .join("");
+const RECENT_PROJECT_COUNT = 4;
+const PROJECT_OPENED_KEY = "grok_img2img.projectOpenedAt";
+const PROJECT_SORT_KEY = "grok_img2img.projectSort";
 
-  const lastId = localStorage.getItem("lastProjectId");
-  const match = state.projects.find((p) => p.id === lastId);
-  state.currentProjectId = match ? match.id : state.projects[0]?.id || null;
-
-  if (state.currentProjectId) {
-    els.projectSwitcher.value = state.currentProjectId;
-    await Promise.all([loadImages(), loadReferenceImages()]);
+// When each project was last opened *in this browser* ({ id: epoch ms }) --
+// drives the panel's Recent list. Client-side like lastProjectId; a project
+// never opened here ranks by its last generation, then its creation date.
+const projectOpenedAt = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(PROJECT_OPENED_KEY)) || {};
+  } catch {
+    return {};
+  }
+})();
+function markProjectOpened(id) {
+  projectOpenedAt[id] = Date.now();
+  try {
+    localStorage.setItem(PROJECT_OPENED_KEY, JSON.stringify(projectOpenedAt));
+  } catch {
+    // storage full/unavailable -- recents just won't persist
   }
 }
 
-els.projectSwitcher.addEventListener("change", async () => {
-  state.currentProjectId = els.projectSwitcher.value;
-  localStorage.setItem("lastProjectId", state.currentProjectId);
+// SQLite CURRENT_TIMESTAMP is "YYYY-MM-DD HH:MM:SS" in UTC, with no zone marker.
+function parseDbTime(ts) {
+  return ts ? new Date(ts.replace(" ", "T") + "Z").getTime() : 0;
+}
+// 0 for a project with no results yet, so those sort below any generated one.
+function projectGeneratedTime(p) {
+  return parseDbTime(p.last_generated);
+}
+function formatRelativeTime(ms) {
+  if (!ms) return "";
+  const minutes = Math.floor(Math.max(0, Date.now() - ms) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ms).toLocaleDateString();
+}
+
+const PROJECT_SORTS = {
+  recent: {
+    label: "Recently opened",
+    cmp: (a, b) =>
+      (projectOpenedAt[b.id] || 0) - (projectOpenedAt[a.id] || 0) ||
+      projectGeneratedTime(b) - projectGeneratedTime(a) ||
+      parseDbTime(b.date_created) - parseDbTime(a.date_created),
+  },
+  generated: {
+    label: "Last generated",
+    cmp: (a, b) => projectGeneratedTime(b) - projectGeneratedTime(a) || parseDbTime(b.date_created) - parseDbTime(a.date_created),
+  },
+  name: { label: "Name (A–Z)", cmp: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }) },
+  created: { label: "Newest created", cmp: (a, b) => parseDbTime(b.date_created) - parseDbTime(a.date_created) },
+  images: { label: "Most sources", cmp: (a, b) => b.image_count - a.image_count },
+  results: { label: "Most results", cmp: (a, b) => b.result_count - a.result_count },
+};
+
+// UI state of the project manager panel (the dropdown under the topbar's
+// project button).
+const projectPanel = {
+  open: false,
+  sort: PROJECT_SORTS[localStorage.getItem(PROJECT_SORT_KEY)] ? localStorage.getItem(PROJECT_SORT_KEY) : "recent",
+  filter: "",
+  renamingId: null,
+  confirmDeleteId: null,
+};
+
+async function refreshProjects() {
+  state.projects = await api.listProjects();
+  renderProjectMenuButton();
+}
+
+async function loadProjects() {
+  await refreshProjects();
+
+  const lastId = localStorage.getItem("lastProjectId");
+  const match = state.projects.find((p) => p.id === lastId);
+  const fallback = [...state.projects].sort(PROJECT_SORTS.recent.cmp)[0];
+  state.currentProjectId = match ? match.id : fallback?.id || null;
+  if (state.currentProjectId) {
+    localStorage.setItem("lastProjectId", state.currentProjectId);
+    // Seeds the recent list for whatever was already open before it existed.
+    if (!projectOpenedAt[state.currentProjectId]) markProjectOpened(state.currentProjectId);
+  }
+  renderProjectMenuButton();
+
+  if (state.currentProjectId) {
+    await Promise.all([loadImages(), loadReferenceImages()]);
+  } else {
+    // Last project was just trashed -- don't leave its images on screen.
+    state.images = [];
+    state.referenceImages = [];
+    renderImageList();
+    renderReferenceLibrary();
+  }
+}
+
+function resetProjectSelection() {
   state.currentImageId = null;
   state.currentImage = null;
   state.referenceImageIds = [];
   renderReferenceImages();
   renderDetails();
+}
+
+// Makes `id` the open project and bumps it to the top of the recent list.
+async function switchProject(id) {
+  closeProjectPanel();
+  markProjectOpened(id);
+  if (id === state.currentProjectId) return;
+  state.currentProjectId = id;
+  localStorage.setItem("lastProjectId", id);
+  renderProjectMenuButton();
+  resetProjectSelection();
   await Promise.all([loadImages(), loadReferenceImages()]);
+}
+
+function renderProjectMenuButton() {
+  const current = state.projects.find((p) => p.id === state.currentProjectId);
+  const name = current ? current.name : state.projects.length ? "Select a project" : "No projects";
+  els.projectMenuName.textContent = name;
+  els.projectMenuBtn.title = current ? `${name} — switch, rename or delete projects` : "Switch, rename or delete projects";
+}
+
+function openProjectPanel() {
+  projectPanel.open = true;
+  projectPanel.filter = "";
+  projectPanel.renamingId = null;
+  projectPanel.confirmDeleteId = null;
+  els.projectMenuBtn.setAttribute("aria-expanded", "true");
+  els.projectPanel.style.display = "flex";
+  els.projectPanel.innerHTML = `
+    <div class="project-panel-head">
+      <input id="projectFilterInput" class="project-panel-search" type="text" placeholder="Search projects..." autocomplete="off" />
+      <button id="projectNewBtn" class="btn-ghost small" type="button">+ New Project</button>
+    </div>
+    <div id="projectPanelRecent" class="project-panel-recent"></div>
+    <div class="project-panel-subhead">
+      <span id="projectAllTitle" class="project-section-title"></span>
+      <select id="projectSortSelect" title="Sort the project list">
+        ${Object.entries(PROJECT_SORTS)
+          .map(([key, s]) => `<option value="${key}"${key === projectPanel.sort ? " selected" : ""}>${s.label}</option>`)
+          .join("")}
+      </select>
+    </div>
+    <div id="projectPanelList" class="project-panel-list"></div>
+    <div id="projectPanelStatus" class="project-panel-status"></div>
+  `;
+  renderProjectPanelRows();
+  els.projectPanel.querySelector("#projectFilterInput").focus();
+  // The cached list may be stale on counts (uploads, generations, trashing
+  // since it was loaded); refresh it in the background and redraw.
+  api
+    .listProjects()
+    .then((projects) => {
+      if (!projectPanel.open) return;
+      const changed = JSON.stringify(projects) !== JSON.stringify(state.projects);
+      state.projects = projects;
+      renderProjectMenuButton();
+      // Skipped when nothing moved so rows aren't swapped out from under the cursor.
+      if (changed && !projectPanel.renamingId && !projectPanel.confirmDeleteId) renderProjectPanelRows();
+    })
+    .catch(() => {});
+}
+
+function closeProjectPanel() {
+  if (!projectPanel.open) return;
+  projectPanel.open = false;
+  projectPanel.renamingId = null;
+  projectPanel.confirmDeleteId = null;
+  els.projectMenuBtn.setAttribute("aria-expanded", "false");
+  els.projectPanel.style.display = "none";
+  els.projectPanel.innerHTML = "";
+}
+
+function setProjectPanelStatus(message) {
+  const el = els.projectPanel.querySelector("#projectPanelStatus");
+  if (el) el.textContent = message || "";
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// timeMode: which timestamp to show on the right -- "recent" (last opened),
+// "generated" or "created".
+function renderProjectRow(p, timeMode) {
+  const cls = `project-row${p.id === state.currentProjectId ? " current" : ""}`;
+
+  if (projectPanel.confirmDeleteId === p.id) {
+    return `
+      <div class="${cls} confirming" data-project-id="${p.id}">
+        <div class="project-row-main">
+          <div class="project-row-name">Move “${escapeHtml(p.name)}” to Trash?</div>
+          <div class="project-row-desc">Its ${plural(p.image_count, "source")} and ${plural(p.result_count, "result")} can be restored from Trash for 2 days.</div>
+        </div>
+        <div class="project-row-actions visible">
+          <button class="btn-ghost small" type="button" data-action="cancel-delete">Cancel</button>
+          <button class="btn-danger small" type="button" data-action="confirm-delete">Move to Trash</button>
+        </div>
+      </div>`;
+  }
+
+  const nameHtml =
+    projectPanel.renamingId === p.id
+      ? `<input class="project-row-rename" type="text" data-project-id="${p.id}" />`
+      : `<div class="project-row-name">${escapeHtml(p.name)}</div>`;
+
+  let timeLabel;
+  if (timeMode === "created") timeLabel = `created ${formatRelativeTime(parseDbTime(p.date_created))}`;
+  else if (timeMode === "generated")
+    timeLabel = p.last_generated ? `generated ${formatRelativeTime(projectGeneratedTime(p))}` : "no results yet";
+  else timeLabel = projectOpenedAt[p.id] ? `opened ${formatRelativeTime(projectOpenedAt[p.id])}` : "not opened yet";
+
+  return `
+    <div class="${cls}" data-project-id="${p.id}">
+      <div class="project-row-main">
+        ${nameHtml}
+        ${p.description ? `<div class="project-row-desc">${escapeHtml(p.description)}</div>` : ""}
+        <div class="project-row-stats">
+          <span>${plural(p.image_count, "source")}</span>
+          <span>${plural(p.result_count, "result")}</span>
+          <span>${plural(p.reference_count, "reference")}</span>
+          <span class="project-row-time">${timeLabel}</span>
+        </div>
+      </div>
+      <div class="project-row-actions">
+        <button class="project-row-btn" type="button" data-action="rename" title="Rename project">✎</button>
+        <button class="project-row-btn danger" type="button" data-action="delete" title="Move project to Trash">✕</button>
+      </div>
+    </div>`;
+}
+
+// Redraws just the row lists (not the search box / sort select), so typing in
+// the filter keeps its focus.
+function renderProjectPanelRows() {
+  const recentEl = els.projectPanel.querySelector("#projectPanelRecent");
+  const listEl = els.projectPanel.querySelector("#projectPanelList");
+  if (!recentEl || !listEl) return;
+
+  const needle = projectPanel.filter.trim().toLowerCase();
+  const matches = state.projects.filter(
+    (p) => !needle || p.name.toLowerCase().includes(needle) || (p.description || "").toLowerCase().includes(needle),
+  );
+  const sorted = [...matches].sort(PROJECT_SORTS[projectPanel.sort].cmp);
+  const timeMode = projectPanel.sort === "generated" || projectPanel.sort === "created" ? projectPanel.sort : "recent";
+
+  // With RECENT_PROJECT_COUNT projects or fewer, Recent would just repeat the
+  // whole list; while searching, it would hide matches behind unrelated rows.
+  if (!needle && state.projects.length > RECENT_PROJECT_COUNT) {
+    const recent = [...state.projects].sort(PROJECT_SORTS.recent.cmp).slice(0, RECENT_PROJECT_COUNT);
+    recentEl.innerHTML = `<div class="project-section-title">Recent</div>${recent.map((p) => renderProjectRow(p, "recent")).join("")}`;
+    recentEl.style.display = "";
+  } else {
+    recentEl.innerHTML = "";
+    recentEl.style.display = "none";
+  }
+
+  els.projectPanel.querySelector("#projectAllTitle").textContent = needle
+    ? `${matches.length} of ${plural(state.projects.length, "project")}`
+    : `All projects (${state.projects.length})`;
+  listEl.innerHTML = sorted.length
+    ? sorted.map((p) => renderProjectRow(p, timeMode)).join("")
+    : `<div class="empty-state">${state.projects.length ? "No projects match." : "No projects yet."}</div>`;
+
+  // Rename swaps the name for an input; fill and focus it after the redraw.
+  const renameInput = els.projectPanel.querySelector(".project-row-rename");
+  if (renameInput) startRenameInput(renameInput);
+}
+
+function startRenameInput(input) {
+  const project = state.projects.find((p) => p.id === input.dataset.projectId);
+  input.value = project?.name || "";
+  input.focus();
+  input.select();
+  let settled = false;
+  const finish = (save) => {
+    if (settled) return;
+    settled = true;
+    const value = input.value;
+    projectPanel.renamingId = null;
+    if (save) renameProject(project.id, value);
+    else renderProjectPanelRows();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.stopPropagation(); // rename only -- keep the panel open
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+async function renameProject(id, newName) {
+  const project = state.projects.find((p) => p.id === id);
+  const name = newName.trim();
+  if (project && name && name !== project.name) {
+    try {
+      const updated = await api.updateProject(id, { name });
+      project.name = updated.name;
+      renderProjectMenuButton();
+      setProjectPanelStatus("");
+    } catch (e) {
+      setProjectPanelStatus(`Rename failed: ${e.message}`);
+    }
+  }
+  renderProjectPanelRows();
+}
+
+async function deleteProject(id) {
+  projectPanel.confirmDeleteId = null;
+  try {
+    await api.deleteProject(id);
+  } catch (e) {
+    setProjectPanelStatus(`Delete failed: ${e.message}`);
+    renderProjectPanelRows();
+    return;
+  }
+  setProjectPanelStatus("");
+  if (id === state.currentProjectId) {
+    resetProjectSelection();
+    await loadProjects(); // falls back to the most recent remaining project
+  } else {
+    await refreshProjects();
+  }
+  renderProjectPanelRows();
+}
+
+els.projectMenuBtn.addEventListener("click", () => {
+  if (projectPanel.open) closeProjectPanel();
+  else openProjectPanel();
 });
 
-els.newProjectBtn.addEventListener("click", () => {
+els.projectPanel.addEventListener("input", (e) => {
+  if (e.target.id !== "projectFilterInput") return;
+  projectPanel.filter = e.target.value;
+  renderProjectPanelRows();
+});
+
+els.projectPanel.addEventListener("change", (e) => {
+  if (e.target.id !== "projectSortSelect") return;
+  projectPanel.sort = e.target.value;
+  try {
+    localStorage.setItem(PROJECT_SORT_KEY, projectPanel.sort);
+  } catch {
+    // sort choice just won't persist
+  }
+  renderProjectPanelRows();
+});
+
+els.projectPanel.addEventListener("keydown", (e) => {
+  // Enter in the search box opens the top match.
+  if (e.key !== "Enter" || e.target.id !== "projectFilterInput") return;
+  const first = els.projectPanel.querySelector("#projectPanelList .project-row");
+  if (first) switchProject(first.dataset.projectId);
+});
+
+els.projectPanel.addEventListener("click", (e) => {
+  if (e.target.id === "projectNewBtn") {
+    closeProjectPanel();
+    openNewProjectModal();
+    return;
+  }
+  const row = e.target.closest(".project-row");
+  if (!row) return;
+  const id = row.dataset.projectId;
+  const action = e.target.closest("[data-action]")?.dataset.action;
+
+  if (action === "rename") {
+    projectPanel.confirmDeleteId = null;
+    projectPanel.renamingId = id;
+    renderProjectPanelRows();
+  } else if (action === "delete") {
+    projectPanel.renamingId = null;
+    projectPanel.confirmDeleteId = id;
+    renderProjectPanelRows();
+  } else if (action === "cancel-delete") {
+    projectPanel.confirmDeleteId = null;
+    renderProjectPanelRows();
+  } else if (action === "confirm-delete") {
+    deleteProject(id);
+  } else if (!row.classList.contains("confirming") && !e.target.closest(".project-row-rename")) {
+    switchProject(id);
+  }
+});
+
+document.addEventListener("mousedown", (e) => {
+  if (projectPanel.open && !els.projectMenu.contains(e.target)) closeProjectPanel();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !projectPanel.open) return;
+  if (projectPanel.confirmDeleteId) {
+    projectPanel.confirmDeleteId = null;
+    renderProjectPanelRows();
+  } else {
+    closeProjectPanel();
+    els.projectMenuBtn.focus();
+  }
+});
+
+function openNewProjectModal() {
   const modal = openModal(`
     <h3>New Project</h3>
     <div class="field"><label>Name</label><input id="mName" type="text" /></div>
@@ -354,35 +733,14 @@ els.newProjectBtn.addEventListener("click", () => {
     const description = modal.querySelector("#mDesc").value.trim();
     const project = await api.createProject(name, description);
     closeModal();
-    await loadProjects();
-    state.currentProjectId = project.id;
-    localStorage.setItem("lastProjectId", project.id);
-    els.projectSwitcher.value = project.id;
-    await Promise.all([loadImages(), loadReferenceImages()]);
+    await refreshProjects();
+    await switchProject(project.id);
   };
   modal.querySelector("#mCreate").addEventListener("click", createProject);
   nameInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") createProject();
   });
-});
-
-els.deleteProjectBtn.addEventListener("click", async () => {
-  if (!state.currentProjectId) return;
-  const project = state.projects.find((p) => p.id === state.currentProjectId);
-  const name = project?.name || "this project";
-  const ok = await openConfirmModal({
-    title: "Move to Trash",
-    message: `Move "${name}" (and all of its images/results) to Trash? You can restore it within 2 days.`,
-    confirmLabel: "Move to Trash",
-    danger: true,
-  });
-  if (!ok) return;
-  await api.deleteProject(state.currentProjectId);
-  state.currentImageId = null;
-  state.currentImage = null;
-  renderDetails();
-  await loadProjects();
-});
+}
 
 // ---------------------------------------------------------------------------
 // Images
@@ -2684,7 +3042,7 @@ els.settingsBtn.addEventListener("click", async () => {
       <div class="settings-section-title">Grok (xAI)</div>
       <div class="field">
         <label>API Key</label>
-        ${config.has_api_key ? `<div class="field-hint">Current: ${config.xai_api_key}</div>` : ""}
+        <div id="mKeyHint" class="field-hint">${config.has_api_key ? `Current: ${config.xai_api_key}` : ""}</div>
         <input id="mKey" type="password" placeholder="Enter to replace..." />
       </div>
       <div class="field"><label>Default Model</label><input id="mModel" type="text" value="${config.default_model}" /></div>
@@ -2692,6 +3050,15 @@ els.settingsBtn.addEventListener("click", async () => {
       <div class="settings-section-actions">
         <button id="mCheck" class="btn-ghost small">Check Connection</button>
         <div id="mConnStatus" class="status-line"></div>
+      </div>
+      <div class="field">
+        <label>Management Key <span class="hint">(optional; only needed to show the balance)</span></label>
+        <div id="mXaiMgmtHint" class="field-hint">${config.has_xai_management_key ? `Current: ${config.xai_management_key}` : ""}</div>
+        <input id="mXaiMgmtKey" type="password" placeholder="Enter to replace..." />
+      </div>
+      <div class="settings-section-actions">
+        <button id="mCheckXaiBalance" class="btn-ghost small">Check Balance</button>
+        <div id="mXaiBalanceStatus" class="status-line"></div>
       </div>
     </div>
     <div class="settings-section">
@@ -2716,7 +3083,7 @@ els.settingsBtn.addEventListener("click", async () => {
       <div class="settings-section-title">fal.ai</div>
       <div class="field">
         <label>API Key</label>
-        ${config.has_fal_api_key ? `<div class="field-hint">Current: ${config.fal_api_key}</div>` : ""}
+        <div id="mFalKeyHint" class="field-hint">${config.has_fal_api_key ? `Current: ${config.fal_api_key}` : ""}</div>
         <input id="mFalKey" type="password" placeholder="Enter to replace..." />
       </div>
       <div class="field">
@@ -2739,6 +3106,10 @@ els.settingsBtn.addEventListener("click", async () => {
       <div class="settings-section-actions">
         <button id="mCheckFal" class="btn-ghost small">Check Connection</button>
         <div id="mFalConnStatus" class="status-line"></div>
+      </div>
+      <div class="settings-section-actions">
+        <button id="mCheckFalBalance" class="btn-ghost small" title="Showing the balance needs an ADMIN-scope API key">Check Balance</button>
+        <div id="mFalBalanceStatus" class="status-line"></div>
       </div>
     </div>
     <div class="modal-actions">
@@ -2789,6 +3160,52 @@ els.settingsBtn.addEventListener("click", async () => {
     const res = await api.checkFalConnection();
     modal.querySelector("#mFalConnStatus").textContent = res.message;
   });
+  const balanceEls = {
+    grok: modal.querySelector("#mXaiBalanceStatus"),
+    fal: modal.querySelector("#mFalBalanceStatus"),
+  };
+  const showBalance = (provider, res) => {
+    balanceEls[provider].textContent = res.ok ? `Balance: $${res.balance.toFixed(2)}` : res.message;
+  };
+  // Persists any keys typed into the modal first, so a key entered just now is
+  // used without having to Save and reopen Settings.
+  const checkBalance = async (provider) => {
+    balanceEls[provider].textContent = "Checking...";
+    try {
+      const updated = await api.updateConfig({
+        xai_api_key: modal.querySelector("#mKey").value || undefined,
+        xai_management_key: modal.querySelector("#mXaiMgmtKey").value || undefined,
+        fal_api_key: modal.querySelector("#mFalKey").value || undefined,
+      });
+      for (const [inputId, hintId, has, masked] of [
+        ["#mKey", "#mKeyHint", updated.has_api_key, updated.xai_api_key],
+        ["#mXaiMgmtKey", "#mXaiMgmtHint", updated.has_xai_management_key, updated.xai_management_key],
+        ["#mFalKey", "#mFalKeyHint", updated.has_fal_api_key, updated.fal_api_key],
+      ]) {
+        modal.querySelector(inputId).value = "";
+        modal.querySelector(hintId).textContent = has ? `Current: ${masked}` : "";
+      }
+      showBalance(provider, (await api.getBalances())[provider]);
+    } catch (e) {
+      balanceEls[provider].textContent = `Balance check failed: ${e.message}`;
+    }
+  };
+  modal.querySelector("#mCheckXaiBalance").addEventListener("click", () => checkBalance("grok"));
+  modal.querySelector("#mCheckFalBalance").addEventListener("click", () => checkBalance("fal"));
+  const grokBalanceConfigured = config.has_api_key && config.has_xai_management_key;
+  if (grokBalanceConfigured || config.has_fal_api_key) {
+    if (grokBalanceConfigured) balanceEls.grok.textContent = "Loading balance...";
+    if (config.has_fal_api_key) balanceEls.fal.textContent = "Loading balance...";
+    api
+      .getBalances()
+      .then((res) => {
+        if (grokBalanceConfigured) showBalance("grok", res.grok);
+        if (config.has_fal_api_key) showBalance("fal", res.fal);
+      })
+      .catch((e) => {
+        for (const el of Object.values(balanceEls)) if (el.textContent === "Loading balance...") el.textContent = `Balance unavailable: ${e.message}`;
+      });
+  }
   modal.querySelector("#mSave").addEventListener("click", async () => {
     const falModelSelected = modal.querySelector("#mFalModel").value;
     const falModel =
@@ -2804,6 +3221,7 @@ els.settingsBtn.addEventListener("click", async () => {
       comfyui_workflow_path: modal.querySelector("#mComfyWorkflow").value,
       fal_api_key: modal.querySelector("#mFalKey").value || undefined,
       fal_model: falModel,
+      xai_management_key: modal.querySelector("#mXaiMgmtKey").value || undefined,
     });
     els.engineSelect.value = updated.default_engine;
     updateReferenceImagesVisibility();

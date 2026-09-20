@@ -6,7 +6,7 @@ A local desktop-style app for managing, generating, and reviewing bulk image-to-
 
 ## Features
 
-- **Multi-Project Library:** Organize source images and results into separate projects (e.g. one big backlog + several smaller side projects), switchable from the top bar.
+- **Multi-Project Library:** Organize source images and results into separate projects (e.g. one big backlog + several smaller side projects), switchable from the project menu in the top bar, which lists every project with its source/result/reference counts, keeps the 4 most recently opened at the top, and lets you rename or trash a project in place.
 - **Global Prompt Palette:** Save, edit, and reuse prompt text across every project.
 - **Bulk Ingestion:** Drag-and-drop or file-browser upload of source images into the current project.
 - **Review Workflow:** Three-tier evaluation (YES / MAYBE / NO) with hotkeys (`y` / `m` / `n`, arrow keys to move between images), and a draggable **A/B comparison slider** (source vs. result).

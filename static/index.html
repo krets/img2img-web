@@ -10,9 +10,13 @@
   <div id="topbar">
     <div class="topbar-left">
       <span class="brand">🖼️ Image Library</span>
-      <select id="projectSwitcher"></select>
-      <button id="newProjectBtn" class="btn-ghost">+ New Project</button>
-      <button id="deleteProjectBtn" class="btn-ghost small" title="Move this project to trash">🗑 Delete Project</button>
+      <div class="project-menu" id="projectMenu">
+        <button id="projectMenuBtn" class="project-menu-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Switch, rename or delete projects">
+          <span id="projectMenuName" class="project-menu-name">Projects</span>
+          <span class="project-menu-caret">▾</span>
+        </button>
+        <div id="projectPanel" class="project-panel" style="display:none"></div>
+      </div>
     </div>
     <div class="topbar-right">
       <button id="duplicatesBtn" class="btn-ghost">Find Duplicates</button>

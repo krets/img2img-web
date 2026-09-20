@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { initABViewer } from "./viewer.js";
-import { initHotkeys } from "./hotkeys.js";
+import { initHotkeys, HOTKEY_GROUPS } from "./hotkeys.js";
 import { initPanels } from "./panels.js";
 
 const state = {
@@ -53,6 +53,10 @@ const els = {
   projectMenuBtn: document.getElementById("projectMenuBtn"),
   projectMenuName: document.getElementById("projectMenuName"),
   projectPanel: document.getElementById("projectPanel"),
+  topbarMenu: document.getElementById("topbarMenu"),
+  topbarMenuBtn: document.getElementById("topbarMenuBtn"),
+  topbarMenuPanel: document.getElementById("topbarMenuPanel"),
+  hotkeysBtn: document.getElementById("hotkeysBtn"),
   trashBtn: document.getElementById("trashBtn"),
   exportBtn: document.getElementById("exportBtn"),
   settingsBtn: document.getElementById("settingsBtn"),
@@ -713,6 +717,70 @@ document.addEventListener("keydown", (e) => {
     els.projectMenuBtn.focus();
   }
 });
+
+// Hamburger menu: same open/close behavior as the project panel. Opening one
+// closes the other for free -- each button is "outside" the other's menu, so
+// its mousedown trips the other's outside-click handler.
+function isTopbarMenuOpen() {
+  return els.topbarMenuPanel.style.display !== "none";
+}
+function setTopbarMenuOpen(open) {
+  els.topbarMenuPanel.style.display = open ? "flex" : "none";
+  els.topbarMenuBtn.setAttribute("aria-expanded", String(open));
+}
+els.topbarMenuBtn.addEventListener("click", () => setTopbarMenuOpen(!isTopbarMenuOpen()));
+els.topbarMenuPanel.addEventListener("click", (e) => {
+  if (e.target.closest(".topbar-menu-item")) setTopbarMenuOpen(false);
+});
+document.addEventListener("mousedown", (e) => {
+  if (isTopbarMenuOpen() && !els.topbarMenu.contains(e.target)) setTopbarMenuOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !isTopbarMenuOpen()) return;
+  setTopbarMenuOpen(false);
+  els.topbarMenuBtn.focus();
+});
+
+// Hotkeys help overlay -- content comes from HOTKEY_GROUPS in hotkeys.js.
+function renderKeycaps(keys) {
+  return keys
+    .map((key) => key.split("+").map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join("+"))
+    .join("<span>/</span>");
+}
+function isHotkeysModalOpen() {
+  return els.modalOverlay.style.display !== "none" && !!els.modalContent.querySelector(".hotkey-groups");
+}
+function openHotkeysModal() {
+  setTopbarMenuOpen(false);
+  closeProjectPanel();
+  const groups = HOTKEY_GROUPS.map(
+    (g) => `
+      <div class="hotkey-group">
+        <div class="hotkey-group-title">${escapeHtml(g.title)}</div>
+        ${g.rows
+          .map(
+            (r) => `
+          <div class="hotkey-row">
+            <span class="hotkey-desc">${escapeHtml(r.desc)}</span>
+            <span class="hotkey-keys">${r.keys ? renderKeycaps(r.keys) : escapeHtml(r.gesture)}</span>
+          </div>`
+          )
+          .join("")}
+      </div>`
+  ).join("");
+  const modal = openModal(`
+    <h3>Hotkeys</h3>
+    <div class="hotkey-groups">${groups}</div>
+    <div class="modal-actions"><button id="mClose" class="btn-ghost" type="button">Close</button></div>
+  `);
+  modal.querySelector("#mClose").addEventListener("click", closeModal);
+}
+els.hotkeysBtn.addEventListener("click", openHotkeysModal);
+// "?" toggles the overlay, but never opens over some other dialog.
+function toggleHotkeysModal() {
+  if (isHotkeysModalOpen()) closeModal();
+  else if (els.modalOverlay.style.display === "none") openHotkeysModal();
+}
 
 function openNewProjectModal() {
   const modal = openModal(`
@@ -3814,6 +3882,7 @@ initHotkeys({
   onPrev: whenNoModal(() => stepImage(-1)),
   onNext: whenNoModal(() => stepImage(1)),
   onFocusPrompt: whenNoModal(() => els.promptTextarea.focus()),
+  onHelp: toggleHotkeysModal,
 });
 
 // Formats a duration in seconds as e.g. "45s", "3m 12s", "1h 05m". Used both

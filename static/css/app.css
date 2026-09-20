@@ -46,6 +46,39 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
 .brand { font-weight: 600; margin-right: 8px; }
 
+/* Hamburger menu: the topbar's secondary actions live in a dropdown. The
+   buttons keep their own ids (wired in app.js/panels.js); this only restyles
+   them as rows. */
+.topbar-menu { position: relative; }
+.topbar-menu-btn { font-size: 18px; line-height: 1; padding: 4px 10px; }
+.topbar-menu-btn[aria-expanded="true"] { border-color: #8B5CF6; }
+.topbar-menu-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60;
+  flex-direction: column; gap: 1px;
+  min-width: 200px; padding: 4px;
+  background: #1a1c23; border: 1px solid #33353f; border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+}
+.topbar-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left; white-space: nowrap;
+  background: transparent; border: none; border-radius: 5px;
+  color: #e6e6eb; font-size: 13px; padding: 7px 10px;
+}
+.topbar-menu-item:hover { background: rgba(139,92,246,0.2); }
+.topbar-menu-item.active { color: #c4b5fd; }
+.topbar-menu-item.active .topbar-menu-label::after { content: " ✓"; }
+/* Fixed-width icon column so every label starts at the same x, whatever the glyph's own width. */
+.topbar-menu-item kbd { margin: -3px 0; } /* keep keycap rows the same height as the rest */
+.topbar-menu-icon { flex-shrink: 0; width: 20px; text-align: center; }
+.topbar-menu-label { flex: 1; margin-right: 6px; }
+.topbar-menu-divider { height: 1px; margin: 3px 4px; background: #2a2c35; }
+kbd {
+  display: inline-block; min-width: 20px; padding: 1px 6px; text-align: center;
+  font-family: inherit; font-size: 11px; font-weight: 600; line-height: 16px; color: #c9ccd8;
+  background: #262832; border: 1px solid #3a3d4a; border-bottom-width: 2px; border-radius: 4px;
+}
+
 /* Project manager: the topbar button opens a panel of all projects. */
 .project-menu { position: relative; }
 .project-menu-btn {
@@ -355,7 +388,6 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .reference-library-item-btn.danger:hover { background: #7f1d1d; }
 
 .btn-ghost.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
-#maximizeViewportBtn.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
 .multi-select-bar {
   display: contents;
 }
@@ -1036,7 +1068,19 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .log-item-error { margin-top: 4px; font-size: 12px; color: #fca5a5; white-space: pre-wrap; }
 .log-list .empty-state { margin: 4px 0 10px; font-size: 12px; }
 
-.topbar-right { flex-wrap: wrap; }
+/* Hotkeys help overlay (opened with "?" or the topbar menu). Groups flow into
+   two columns when there's room, and the list scrolls if it still doesn't fit. */
+.modal:has(.hotkey-groups) { width: 720px; }
+.hotkey-groups {
+  max-height: 70vh; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 4px 28px;
+  margin-bottom: 4px;
+}
+.hotkey-group { break-inside: avoid; margin-bottom: 12px; }
+.hotkey-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #9ea2b0; margin-bottom: 6px; }
+.hotkey-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
+.hotkey-desc { color: #e6e6eb; }
+.hotkey-keys { flex-shrink: 0; display: flex; align-items: center; gap: 4px; color: #6b6f7d; font-size: 11px; }
 
 .queue-overlay {
   position: fixed;

@@ -31,6 +31,7 @@ export function initPanels() {
   const sidebarExpandTab = document.getElementById("sidebarExpandTab");
   const detailsExpandTab = document.getElementById("detailsExpandTab");
   const maximizeBtn = document.getElementById("maximizeViewportBtn");
+  const modalOverlay = document.getElementById("modalOverlay");
 
   const s = {
     sidebarWidth: SIDEBAR_DEFAULT,
@@ -130,7 +131,9 @@ export function initPanels() {
   document.addEventListener("keydown", (e) => {
     const tag = e.target.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // Ctrl+F is the browser's find
     if (e.key.toLowerCase() !== "f") return;
+    if (modalOverlay.style.display !== "none") return; // the layout is behind an open dialog
     toggleMaximize();
   });
 

@@ -19,12 +19,19 @@
       </div>
     </div>
     <div class="topbar-right">
-      <button id="duplicatesBtn" class="btn-ghost">Find Duplicates</button>
-      <button id="logsBtn" class="btn-ghost">📜 Logs</button>
-      <button id="trashBtn" class="btn-ghost">🗑 Trash</button>
-      <button id="exportBtn" class="btn-ghost">Export</button>
-      <button id="maximizeViewportBtn" class="btn-ghost" title="Maximize viewport — hide side panels (hotkey: f)">⛶ Maximize</button>
-      <button id="settingsBtn" class="btn-ghost">Settings</button>
+      <div class="topbar-menu" id="topbarMenu">
+        <button id="topbarMenuBtn" class="btn-ghost topbar-menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Menu" title="Menu">☰</button>
+        <div id="topbarMenuPanel" class="topbar-menu-panel" style="display:none">
+          <button id="duplicatesBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">🔍</span><span class="topbar-menu-label">Find Duplicates</span></button>
+          <button id="logsBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">📜</span><span class="topbar-menu-label">Logs</span></button>
+          <button id="trashBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">🗑</span><span class="topbar-menu-label">Trash</span></button>
+          <button id="exportBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">📤</span><span class="topbar-menu-label">Export</span></button>
+          <button id="maximizeViewportBtn" class="topbar-menu-item" type="button" title="Maximize viewport — hide side panels"><span class="topbar-menu-icon" aria-hidden="true">⛶</span><span class="topbar-menu-label">Maximize</span><kbd>F</kbd></button>
+          <button id="settingsBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">⚙</span><span class="topbar-menu-label">Settings</span></button>
+          <div class="topbar-menu-divider"></div>
+          <button id="hotkeysBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">⌨</span><span class="topbar-menu-label">Hotkeys</span><kbd>?</kbd></button>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -10,6 +10,7 @@ A local desktop-style app for managing, generating, and reviewing bulk image-to-
 - **Global Prompt Palette:** Save, edit, and reuse prompt text across every project.
 - **Bulk Ingestion:** Drag-and-drop or file-browser upload of source images into the current project.
 - **Review Workflow:** Three-tier evaluation (YES / MAYBE / NO) with hotkeys (`y` / `m` / `n`, arrow keys to move between images), and a draggable **A/B comparison slider** (source vs. result).
+- **Crop / Pre-process Source:** The crop button in the viewer's mode bar opens an editor to rotate the source in 90° steps and crop it to a region that can extend past the image edges (padded with a solid color or a blurred copy of the image). Works with every engine. Only the settings are stored — the original source file is never modified — and the processed image (cached) is what gets sent to the service.
 - **Multiple Results per Image:** Generate several variants per source image and toggle which one is "active" for review/export.
 - **Batch Export:** Export approved (or any status) results as a zip — either clean result images, or side-by-side A/B composites.
 - **Local & Persistent:** Everything lives in a single `workspace/` folder (SQLite DB + image files + config), portable and gitignored.

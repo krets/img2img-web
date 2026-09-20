@@ -4,10 +4,12 @@ from urllib.parse import unquote, urlparse
 import requests
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from PIL import Image
 
 import db
+import preprocess
 import storage
-from models import CopyImagesIn, ImageFromUrlIn, ImageUpdateIn, MergeImagesIn, MoveImagesIn
+from models import CopyImagesIn, ImageFromUrlIn, ImageUpdateIn, MergeImagesIn, MoveImagesIn, PreprocessIn
 
 router = APIRouter(tags=["images"])
 
@@ -168,6 +170,7 @@ def copy_images(body: CopyImagesIn):
             width=image["width"],
             height=image["height"],
             comment=image["comment"],
+            preprocess=image["preprocess"],
         )
 
         active_result_id = None
@@ -279,14 +282,18 @@ def _resolve_ancestors(image, max_depth=50):
     return chain
 
 
+def _image_detail(image):
+    image["results"] = db.list_results_for_image(image["id"])
+    image["derived_from"] = _resolve_provenance(image)
+    return image
+
+
 @router.get("/api/images/{image_id}")
 def get_image(image_id: str):
     image = db.get_image(image_id)
     if not image or image["is_deleted"]:
         raise HTTPException(404, "Image not found")
-    image["results"] = db.list_results_for_image(image_id)
-    image["derived_from"] = _resolve_provenance(image)
-    return image
+    return _image_detail(image)
 
 
 @router.put("/api/images/{image_id}")
@@ -338,6 +345,59 @@ def get_image_file(image_id: str):
     if not path.exists():
         raise HTTPException(404, "Image file missing on disk")
     return FileResponse(path, media_type="image/png")
+
+
+@router.put("/api/images/{image_id}/preprocess")
+def set_image_preprocess(image_id: str, body: PreprocessIn):
+    """Sets how the source gets rotated/cropped/padded before being sent to a
+    generation engine. Only the settings are stored -- the source file stays
+    untouched, and the processed render is cached (see storage.get_or_create_processed).
+    Params that amount to no change clear the setting. Returns the image detail.
+    """
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    path = storage.source_image_path(image["project_id"], image["file_name"])
+    if not path.exists():
+        raise HTTPException(404, "Image file missing on disk")
+
+    with Image.open(path) as img:
+        width, height = img.size
+    try:
+        params = preprocess.normalize(body.model_dump(), width, height)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    storage.clear_processed(image["project_id"], image_id)
+    if params:
+        storage.get_or_create_processed(image["project_id"], image_id, path, params)  # render now, so a failure surfaces here
+    return _image_detail(db.set_image_preprocess(image_id, params))
+
+
+@router.delete("/api/images/{image_id}/preprocess")
+def clear_image_preprocess(image_id: str):
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    storage.clear_processed(image["project_id"], image_id)
+    return _image_detail(db.set_image_preprocess(image_id, None))
+
+
+@router.get("/api/images/{image_id}/processed")
+def get_image_processed(image_id: str):
+    """The source as it will be sent to the engine (rotated/cropped/padded).
+    404 when the image has no pre-process settings -- use /file for the original.
+    """
+    image = db.get_image(image_id)
+    if not image:
+        raise HTTPException(404, "Image not found")
+    if not image["preprocess"]:
+        raise HTTPException(404, "Image has no pre-processing")
+    path = storage.source_image_path(image["project_id"], image["file_name"])
+    if not path.exists():
+        raise HTTPException(404, "Image file missing on disk")
+    processed = storage.get_or_create_processed(image["project_id"], image_id, path, image["preprocess"])
+    return FileResponse(processed, media_type="image/png")
 
 
 @router.get("/api/images/{image_id}/thumbnail")

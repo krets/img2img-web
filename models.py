@@ -24,6 +24,27 @@ class ImageFromUrlIn(BaseModel):
     url: str
 
 
+class PreprocessCropIn(BaseModel):
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+class PreprocessFillIn(BaseModel):
+    mode: Literal["blur", "color"] = "blur"
+    color: str = "#000000"
+
+
+class PreprocessIn(BaseModel):
+    """Crop coordinates are in the rotated image's pixel space and may extend
+    past its edges (the overhang gets padded) -- see preprocess.py.
+    """
+    rotation: Literal[0, 90, 180, 270] = 0
+    crop: Optional[PreprocessCropIn] = None  # None = the whole (rotated) image
+    fill: PreprocessFillIn = PreprocessFillIn()
+
+
 class ReferenceImageUpdateIn(BaseModel):
     display_name: Optional[str] = None
 
@@ -65,12 +86,9 @@ class GenerateRequestIn(BaseModel):
     adhoc_prompt_text: str
     engine: Optional[Literal["grok", "comfyui", "fal"]] = None
     model: Optional[str] = None
+    # Grok only -- the other engines return an image shaped like their input,
+    # so framing for them is done up front via the source's pre-process settings.
     aspect_ratio: Optional[str] = None
-    # Only used by engines that don't accept aspect_ratio natively (ComfyUI,
-    # fal.ai) -- see aspect_fit.py. Ignored for Grok, which reframes the
-    # output itself via the API's own aspect_ratio param.
-    aspect_mode: Optional[Literal["crop", "expand"]] = None
-    aspect_pin: Optional[Literal["center", "top-left", "top-right", "bottom-left", "bottom-right"]] = None
     max_dim: Optional[int] = None
     # Ids into this project's reference-image library (see routers/references.py),
     # passed as extra reference inputs. Supported by all engines, though not

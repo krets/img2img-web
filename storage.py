@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image, ImageOps, PngImagePlugin
 
 import config as cfg
+import preprocess
 
 # Shared square thumbnail size for every list/grid preview (library sidebar,
 # result grid, duplicate finder) -- 2x the 40px CSS preview box, for retina.
@@ -195,6 +196,32 @@ def get_or_create_preview(kind, project_id, item_id, source_path):
     return preview_path
 
 
+def get_or_create_processed(project_id, image_id, source_path, params):
+    """Returns the path to the cached render of source_path with `params`
+    (see preprocess.py) applied, generating it on first request. The source
+    file itself is never touched -- this is the image that gets sent to the
+    generation engine, and shown in the viewer.
+
+    The file name embeds a hash of params, so a settings change naturally
+    misses the cache; clear_processed() sweeps out the stale renders.
+    """
+    dest = _thumbnail_dir("processed", project_id) / f"{image_id}_{preprocess.cache_key(params)}.png"
+    if not dest.exists():
+        with Image.open(source_path) as img:
+            img.load()
+            processed = preprocess.render(img, params)
+        # Write-then-rename so a concurrent request never serves a half-written file.
+        tmp = dest.with_suffix(".tmp")
+        processed.save(tmp, format="PNG", compress_level=3)
+        tmp.replace(dest)
+    return dest
+
+
+def clear_processed(project_id, image_id):
+    for path in _thumbnail_dir("processed", project_id).glob(f"{image_id}_*"):
+        path.unlink(missing_ok=True)
+
+
 def source_image_path(project_id, file_name):
     return cfg.project_source_dir(project_id) / file_name
 
@@ -249,6 +276,8 @@ def copy_result_image(old_project_id, new_project_id, file_name):
 def clear_thumbnail(kind, project_id, item_id):
     (_thumbnail_dir(kind, project_id) / f"{item_id}.jpg").unlink(missing_ok=True)
     (_thumbnail_dir(kind, project_id) / f"{item_id}_preview.jpg").unlink(missing_ok=True)
+    if kind == "images":
+        clear_processed(project_id, item_id)
     if kind == "results":
         (_thumbnail_dir("results_sbs", project_id) / f"{item_id}.jpg").unlink(missing_ok=True)
 

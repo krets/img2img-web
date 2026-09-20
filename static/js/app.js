@@ -96,10 +96,9 @@ const els = {
   promptTextarea: document.getElementById("promptTextarea"),
   engineSelect: document.getElementById("engineSelect"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
-  aspectControlsRow: document.getElementById("aspectControlsRow"),
-  aspectPinGroup: document.getElementById("aspectPinGroup"),
-  aspectExpandCheckbox: document.getElementById("aspectExpandCheckbox"),
-  aspectExpandLabel: document.getElementById("aspectExpandLabel"),
+  preprocessNote: document.getElementById("preprocessNote"),
+  preprocessNoteText: document.getElementById("preprocessNoteText"),
+  preprocessClearBtn: document.getElementById("preprocessClearBtn"),
   referenceImagesField: document.getElementById("referenceImagesField"),
   referenceImageList: document.getElementById("referenceImageList"),
   addReferenceImageBtn: document.getElementById("addReferenceImageBtn"),
@@ -1102,7 +1101,12 @@ async function selectImage(id) {
   // wait on a network round-trip it doesn't need. renderDetails() below will
   // fill in the result image once metadata resolves.
   abViewer.setCompareOptions([], null);
-  abViewer.setImages(`/api/images/${id}/file`, null);
+  abViewer.setPreprocess(null); // re-enabled by syncViewer() once the details load
+  // The sidebar list already knows whether this image has pre-process settings,
+  // so show the right base straight away instead of flashing the original.
+  const listed = state.images.find((i) => i.id === id);
+  const base = listed ? sourceUrlFor(listed) : { url: `/api/images/${id}/file`, processed: false };
+  abViewer.setImages(base.url, null, { baseProcessed: base.processed });
   const image = await api.getImage(id);
   if (state.currentImageId !== id) return; // user navigated away before this resolved
   state.currentImage = image;
@@ -1159,11 +1163,13 @@ function renderDetails() {
   if (!img) {
     els.detailsEmpty.style.display = "block";
     els.detailsContent.style.display = "none";
+    abViewer.setPreprocess(null);
     abViewer.setImages(null, null);
     return;
   }
   els.detailsEmpty.style.display = "none";
   els.detailsContent.style.display = "block";
+  renderPreprocessNote();
 
   els.displayNameInput.value = img.display_name;
   els.commentInput.value = img.comment || "";
@@ -1200,9 +1206,22 @@ function syncViewer() {
     label: `${ancestorRelation(i, ancestors.length)}: ${a.display_name}${a.is_deleted ? " (in trash)" : ""}`,
   }));
   abViewer.setCompareOptions(options, state.compareAgainstId, setCompareAgainst);
-  const baseUrl = `/api/images/${state.compareAgainstId || img.id}/file`;
+  // Comparing against an ancestor shows that image's original; only the
+  // image's own source is swapped for its pre-processed render.
+  const base = state.compareAgainstId
+    ? { url: `/api/images/${state.compareAgainstId}/file`, processed: false }
+    : sourceUrlFor(img);
   const resultUrl = active ? `/api/results/${active.id}/file` : null;
-  abViewer.setImages(baseUrl, resultUrl);
+  abViewer.setImages(base.url, resultUrl, { baseProcessed: base.processed });
+  abViewer.setPreprocess({
+    imageId: img.id,
+    rawUrl: `/api/images/${img.id}/file`,
+    params: img.preprocess,
+    onApply: (params) => savePreprocess(img.id, params),
+    onError: (message) => {
+      els.generateStatus.textContent = `Error: ${message}`;
+    },
+  });
 }
 
 function ancestorRelation(index, total) {
@@ -1840,36 +1859,78 @@ updateReferenceImagesVisibility();
 renderReferenceImages();
 
 // ---------------------------------------------------------------------------
-// Aspect-ratio crop/expand controls -- only meaningful for engines that don't
-// accept an aspect_ratio request param natively (ComfyUI, fal.ai). Grok
-// reframes the output itself via the API's own param, so these stay hidden
-// for it. "Crop" (default) cuts into the image from the pinned spot; "Expand"
-// grows the canvas instead and fills the new space with a blurred copy of
-// the image, pinned the same way -- see aspect_fit.py for the actual math.
+// Output aspect ratio is Grok-only: it's the one engine whose API reframes the
+// output itself. ComfyUI/fal.ai just return an image shaped like their input,
+// so for them the framing is done up front by pre-processing the source (the
+// crop button in the viewer's modebar -- see preprocess.js), for every engine.
 // ---------------------------------------------------------------------------
-function updateAspectControlsVisibility() {
-  const hasAspect = !!els.aspectRatioSelect.value;
-  const engine = els.engineSelect.value;
-  els.aspectControlsRow.style.display = hasAspect && engine !== "grok" ? "flex" : "none";
+function updateAspectRatioVisibility() {
+  els.aspectRatioSelect.style.display = els.engineSelect.value === "grok" ? "" : "none";
+}
+els.engineSelect.addEventListener("change", updateAspectRatioVisibility);
+updateAspectRatioVisibility();
+
+// ---------------------------------------------------------------------------
+// Source pre-processing (rotate / crop / pad). Only the settings are stored on
+// the image -- the original file is never modified -- and the server applies
+// them to what it sends to the engine. The viewer shows that processed image
+// as its base, and the note under the engine picker says when it's in effect.
+// ---------------------------------------------------------------------------
+
+// Cheap change-marker for the processed image's URL, so re-applying different
+// settings isn't served from the browser's cache of the previous render.
+function preprocessVersion(params) {
+  const s = JSON.stringify(params);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
 }
 
-function getAspectPin() {
-  const active = els.aspectPinGroup.querySelector(".aspect-pin-btn.active");
-  return active ? active.dataset.pin : "center";
+// What the viewer shows as the image's own source: the processed render if
+// the image has pre-process settings, else the original file.
+function sourceUrlFor(image) {
+  if (!image.preprocess) return { url: `/api/images/${image.id}/file`, processed: false };
+  return { url: `/api/images/${image.id}/processed?v=${preprocessVersion(image.preprocess)}`, processed: true };
 }
 
-els.aspectPinGroup.querySelectorAll(".aspect-pin-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    els.aspectPinGroup.querySelectorAll(".aspect-pin-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-  });
+function describePreprocess(p) {
+  const parts = [];
+  if (p.rotation) parts.push(`rotated ${p.rotation}°`);
+  parts.push(`${p.crop.w}×${p.crop.h}`);
+  return parts.join(", ");
+}
+
+function renderPreprocessNote() {
+  const p = state.currentImage?.preprocess;
+  els.preprocessNote.style.display = p ? "flex" : "none";
+  if (p) els.preprocessNoteText.textContent = `✂ Sending a pre-processed source (${describePreprocess(p)}). The original is unchanged.`;
+}
+
+// Swaps freshly-saved settings into local state (current image + sidebar list
+// row) and re-renders everything that depends on them.
+function applyPreprocessedImage(image) {
+  if (state.currentImageId === image.id) {
+    state.currentImage = image;
+    renderPreprocessNote();
+    syncViewer();
+  }
+  const listed = state.images.find((i) => i.id === image.id);
+  if (listed) listed.preprocess = image.preprocess;
+}
+
+async function savePreprocess(imageId, params) {
+  applyPreprocessedImage(await api.setImagePreprocess(imageId, params));
+}
+
+els.preprocessClearBtn.addEventListener("click", async () => {
+  const imageId = state.currentImageId;
+  if (!imageId) return;
+  try {
+    applyPreprocessedImage(await api.clearImagePreprocess(imageId));
+  } catch (e) {
+    els.generateStatus.textContent = `Error: ${e.message}`;
+  }
 });
-els.aspectExpandCheckbox.addEventListener("change", () => {
-  els.aspectExpandLabel.classList.toggle("active", els.aspectExpandCheckbox.checked);
-});
-els.aspectRatioSelect.addEventListener("change", updateAspectControlsVisibility);
-els.engineSelect.addEventListener("change", updateAspectControlsVisibility);
-updateAspectControlsVisibility();
 
 // ---------------------------------------------------------------------------
 // References sidebar tab -- this project's reference-image library: upload
@@ -2130,15 +2191,13 @@ async function generate() {
 async function enqueueGeneration(imageId) {
   const promptText = els.promptTextarea.value.trim();
   const promptId = els.promptSelect.value || null;
-  const aspectRatio = els.aspectRatioSelect.value || null;
   const engine = els.engineSelect.value;
+  const aspectRatio = engine === "grok" ? els.aspectRatioSelect.value || null : null;
   const job = await api.generateResult(imageId, {
     prompt_id: promptId,
     adhoc_prompt_text: promptText,
     engine,
     aspect_ratio: aspectRatio,
-    aspect_mode: aspectRatio ? (els.aspectExpandCheckbox.checked ? "expand" : "crop") : null,
-    aspect_pin: aspectRatio ? getAspectPin() : null,
     reference_image_ids: state.referenceImageIds.length ? state.referenceImageIds : undefined,
   });
   mergeQueueJob(job);
@@ -3377,7 +3436,7 @@ function debounce(fn, ms) {
   const config = await api.getConfig();
   els.engineSelect.value = config.default_engine;
   updateReferenceImagesVisibility();
-  updateAspectControlsVisibility();
+  updateAspectRatioVisibility();
   pollQueue();
   setInterval(pollQueue, 1200);
 })();

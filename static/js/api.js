@@ -62,6 +62,10 @@ export const api = {
   },
   getImage: (id) => request("GET", `/images/${id}`),
   updateImage: (id, body) => request("PUT", `/images/${id}`, { json: body }),
+  // Rotate/crop/pad settings applied to the source before it's sent to an engine;
+  // both return the refreshed image detail. The stored source file is never modified.
+  setImagePreprocess: (id, params) => request("PUT", `/images/${id}/preprocess`, { json: params }),
+  clearImagePreprocess: (id) => request("DELETE", `/images/${id}/preprocess`),
   deleteImage: (id) => request("DELETE", `/images/${id}`),
   restoreImage: (id) => request("POST", `/images/${id}/restore`),
   permanentlyDeleteImage: (id) => request("DELETE", `/images/${id}/permanent`),

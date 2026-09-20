@@ -418,6 +418,24 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   border: none;
 }
 
+.viewer-mode-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Divider between the comparison modes and the crop/pre-process mode -- the latter is an editor, not a comparison. */
+.viewer-mode-sep { align-self: stretch; width: 1px; margin: 2px 8px; background: #33353f; }
+.viewer-preprocess-btn { position: relative; display: inline-flex; align-items: center; }
+.viewer-preprocess-btn svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.viewer-preprocess-btn.has-edits::after {
+  content: ""; position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: #EC4899;
+}
+.viewer-preprocess-controls { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-left: 4px; min-width: 0; }
+.viewer-modebar.pp-active .viewer-compare { display: none !important; }
+.pp-select { padding: 3px 6px; font-size: 12px; }
+.pp-color { width: 30px; height: 26px; padding: 1px 2px; cursor: pointer; }
+.pp-size { font-size: 12px; color: #9ea2b0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pp-error { font-size: 12px; color: #fca5a5; }
+.pp-apply { background: linear-gradient(90deg, #EC4899, #8B5CF6); border: none; color: white; font-weight: 600; }
+.pp-apply:hover { filter: brightness(1.1); }
+.pp-apply:disabled { opacity: 0.5; cursor: progress; }
+
 .viewer-stage-wrap {
   position: relative;
   flex: 1;
@@ -512,6 +530,45 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .ab-stage[data-mode="side-by-side"] .ab-overlay { position: relative; }
 .ab-stage[data-mode="side-by-side"] .ab-handle { display: none !important; }
 
+.ab-badge {
+  position: absolute; top: 10px; left: 10px; z-index: 5;
+  padding: 3px 8px; font-size: 11px; border-radius: 6px; color: #c4b5fd;
+  background: rgba(13, 14, 18, 0.75); border: 1px solid rgba(139,92,246,0.5); pointer-events: none;
+}
+
+/* Crop / pre-process editor. Layers, bottom to top: fill preview (over the crop
+   rect only), the rotated image, then the crop overlay -- whose huge box-shadow
+   dims everything outside the crop, including the parts of the image being cut. */
+.pp-stage { position: absolute; inset: 0; overflow: hidden; user-select: none; touch-action: none; }
+.pp-img { position: absolute; max-width: none; transform-origin: center; -webkit-user-drag: none; pointer-events: none; }
+.pp-fill { position: absolute; }
+.pp-fill.pp-fill-blur {
+  background: repeating-linear-gradient(45deg, rgba(139,92,246,0.35) 0 6px, rgba(139,92,246,0.15) 6px 12px);
+}
+.pp-crop {
+  position: absolute; border: 1px solid #fff; cursor: move;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+}
+.pp-grid {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% - 0.5px) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px) calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% - 0.5px) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% - 0.5px) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px) calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% - 0.5px) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+}
+.pp-handle { position: absolute; width: 12px; height: 12px; background: #fff; border: 1px solid #8B5CF6; border-radius: 2px; }
+.pp-handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.pp-handle-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.pp-handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.pp-handle-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.pp-handle-n { top: -6px; left: calc(50% - 6px); cursor: ns-resize; }
+.pp-handle-s { bottom: -6px; left: calc(50% - 6px); cursor: ns-resize; }
+.pp-handle-w { left: -6px; top: calc(50% - 6px); cursor: ew-resize; }
+.pp-handle-e { right: -6px; top: calc(50% - 6px); cursor: ew-resize; }
+.pp-readout {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); padding: 1px 6px; border-radius: 4px;
+  font-size: 11px; color: #fff; background: rgba(0,0,0,0.6); pointer-events: none; white-space: nowrap;
+}
+
 .ab-actions {
   position: absolute;
   top: 10px;
@@ -557,28 +614,11 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .field-row select { flex: 1; }
 
 .reference-image-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.aspect-controls-row { align-items: center; }
-.aspect-pin-group { display: flex; gap: 4px; }
-.aspect-pin-btn {
-  display: flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; padding: 0;
-  background: #1d1f27; border: 1px solid #33353f; border-radius: 6px;
-  color: #8b8d98;
+.preprocess-note {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: -4px 0 12px; padding: 6px 8px; font-size: 12px; color: #c4b5fd;
+  background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.4); border-radius: 6px;
 }
-.aspect-pin-btn svg { width: 18px; height: 18px; }
-.aspect-pin-btn rect { fill: none; stroke: currentColor; stroke-width: 1.4; }
-.aspect-pin-btn circle { fill: currentColor; }
-.aspect-pin-btn:hover { border-color: #565a68; color: #e6e6eb; }
-.aspect-pin-btn.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
-.aspect-expand-toggle {
-  display: flex; align-items: center; gap: 6px;
-  padding: 0 10px; height: 28px; font-size: 12px; color: #8b8d98;
-  background: #1d1f27; border: 1px solid #33353f; border-radius: 6px; cursor: pointer; user-select: none;
-}
-.aspect-expand-toggle:hover { border-color: #565a68; color: #e6e6eb; }
-.aspect-expand-toggle.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
-.aspect-expand-toggle input { display: none; }
-.aspect-expand-toggle svg { stroke: currentColor; fill: none; stroke-width: 1.4; stroke-linecap: round; }
 .reference-image-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid #33353f; }
 .reference-image-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .reference-image-thumb-remove {

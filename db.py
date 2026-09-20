@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS images (
     content_hash           TEXT,
     resized_hash           TEXT,
     derived_from_result_id TEXT,
+    preprocess             TEXT,
     date_added             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted             INTEGER DEFAULT 0,
     deleted_at             TIMESTAMP,
@@ -156,6 +157,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE images ADD COLUMN deleted_at TIMESTAMP")
     if "derived_from_result_id" not in columns:
         conn.execute("ALTER TABLE images ADD COLUMN derived_from_result_id TEXT")
+    if "preprocess" not in columns:
+        conn.execute("ALTER TABLE images ADD COLUMN preprocess TEXT")
 
     reference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reference_images)").fetchall()}
     if "is_deleted" not in reference_columns:
@@ -373,17 +376,35 @@ def restore_project(project_id):
 # Images
 # ---------------------------------------------------------------------------
 
+def _decode_image(d):
+    """images.preprocess is stored as a JSON string; callers of get_image /
+    list_images get it as a dict (or None), like the rest of the row.
+    """
+    raw = d.get("preprocess")
+    d["preprocess"] = json.loads(raw) if raw else None
+    return d
+
+
 def create_image(project_id, file_name, display_name, width=None, height=None, comment=None,
-                  content_hash=None, resized_hash=None, derived_from_result_id=None):
+                  content_hash=None, resized_hash=None, derived_from_result_id=None, preprocess=None):
     conn = get_connection()
     image_id = new_id()
     conn.execute(
         """INSERT INTO images (id, project_id, file_name, display_name, comment, width, height,
-                                content_hash, resized_hash, derived_from_result_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                content_hash, resized_hash, derived_from_result_id, preprocess)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (image_id, project_id, file_name, display_name, comment, width, height, content_hash, resized_hash,
-         derived_from_result_id),
+         derived_from_result_id, json.dumps(preprocess) if preprocess else None),
     )
+    conn.commit()
+    return get_image(image_id)
+
+
+def set_image_preprocess(image_id, preprocess):
+    """Stores (or, with None, clears) the image's pre-process params -- see preprocess.py."""
+    conn = get_connection()
+    conn.execute("UPDATE images SET preprocess = ? WHERE id = ?",
+                 (json.dumps(preprocess) if preprocess else None, image_id))
     conn.commit()
     return get_image(image_id)
 
@@ -526,7 +547,7 @@ def list_images(project_id, sort="recent_result", filter="all", search=None):
     rows = conn.execute(query, params).fetchall()
     results = []
     for row in rows:
-        d = dict(row)
+        d = _decode_image(dict(row))
         d["result_evaluations"] = json.loads(d.pop("result_evaluations_json") or "[]")
         results.append(d)
     return results
@@ -535,7 +556,7 @@ def list_images(project_id, sort="recent_result", filter="all", search=None):
 def get_image(image_id):
     conn = get_connection()
     row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
-    return dict(row) if row else None
+    return _decode_image(dict(row)) if row else None
 
 
 def update_image(image_id, display_name=None, comment=None):

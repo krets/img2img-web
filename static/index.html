@@ -134,7 +134,7 @@
             <option value="comfyui">ComfyUI (local)</option>
             <option value="fal">fal.ai</option>
           </select>
-          <select id="aspectRatioSelect">
+          <select id="aspectRatioSelect" title="Output aspect ratio (Grok only -- for other engines, use the crop button above the image to frame the source)">
             <option value="">Keep original</option>
             <option value="1:1">1:1</option>
             <option value="16:9">16:9</option>
@@ -145,31 +145,9 @@
             <option value="3:4">3:4</option>
           </select>
         </div>
-        <div class="field-row aspect-controls-row" id="aspectControlsRow" style="display:none">
-          <div class="aspect-pin-group" id="aspectPinGroup" title="Pin position to crop or expand from">
-            <button type="button" class="aspect-pin-btn active" data-pin="center" title="Center">
-              <svg viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" rx="1.5"/><circle cx="10" cy="10" r="2"/></svg>
-            </button>
-            <button type="button" class="aspect-pin-btn" data-pin="top-left" title="Top-left">
-              <svg viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" rx="1.5"/><circle cx="5.5" cy="7" r="2"/></svg>
-            </button>
-            <button type="button" class="aspect-pin-btn" data-pin="top-right" title="Top-right">
-              <svg viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" rx="1.5"/><circle cx="14.5" cy="7" r="2"/></svg>
-            </button>
-            <button type="button" class="aspect-pin-btn" data-pin="bottom-left" title="Bottom-left">
-              <svg viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" rx="1.5"/><circle cx="5.5" cy="13" r="2"/></svg>
-            </button>
-            <button type="button" class="aspect-pin-btn" data-pin="bottom-right" title="Bottom-right">
-              <svg viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" rx="1.5"/><circle cx="14.5" cy="13" r="2"/></svg>
-            </button>
-          </div>
-          <label class="aspect-expand-toggle" id="aspectExpandLabel" title="Crop into the image to hit the aspect ratio (default), or expand the canvas and fill the new space with a heavily blurred, scaled copy of the image instead of cutting anything off">
-            <input type="checkbox" id="aspectExpandCheckbox" />
-            <svg viewBox="0 0 20 20" width="16" height="16">
-              <path d="M10 1 L10 19 M2 10 L18 10 M10 1 L7 5 M10 1 L13 5 M10 19 L7 15 M10 19 L13 15 M2 10 L6 7 M2 10 L6 13 M18 10 L14 7 M18 10 L14 13" />
-            </svg>
-            <span>Expand</span>
-          </label>
+        <div class="preprocess-note" id="preprocessNote" style="display:none">
+          <span id="preprocessNoteText"></span>
+          <button type="button" class="btn-ghost small" id="preprocessClearBtn" title="Send the original, unmodified source instead">Remove</button>
         </div>
         <div class="field" id="referenceImagesField" style="display:none">
           <label>Reference images <span class="hint">(up to 2; not all fal.ai models support these)</span></label>

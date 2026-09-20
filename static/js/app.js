@@ -2281,6 +2281,12 @@ function openCropModal({ title, imageUrl, naturalWidth, naturalHeight, initialBo
 
 els.addReferenceImageBtn.addEventListener("click", openReferenceImagePicker);
 els.engineSelect.addEventListener("change", updateReferenceImagesVisibility);
+// The dropdown remembers the last engine picked; Settings' "Default Engine"
+// is only the fallback for when nothing has been picked yet (see init()).
+const ENGINE_STORAGE_KEY = "grok_img2img.engine";
+els.engineSelect.addEventListener("change", () => {
+  localStorage.setItem(ENGINE_STORAGE_KEY, els.engineSelect.value);
+});
 updateReferenceImagesVisibility();
 renderReferenceImages();
 
@@ -3280,7 +3286,7 @@ els.settingsBtn.addEventListener("click", async () => {
       falModelSelected === FAL_MODEL_CUSTOM
         ? modal.querySelector("#mFalModelCustom").value.trim()
         : falModelSelected;
-    const updated = await api.updateConfig({
+    await api.updateConfig({
       xai_api_key: modal.querySelector("#mKey").value || undefined,
       default_model: modal.querySelector("#mModel").value,
       default_max_dim: parseInt(modal.querySelector("#mMaxDim").value, 10),
@@ -3291,8 +3297,6 @@ els.settingsBtn.addEventListener("click", async () => {
       fal_model: falModel,
       xai_management_key: modal.querySelector("#mXaiMgmtKey").value || undefined,
     });
-    els.engineSelect.value = updated.default_engine;
-    updateReferenceImagesVisibility();
     closeModal();
   });
 });
@@ -3921,7 +3925,9 @@ function debounce(fn, ms) {
   await loadProjects();
   await loadPrompts();
   const config = await api.getConfig();
-  els.engineSelect.value = config.default_engine;
+  const savedEngine = localStorage.getItem(ENGINE_STORAGE_KEY);
+  const engineKnown = (v) => [...els.engineSelect.options].some((o) => o.value === v);
+  els.engineSelect.value = engineKnown(savedEngine) ? savedEngine : config.default_engine;
   updateReferenceImagesVisibility();
   updateAspectRatioVisibility();
   pollQueue();

@@ -238,8 +238,8 @@ function closeItemMenu() {
   }
 }
 
-// items: [{ label, danger, onClick }]. onClose (optional) fires however the
-// menu closes (item picked, outside click, Escape, scroll).
+// items: [{ icon, label, danger, onClick }]. onClose (optional) fires however
+// the menu closes (item picked, outside click, Escape, scroll).
 function openItemMenu(anchorEl, items, { onClose } = {}) {
   closeItemMenu();
   anchorEl.classList.add("menu-open");
@@ -247,7 +247,7 @@ function openItemMenu(anchorEl, items, { onClose } = {}) {
   const menu = document.createElement("div");
   menu.className = "item-menu";
   menu.innerHTML = items
-    .map((it, i) => `<button type="button" class="item-menu-option ${it.danger ? "danger" : ""}" data-idx="${i}">${it.label}</button>`)
+    .map((it, i) => `<button type="button" class="item-menu-option ${it.danger ? "danger" : ""}" data-idx="${i}"><span class="item-menu-icon" aria-hidden="true">${it.icon}</span><span>${it.label}</span></button>`)
     .join("");
   document.body.appendChild(menu);
   openItemMenuEl = menu;
@@ -1096,11 +1096,11 @@ function openImageItemMenu(anchorBtn, imageId) {
   const img = state.images.find((i) => i.id === imageId);
   if (!img) return;
   openItemMenu(anchorBtn, [
-    { label: "📎 Copy as reference image", onClick: () => useAsReferenceFromUrl(`/api/images/${imageId}/file`, img.display_name) },
-    { label: "✂ Move to reference library", onClick: () => moveImageToReference(imageId) },
-    { label: "➜ Move to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "move") },
-    { label: "⧉ Copy to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "copy") },
-    { label: "🗑 Delete (and its results)", danger: true, onClick: () => deleteImageWithConfirm(imageId, img.display_name) },
+    { icon: "📎", label: "Copy as reference image", onClick: () => useAsReferenceFromUrl(`/api/images/${imageId}/file`, img.display_name) },
+    { icon: "✂", label: "Move to reference library", onClick: () => moveImageToReference(imageId) },
+    { icon: "➜", label: "Move to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "move") },
+    { icon: "⧉", label: "Copy to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "copy") },
+    { icon: "🗑", label: "Delete (and its results)", danger: true, onClick: () => deleteImageWithConfirm(imageId, img.display_name) },
   ]);
 }
 
@@ -1881,26 +1881,30 @@ function renderResultGrid(results, activeId, imageId) {
       const promptText = result?.adhoc_prompt_text || "";
       openItemMenu(btn, [
         {
-          label: "📎 Use as reference image",
+          icon: "📎",
+          label: "Use as reference image",
           onClick: () => {
             const name = state.currentImage ? `${state.currentImage.display_name} result` : "result";
             useAsReferenceFromUrl(`/api/results/${resultId}/file`, name);
           },
         },
         {
-          label: "🔗 Use as new source image",
+          icon: "🔗",
+          label: "Use as new source image",
           onClick: () => promoteResultToSource(resultId),
         },
         ...(promptText
           ? [
               {
-                label: "📝 Use as current prompt",
+                icon: "📝",
+                label: "Use as current prompt",
                 onClick: () => useResultPromptAsCurrent(promptText),
               },
             ]
           : []),
         {
-          label: "🗑 Delete result",
+          icon: "🗑",
+          label: "Delete result",
           danger: true,
           onClick: async () => {
             const targetImageId = state.currentImageId;

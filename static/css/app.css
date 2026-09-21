@@ -350,7 +350,9 @@ kbd {
   gap: 1px;
 }
 .item-menu-option {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
   text-align: left;
   background: transparent;
@@ -362,6 +364,8 @@ kbd {
   cursor: pointer;
   white-space: nowrap;
 }
+/* Fixed-width icon column (same as .topbar-menu-icon) so every label starts at the same x, whatever the glyph's own width. */
+.item-menu-icon { flex-shrink: 0; width: 20px; text-align: center; }
 .item-menu-option:hover { background: rgba(139,92,246,0.2); }
 .item-menu-option.danger { color: #fca5a5; }
 .item-menu-option.danger:hover { background: #7f1d1d; color: white; }
@@ -434,15 +438,17 @@ kbd {
 /* Gradients on an 11px chit can't move smoothly (position/angle changes
    land in whole-pixel steps), so a queued chit is a dim fill with a border
    that slowly fades dark <-> light instead -- far slower than the running
-   chit's 1.1s pulse. */
+   chit's 1.1s pulse. The fill is a desaturated grey a step lighter than the
+   list background, with a muted purple border that stays clearly dimmer than
+   the vivid running chit, so a queued job reads as dull/idle. */
 .chit.pending.queued {
-  background: #150f20;
-  border: 1px solid #251339;
+  background: #2a2c35;
+  border: 1px solid #4a3b72;
   animation: chit-queued-pulse 3.6s ease-in-out infinite;
 }
 @keyframes chit-queued-pulse {
-  0%, 100% { border-color: #251339; }
-  50% { border-color: #8045c4; }
+  0%, 100% { border-color: #4a3b72; }
+  50% { border-color: #7457b8; }
 }
 .chit.pending.running {
   background: linear-gradient(90deg, #EC4899, #8B5CF6);

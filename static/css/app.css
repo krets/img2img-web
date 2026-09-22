@@ -838,6 +838,34 @@ kbd {
   animation: chit-pulse 0.9s ease-in-out infinite;
 }
 .pending-tile-label { font-size: 11px; color: #9ea2b0; }
+.result-tile.pending-tile.failed {
+  background: rgba(239,68,68,0.12);
+  border: 2px solid #ef4444;
+  gap: 4px;
+  padding: 8px;
+}
+.pending-tile.failed .pending-tile-label { color: #fca5a5; font-weight: 600; }
+.failed-tile-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.failed-tile-message {
+  font-size: 10px;
+  color: #9ea2b0;
+  text-align: center;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
 .pending-tile.queued .spinner { animation-play-state: paused; opacity: 0.4; }
 .pending-tile.cancelling .spinner { border-top-color: #f97316; }
 .pending-tile-cancel {

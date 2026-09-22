@@ -15,6 +15,11 @@ const state = {
   filter: "all",
   search: "",
   queue: [], // background generation jobs, global across projects
+  // Failed jobs, keyed by job id, kept until dismissed from their results-
+  // panel tile. The server drops finished jobs from /api/queue after a few
+  // seconds, which made a failure easy to miss; this keeps it visible (as an
+  // error chit and a failed tile) for the rest of the page session.
+  failedJobs: new Map(),
   queueExpanded: false,
   multiSelectMode: false,
   selectedImageIds: new Set(),
@@ -1324,7 +1329,8 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
 // chit for each in-flight job -- dim/static while queued, pulsing while
 // running, a distinct color once cancellation's been requested -- and an
 // error chit for recently-failed ones, so the sidebar row doubles as a quick
-// per-image progress readout. A cancelled job gets no chit of its own: once
+// per-image progress readout. Error chits stay until the failed tile is
+// dismissed in the results panel. A cancelled job gets no chit of its own: once
 // the server confirms it's actually gone, it should just disappear rather
 // than linger as a separate "cancelled" indicator.
 function renderChits(img) {
@@ -1335,8 +1341,7 @@ function renderChits(img) {
   const pendingChits = jobsForImage
     .filter((j) => j.status === "queued" || j.status === "running")
     .map((j) => `<span class="chit pending ${jobDisplayState(j)}" title="${escapeHtml(formatJobStatus(j))}"></span>`);
-  const errorChits = jobsForImage
-    .filter((j) => j.status === "error")
+  const errorChits = failedJobsFor(img.id)
     .map((j) => `<span class="chit error" title="${escapeHtml(j.error || "Generation failed")}"></span>`);
 
   const chits = [...completedChits, ...pendingChits, ...errorChits];
@@ -1770,8 +1775,16 @@ function pendingJobsFor(imageId) {
   return state.queue.filter((j) => j.image_id === imageId && (j.status === "queued" || j.status === "running"));
 }
 
-function pendingTilesSignature(jobs) {
-  return jobs.map((j) => `${j.id}:${jobDisplayState(j)}`).join(",");
+function failedJobsFor(imageId) {
+  return [...state.failedJobs.values()].filter((j) => j.image_id === imageId);
+}
+
+function pendingTilesSignature(jobs, failed) {
+  return [...jobs.map((j) => `${j.id}:${jobDisplayState(j)}`), ...failed.map((j) => `${j.id}:error`)].join(",");
+}
+
+function renderPendingTilesHtml(jobs, failed) {
+  return jobs.map(renderPendingTileHtml).join("") + failed.map(renderFailedTileHtml).join("");
 }
 
 const PENDING_TILE_LABELS = { queued: "Queued…", running: "Generating…", cancelling: "Cancelling…" };
@@ -1792,12 +1805,35 @@ function renderPendingTileHtml(j) {
   `;
 }
 
+const ENGINE_LABELS = { grok: "Grok", comfyui: "Comfy", fal: "fal.ai" };
+
+function renderFailedTileHtml(j) {
+  const message = j.error || "Generation failed";
+  return `
+    <div class="result-tile pending-tile failed" title="${escapeHtml(message)}">
+      <span class="failed-tile-icon">!</span>
+      <span class="pending-tile-label">${escapeHtml(ENGINE_LABELS[j.engine] || j.engine)} failed</span>
+      <span class="failed-tile-message">${escapeHtml(message)}</span>
+      <button class="pending-tile-cancel" data-dismiss-failed-job="${j.id}" title="Dismiss">✕</button>
+    </div>
+  `;
+}
+
 // Marks the job cancelling in local state and re-renders its chit/tile
 // immediately (unique color, no more cancel button) instead of leaving the
 // click looking like it did nothing until the next ~1.2s poll happens to
 // notice. Server confirmation (or a failure, which reverts the flag) still
 // arrives the normal way through polling.
 function wirePendingTileCancelButtons(container) {
+  container.querySelectorAll("[data-dismiss-failed-job]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const job = state.failedJobs.get(btn.dataset.dismissFailedJob);
+      state.failedJobs.delete(btn.dataset.dismissFailedJob);
+      if (job) updatePendingTiles(job.image_id);
+      renderImageList();
+    });
+  });
   container.querySelectorAll("[data-cancel-standby-job]").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -1838,9 +1874,10 @@ function renderResultGrid(results, activeId, imageId) {
   `;
 
   const pendingJobs = pendingJobsFor(imageId);
-  const pendingTilesHtml = `<div id="pendingTiles">${pendingJobs.map(renderPendingTileHtml).join("")}</div>`;
+  const failedJobs = failedJobsFor(imageId);
+  const pendingTilesHtml = `<div id="pendingTiles">${renderPendingTilesHtml(pendingJobs, failedJobs)}</div>`;
   lastPendingTilesImageId = imageId;
-  lastPendingTilesSignature = pendingTilesSignature(pendingJobs);
+  lastPendingTilesSignature = pendingTilesSignature(pendingJobs, failedJobs);
 
   const tilesHtml = results
     .map((r) => {
@@ -2700,6 +2737,9 @@ async function pollQueue() {
   }
   const previousQueue = state.queue;
   state.queue = jobs;
+  for (const job of jobs) {
+    if (job.status === "error" && !state.failedJobs.has(job.id)) state.failedJobs.set(job.id, job);
+  }
 
   const currentIds = new Set(jobs.map((j) => j.id));
   for (const id of handledTerminalJobIds) {
@@ -2765,14 +2805,15 @@ async function pollQueue() {
 // flicker fix in renderImageList() above).
 function updatePendingTiles(imageId) {
   const pendingJobs = pendingJobsFor(imageId);
-  const signature = pendingTilesSignature(pendingJobs);
+  const failedJobs = failedJobsFor(imageId);
+  const signature = pendingTilesSignature(pendingJobs, failedJobs);
   if (imageId === lastPendingTilesImageId && signature === lastPendingTilesSignature) return;
   lastPendingTilesImageId = imageId;
   lastPendingTilesSignature = signature;
 
   const container = document.getElementById("pendingTiles");
   if (!container) return; // results panel isn't showing this image right now
-  container.innerHTML = pendingJobs.map(renderPendingTileHtml).join("");
+  container.innerHTML = renderPendingTilesHtml(pendingJobs, failedJobs);
   wirePendingTileCancelButtons(container);
 }
 
@@ -2790,6 +2831,11 @@ async function forceRefreshImages() {
 }
 els.refreshImagesBtn.addEventListener("click", forceRefreshImages);
 
+// Whether #generateStatus currently holds a job-progress label written below,
+// so it can be cleared once those jobs finish without wiping an unrelated
+// message (e.g. an attach error) on every poll tick.
+let generateStatusShowsJobs = false;
+
 function updateGenerateStatusForCurrentImage() {
   if (!state.currentImageId) return;
   const jobsForImage = state.queue.filter((j) => j.image_id === state.currentImageId);
@@ -2797,10 +2843,12 @@ function updateGenerateStatusForCurrentImage() {
   if (activeJobs.length) {
     const label = formatJobStatus(activeJobs[0]);
     els.generateStatus.textContent = activeJobs.length > 1 ? `${activeJobs.length} generating — ${label}` : label;
-    return;
+    generateStatusShowsJobs = true;
+  } else if (generateStatusShowsJobs) {
+    // A failed job's error is shown on its tile in the results panel instead.
+    els.generateStatus.textContent = "";
+    generateStatusShowsJobs = false;
   }
-  const errored = jobsForImage.find((j) => j.status === "error");
-  if (errored) els.generateStatus.textContent = `Error: ${errored.error || "Generation failed"}`;
 }
 
 function jobElapsedSeconds(job) {

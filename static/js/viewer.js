@@ -15,16 +15,24 @@
  * alternative bases via setCompareOptions() -- a dropdown appears in the
  * modebar, and the host swaps the base url passed to setImages() on change.
  *
- * Separate from those comparison modes (and set apart by a divider in the
- * modebar) is the crop/pre-process mode: an editor, not a comparison, for
- * choosing how the source is rotated/cropped/padded before it's sent to an
- * engine (see preprocess.js). The host enables it per image via
- * setPreprocess(), and shows the resulting processed image as the base.
+ * Also alongside those comparison modes is lineage mode: for an image with a
+ * parent chain (see setCompareOptions() above), steps through every image in
+ * that chain -- oldest ancestor to the current image -- one at a time, via a
+ * slider and a thumbnail sub-toolbar (setLineage()). It only ever walks the
+ * existing ancestor chain the host already resolves; it doesn't gather
+ * anything beyond that (e.g. sibling branches or intermediate results).
+ *
+ * Separate from all of those (and set apart by a divider in the modebar) is
+ * the crop/pre-process mode: an editor, not a comparison, for choosing how
+ * the source is rotated/cropped/padded before it's sent to an engine (see
+ * preprocess.js). The host enables it per image via setPreprocess(), and
+ * shows the resulting processed image as the base.
  */
 import { createPreprocessEditor } from "./preprocess.js";
 
 const STORAGE_KEY = "grok_img2img.viewerMode";
 const PREPROCESS_MODE = "preprocess";
+const LINEAGE_MODE = "lineage";
 
 const MODES = [
   { id: "wipe-lr", icon: "⬌", title: "Wipe left/right" },
@@ -53,6 +61,9 @@ export function initABViewer(container) {
     <div class="viewer-modebar" id="viewerModebar">
       ${MODES.map((m) => `<button class="viewer-mode-btn" data-mode="${m.id}" title="${m.title}">${m.icon}</button>`).join("")}
       <input type="range" id="blendSlider" class="viewer-blend-slider" min="0" max="100" value="50" title="Blend crossfade" style="display:none" />
+      <button class="viewer-mode-btn viewer-lineage-btn" id="lineageBtn" data-mode="${LINEAGE_MODE}" title="Step through this image's lineage, oldest ancestor to newest" style="display:none">
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="7.4" fill="none" stroke="currentColor" stroke-width="1.6" /><path d="M10 6v4.2l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </button>
       <span class="viewer-mode-sep" aria-hidden="true"></span>
       <button class="viewer-mode-btn viewer-preprocess-btn" id="preprocessBtn" data-mode="${PREPROCESS_MODE}" title="Crop / pre-process the source image (rotate, crop, pad) before it's sent to the service" disabled>
         <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M5 1v14h14M1 5h14v14" /></svg>
@@ -65,6 +76,10 @@ export function initABViewer(container) {
         </label>
         <button class="viewer-mode-btn viewer-orientation-btn" id="orientationToggleBtn" title="Toggle row/column layout" style="display:none">⟳</button>
       </span>
+    </div>
+    <div class="viewer-lineage-toolbar" id="lineageToolbar" style="display:none">
+      <input type="range" id="lineageSlider" class="lineage-slider" min="0" max="0" step="1" value="0" title="Drag through this image's lineage" />
+      <div class="lineage-filmstrip" id="lineageFilmstrip"></div>
     </div>
     <div class="viewer-stage-wrap">
       <div class="ab-stage" id="abStage" data-mode="wipe-lr">
@@ -80,6 +95,10 @@ export function initABViewer(container) {
         </div>
       </div>
       <div class="pp-stage" id="ppStage" style="display:none"></div>
+      <div class="lineage-stage" id="lineageStage" style="display:none">
+        <img class="lineage-img" id="lineageImg" alt="Lineage step" />
+        <div class="ab-badge" id="lineageBadge" style="display:none" title="This step's pre-processed (crop/expand) render -- what was actually sent to the engine at that point. The stored original is unchanged.">✂ Pre-processed</div>
+      </div>
       <div class="ab-empty" id="abEmpty">Select an image to begin.</div>
     </div>
   `;
@@ -102,6 +121,13 @@ export function initABViewer(container) {
   const preprocessControls = container.querySelector("#preprocessControls");
   const preprocessStage = container.querySelector("#ppStage");
   const badge = container.querySelector("#abBadge");
+  const lineageBtn = container.querySelector("#lineageBtn");
+  const lineageToolbar = container.querySelector("#lineageToolbar");
+  const lineageSlider = container.querySelector("#lineageSlider");
+  const lineageFilmstrip = container.querySelector("#lineageFilmstrip");
+  const lineageStage = container.querySelector("#lineageStage");
+  const lineageImg = container.querySelector("#lineageImg");
+  const lineageBadge = container.querySelector("#lineageBadge");
   let onCompareChange = null;
 
   // { imageId, rawUrl, params, onApply(params) } for the selected image, or
@@ -194,13 +220,61 @@ export function initABViewer(container) {
       stage.style.display = "none";
       return;
     }
-    stage.style.display = mode === PREPROCESS_MODE ? "none" : mode === "side-by-side" ? "flex" : "block";
+    stage.style.display =
+      mode === PREPROCESS_MODE || mode === LINEAGE_MODE ? "none" : mode === "side-by-side" ? "flex" : "block";
   }
+
+  // steps: [{ id, label, url, thumbUrl, processed, isDeleted }] oldest ancestor first,
+  // ending with the current image -- see setLineage().
+  let lineageSteps = [];
+  let lineageIndex = 0;
+
+  function renderLineageFilmstrip() {
+    lineageFilmstrip.innerHTML = "";
+    lineageSteps.forEach((step, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "lineage-thumb";
+      btn.dataset.index = String(i);
+      btn.title = step.label + (step.isDeleted ? " (in trash)" : "");
+      const thumb = document.createElement("img");
+      thumb.src = step.thumbUrl;
+      thumb.alt = "";
+      const label = document.createElement("span");
+      label.className = "lineage-thumb-label";
+      label.textContent = step.label;
+      btn.append(thumb, label);
+      btn.addEventListener("click", () => setLineageIndex(i));
+      lineageFilmstrip.appendChild(btn);
+    });
+  }
+
+  function updateLineageActive() {
+    lineageFilmstrip.querySelectorAll(".lineage-thumb").forEach((el) => {
+      el.classList.toggle("active", Number(el.dataset.index) === lineageIndex);
+    });
+    lineageFilmstrip
+      .querySelector(`.lineage-thumb[data-index="${lineageIndex}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }
+
+  function setLineageIndex(i) {
+    if (!lineageSteps.length) return;
+    lineageIndex = Math.min(Math.max(i, 0), lineageSteps.length - 1);
+    lineageSlider.value = String(lineageIndex);
+    updateLineageActive();
+    const step = lineageSteps[lineageIndex];
+    lineageImg.src = step.url;
+    lineageBadge.style.display = step.processed ? "block" : "none";
+  }
+
+  lineageSlider.addEventListener("input", (e) => setLineageIndex(Number(e.target.value)));
 
   const saved = loadState();
   // `compareMode` is the last comparison mode chosen; `mode` is what's active
-  // and additionally can be PREPROCESS_MODE, which is never persisted or
-  // restored (it needs an image to edit) -- leaving it returns to compareMode.
+  // and additionally can be PREPROCESS_MODE or LINEAGE_MODE, neither of which
+  // is ever persisted or restored (each needs a freshly-set-up image) --
+  // leaving either returns to compareMode.
   let compareMode = MODES.some((m) => m.id === saved.mode) ? saved.mode : "wipe-lr";
   let mode = compareMode;
   let orientation = saved.orientation === "column" ? "column" : "row";
@@ -304,20 +378,28 @@ export function initABViewer(container) {
     if (nextMode === PREPROCESS_MODE) {
       if (!preprocessCtx) return;
       if (mode === PREPROCESS_MODE) return setMode(compareMode); // clicking the active crop button again backs out
+    } else if (nextMode === LINEAGE_MODE) {
+      if (lineageSteps.length < 2) return;
+      if (mode === LINEAGE_MODE) return setMode(compareMode); // clicking the active lineage button again backs out
     } else {
       compareMode = nextMode;
     }
     const wasPreprocess = mode === PREPROCESS_MODE;
     mode = nextMode;
     const inPreprocess = mode === PREPROCESS_MODE;
+    const inLineage = mode === LINEAGE_MODE;
     stage.dataset.mode = compareMode; // the (hidden) comparison stage keeps its last layout
     stage.classList.remove("ab-holding");
     modebar.querySelectorAll(".viewer-mode-btn[data-mode]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.mode === mode);
     });
     modebar.classList.toggle("pp-active", inPreprocess);
+    modebar.classList.toggle("lineage-active", inLineage);
     preprocessControls.style.display = inPreprocess ? "inline-flex" : "none";
     preprocessStage.style.display = inPreprocess ? "block" : "none";
+    lineageToolbar.style.display = inLineage ? "flex" : "none";
+    lineageStage.style.display = inLineage ? "flex" : "none";
+    if (inLineage) updateLineageActive();
     orientationBtn.style.display = mode === "side-by-side" ? "inline-flex" : "none";
     blendSlider.style.display = mode === "blend" ? "block" : "none";
     if (mode === "blend") blendSlider.value = percent;
@@ -387,12 +469,36 @@ export function initABViewer(container) {
       preprocessBtn.classList.toggle("has-edits", !!ctx?.params);
       if (mode === PREPROCESS_MODE && (!ctx || ctx.imageId !== previousId)) setMode(compareMode);
     },
+    // steps: [{ id, label, url, thumbUrl, processed, isDeleted }] this image's lineage,
+    // oldest ancestor first and ending with the image itself -- or [] / a
+    // single-item array to hide the mode (nothing to step through). Re-anchors
+    // on the previously-shown step by id when possible (e.g. after a metadata
+    // refresh), so an in-progress scrub isn't reset back to the newest step;
+    // falls back to the newest step otherwise.
+    setLineage(steps) {
+      const next = steps || [];
+      const hasLineage = next.length > 1;
+      const previousId = lineageSteps[lineageIndex]?.id;
+      lineageSteps = next;
+      lineageBtn.style.display = hasLineage ? "inline-flex" : "none";
+      if (!hasLineage) {
+        lineageSlider.max = "0";
+        lineageFilmstrip.innerHTML = "";
+        if (mode === LINEAGE_MODE) setMode(compareMode);
+        return;
+      }
+      lineageSlider.max = String(lineageSteps.length - 1);
+      renderLineageFilmstrip();
+      const stillAt = previousId ? lineageSteps.findIndex((s) => s.id === previousId) : -1;
+      setLineageIndex(stillAt !== -1 ? stillAt : lineageSteps.length - 1);
+    },
     // opts.baseProcessed: the base image is the pre-processed render of the
     // source rather than the source itself -- flagged with a badge.
     setImages(sourceUrl, resultUrl, opts = {}) {
       hasSource = !!sourceUrl;
       if (!sourceUrl) {
         if (mode === PREPROCESS_MODE) setMode(compareMode);
+        if (mode === LINEAGE_MODE) setMode(compareMode);
         updateStageDisplay();
         modebar.style.display = "none";
         empty.style.display = "flex";

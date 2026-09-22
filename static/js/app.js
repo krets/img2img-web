@@ -1529,6 +1529,7 @@ async function selectImage(id) {
   // fill in the result image once metadata resolves.
   abViewer.setCompareOptions([], null);
   abViewer.setPreprocess(null); // re-enabled by syncViewer() once the details load
+  abViewer.setLineage([]); // re-enabled by syncViewer() once the details load
   // The sidebar list already knows whether this image has pre-process settings,
   // so show the right base straight away instead of flashing the original.
   const listed = state.images.find((i) => i.id === id);
@@ -1649,6 +1650,43 @@ function syncViewer() {
       els.generateStatus.textContent = `Error: ${message}`;
     },
   });
+  abViewer.setLineage(buildLineageSteps(img, ancestors, active));
+}
+
+// Walks the same ancestor chain as the "Compare with" dropdown, just oldest
+// first and ending with the image itself, for the lineage slider. Doesn't
+// gather anything beyond that existing parent chain (no sibling branches or
+// intermediate results) -- except for one extra step at the very end: the
+// current image's own active result (the same "latest" image the other
+// comparison modes show), when it has one. Without that, the newest thing
+// the slider could show was the current image's pre-generation source --
+// one step behind what's actually selected/on screen everywhere else.
+function buildLineageSteps(img, ancestors, active) {
+  const steps = ancestors.map((a, i) => {
+    const { url, processed } = sourceUrlFor(a);
+    return {
+      id: a.id,
+      label: ancestorRelation(i, ancestors.length),
+      url,
+      thumbUrl: `/api/images/${a.id}/thumbnail`,
+      processed,
+      isDeleted: a.is_deleted,
+    };
+  });
+  steps.reverse();
+  const { url, processed } = sourceUrlFor(img);
+  steps.push({ id: img.id, label: "Current", url, thumbUrl: `/api/images/${img.id}/thumbnail`, processed, isDeleted: false });
+  if (active) {
+    steps.push({
+      id: `result-${active.id}`,
+      label: "Latest",
+      url: `/api/results/${active.id}/file`,
+      thumbUrl: `/api/results/${active.id}/thumbnail`,
+      processed: false,
+      isDeleted: false,
+    });
+  }
+  return steps;
 }
 
 function ancestorRelation(index, total) {
@@ -2696,8 +2734,16 @@ async function pollQueue() {
   if (anyNewlyFinished) {
     await loadImages();
     if (touchedCurrentImage && state.currentImageId) {
-      state.currentImage = await api.getImage(state.currentImageId);
-      renderDetails();
+      const targetImageId = state.currentImageId;
+      const image = await api.getImage(targetImageId);
+      // The user may have switched to a different image while that fetch was
+      // in flight (this runs on an unprompted poll tick, not a user action) --
+      // without this check, whichever fetch resolved last would win and
+      // clobber state.currentImage with the wrong image's data.
+      if (state.currentImageId === targetImageId) {
+        state.currentImage = image;
+        renderDetails();
+      }
     }
   } else {
     applyQueueOrdering();

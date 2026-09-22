@@ -540,6 +540,50 @@ kbd {
 .pp-apply:hover { filter: brightness(1.1); }
 .pp-apply:disabled { opacity: 0.5; cursor: progress; }
 
+.viewer-lineage-btn svg { fill: none; stroke: currentColor; }
+.viewer-modebar.lineage-active .viewer-compare { display: none !important; }
+
+/* Lineage mode: a second toolbar row (slider + thumbnail filmstrip) for
+   stepping through an image's ancestor chain, oldest to newest. */
+.viewer-lineage-toolbar {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid #2a2c35;
+  background: #14151a;
+}
+.lineage-slider { width: 100%; accent-color: #8B5CF6; background: transparent; border: none; padding: 0; }
+.lineage-filmstrip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.lineage-thumb {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 64px;
+  padding: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #9ea2b0;
+}
+.lineage-thumb:hover { background: rgba(255,255,255,0.06); }
+.lineage-thumb.active { border-color: #8B5CF6; background: rgba(139,92,246,0.18); color: #e6e6eb; }
+.lineage-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; background: #0d0e12; display: block; }
+.lineage-thumb-label {
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60px;
+}
+.lineage-stage { position: relative; width: 90%; height: 90%; display: none; align-items: center; justify-content: center; }
+.lineage-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
 .viewer-stage-wrap {
   position: relative;
   flex: 1;

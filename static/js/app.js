@@ -1510,7 +1510,9 @@ document.addEventListener("paste", async (e) => {
 });
 
 async function selectImage(id) {
-  if (state.currentImageId !== id) state.compareAgainstId = null;
+  // compareAgainstId is left as-is here -- it's sticky across navigation and
+  // only cleared once we know the new image's ancestors (see syncViewer),
+  // so switching between images that share a chosen ancestor keeps it selected.
   state.currentImageId = id;
   revealImageInList(id);
   // Give instant feedback that the switch was initiated, rather than leaving
@@ -1631,11 +1633,11 @@ function syncViewer() {
     label: `${ancestorRelation(i, ancestors.length)}: ${a.display_name}${a.is_deleted ? " (in trash)" : ""}`,
   }));
   abViewer.setCompareOptions(options, state.compareAgainstId, setCompareAgainst);
-  // Comparing against an ancestor shows that image's original; only the
-  // image's own source is swapped for its pre-processed render.
-  const base = state.compareAgainstId
-    ? { url: `/api/images/${state.compareAgainstId}/file`, processed: false }
-    : sourceUrlFor(img);
+  // Comparing against an ancestor shows what was actually fed into the engine
+  // for that step -- its pre-processed (crop/expand) render when it has one,
+  // same as the image's own source would get.
+  const compareAncestor = state.compareAgainstId ? ancestors.find((a) => a.id === state.compareAgainstId) : null;
+  const base = compareAncestor ? sourceUrlFor(compareAncestor) : sourceUrlFor(img);
   const resultUrl = active ? `/api/results/${active.id}/file` : null;
   abViewer.setImages(base.url, resultUrl, { baseProcessed: base.processed });
   abViewer.setPreprocess({

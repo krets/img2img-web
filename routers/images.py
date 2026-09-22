@@ -277,6 +277,7 @@ def _resolve_ancestors(image, max_depth=50):
             "id": parent["id"],
             "display_name": parent["display_name"],
             "is_deleted": bool(parent["is_deleted"]),
+            "preprocess": parent["preprocess"],
         })
         current = parent
     return chain

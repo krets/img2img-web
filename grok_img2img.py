@@ -26,10 +26,33 @@ XAI_VIDEO_GEN_URL = "https://api.x.ai/v1/videos/generations"
 DEFAULT_MODEL = "grok-imagine-image-quality"
 DEFAULT_VIDEO_MODEL = "grok-imagine-video-1.5"
 
+# Diffusion transformers see the image as a grid of latent patches: an 8x VAE
+# plus 2x2 patchify (Flux) means every 16 pixels is one token. Sides that aren't
+# a multiple of this get silently cropped or padded by the model, so we snap to it.
+DIM_MULTIPLE = 16
+
+
+def aligned_size(width, height, max_dim=None, multiple=DIM_MULTIPLE):
+    """Returns (w, h) scaled down so the long edge fits max_dim, then with each
+    side rounded to the nearest multiple of `multiple` (never exceeding
+    max_dim). Rounding each side independently keeps aspect distortion under
+    half a patch per side, which is imperceptible next to a crop.
+    """
+    scale = min(1.0, max_dim / max(width, height)) if max_dim else 1.0
+    limit = (max_dim // multiple) * multiple if max_dim else None
+
+    def snap(side):
+        snapped = max(multiple, round(side * scale / multiple) * multiple)
+        return min(snapped, limit) if limit and limit >= multiple else snapped
+
+    return snap(width), snap(height)
+
+
 def load_and_preprocess_image(image_input, max_dim=1024):
     """
     Loads an image (file path, file-like object, or PIL Image),
-    flattens transparency to white, and resizes it if it exceeds max_dim.
+    flattens transparency to white, and resizes it so the long edge fits
+    max_dim and both sides are multiples of DIM_MULTIPLE.
     Returns the base64-encoded data URI string.
     """
     if isinstance(image_input, (str, os.PathLike)):
@@ -62,11 +85,11 @@ def load_and_preprocess_image(image_input, max_dim=1024):
     else:
         img = img.convert("RGB")
 
-    # Resize image if it exceeds max_dim on either side, maintaining aspect ratio
-    if max(img.size) > max_dim:
-        print(f"[*] Resizing image to have maximum dimension of {max_dim}px (maintaining aspect ratio)...")
-        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        print(f"[*] New image dimensions: {img.size[0]}x{img.size[1]}")
+    # Fit within max_dim and snap both sides to the model's patch grid
+    target = aligned_size(*img.size, max_dim=max_dim)
+    if target != img.size:
+        print(f"[*] Resizing image to {target[0]}x{target[1]} (max {max_dim}px, multiple of {DIM_MULTIPLE})...")
+        img = img.resize(target, Image.Resampling.LANCZOS)
 
     # Encode to base64
     print("[*] Encoding image to base64 PNG...")

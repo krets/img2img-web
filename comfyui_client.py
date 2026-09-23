@@ -18,6 +18,7 @@ import requests
 from PIL import Image
 
 import jobs
+from grok_img2img import DIM_MULTIPLE, aligned_size
 
 try:
     from websockets.sync.client import connect as _ws_connect
@@ -48,28 +49,41 @@ def _load_workflow(workflow_path):
 
 
 def _prepare_upload(image_path, max_dim):
-    """Resizes the source image to max_dim before upload if it's larger, so a
-    slow or remote ComfyUI connection doesn't have to transfer a full-resolution
-    original for every generation (mirrors the Grok engine's preprocessing).
+    """Resizes the source image to fit max_dim, with both sides snapped to the
+    model's patch grid (DIM_MULTIPLE), before upload -- so a slow or remote
+    ComfyUI connection doesn't have to transfer a full-resolution original for
+    every generation (mirrors the Grok engine's preprocessing).
     Returns (bytes, filename); passes the file through untouched if no resize
     is needed.
     """
-    if max_dim:
-        img = Image.open(image_path)
-        if max(img.size) > max_dim:
-            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-                bg = Image.new("RGB", img.size, (255, 255, 255))
-                img_rgba = img.convert("RGBA")
-                bg.paste(img_rgba, mask=img_rgba.split()[3])
-                img = bg
-            else:
-                img = img.convert("RGB")
-            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-            buf = BytesIO()
-            img.save(buf, format="PNG")
-            return buf.getvalue(), Path(image_path).stem + ".png"
+    img = Image.open(image_path)
+    target = aligned_size(*img.size, max_dim=max_dim)
+    if target != img.size:
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            img_rgba = img.convert("RGBA")
+            bg.paste(img_rgba, mask=img_rgba.split()[3])
+            img = bg
+        else:
+            img = img.convert("RGB")
+        img = img.resize(target, Image.Resampling.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue(), Path(image_path).stem + ".png"
     with open(image_path, "rb") as f:
         return f.read(), Path(image_path).name
+
+
+def _align_scale_nodes(workflow):
+    """The workflow rescales inputs to a fixed megapixel budget in-graph, which
+    lands on arbitrary sizes. VAEEncode then silently crops to the latent grid
+    while the scheduler is fed the uncropped size, so the output loses an edge
+    sliver and the reference latents don't line up. Snap those rescales to
+    the grid so every stage agrees on the size.
+    """
+    for node in workflow.values():
+        if node.get("class_type") == "ImageScaleToTotalPixels":
+            node["inputs"]["resolution_steps"] = DIM_MULTIPLE
 
 
 def _upload_image(base_url, image_path, max_dim=None):
@@ -103,6 +117,7 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
 
     jobs.update_job(job_id, phase="uploading", value=0, max=0)
     workflow = _load_workflow(workflow_path)
+    _align_scale_nodes(workflow)
     uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
 
     # Every LoadImage node gets pointed at the uploaded source image by default.

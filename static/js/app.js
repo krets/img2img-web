@@ -1097,10 +1097,163 @@ function renderImageListHtml(rows) {
   return html + "</div>".repeat(open.length);
 }
 
+// Applies a lineage change's returned image detail: refreshes the details panel
+// if that image is the one on screen, and the sidebar grouping either way.
+async function applyParentChange(imageId, detail) {
+  if (state.currentImageId === imageId) {
+    state.currentImage = detail;
+    renderDetails();
+  }
+  await loadImages();
+}
+
+async function detachImageParent(imageId, displayName) {
+  const ok = await openConfirmModal({
+    title: "Detach from parent",
+    message: `Detach "${displayName || "this image"}" from its parent? It becomes the root of its own lineage; you can link it to a parent again later.`,
+    confirmLabel: "Detach",
+  });
+  if (!ok) return;
+  try {
+    await applyParentChange(imageId, await api.clearImageParent(imageId));
+  } catch (e) {
+    els.generateStatus.textContent = `Error: ${e.message}`;
+  }
+}
+
+// Ids of every image below `imageId` in the sidebar list's parent links -- the
+// ones that can't be picked as its new parent (that would be a cycle). The
+// server re-checks against the full chain, so this only needs to be a filter.
+function descendantImageIds(imageId) {
+  const childrenOf = new Map();
+  for (const img of state.images) {
+    if (!img.parent_image_id) continue;
+    if (!childrenOf.has(img.parent_image_id)) childrenOf.set(img.parent_image_id, []);
+    childrenOf.get(img.parent_image_id).push(img.id);
+  }
+  const found = new Set();
+  const stack = [imageId];
+  while (stack.length) {
+    for (const childId of childrenOf.get(stack.pop()) || []) {
+      if (!found.has(childId)) {
+        found.add(childId);
+        stack.push(childId);
+      }
+    }
+  }
+  return found;
+}
+
+// Two steps in one modal: pick the parent image, then which of its results the
+// child descends from (lineage points at a specific result, so the "Compare
+// with parent" view can show the crop that result was generated with).
+function openSetParentModal(imageId) {
+  const img = state.images.find((i) => i.id === imageId);
+  if (!img) return;
+  const excluded = descendantImageIds(imageId);
+  excluded.add(imageId);
+  const candidates = state.images.filter((i) => !excluded.has(i.id) && i.result_evaluations.length);
+  let search = "";
+
+  const modal = openModal(`
+    <div class="parent-picker">
+      <h3>Set parent for "${escapeHtml(img.display_name)}"</h3>
+      <div id="mParentBody"></div>
+      <div id="mParentStatus" class="status-line"></div>
+      <div class="modal-actions">
+        ${img.derived_from_result_id ? `<button id="mDetach" class="btn-danger" type="button" style="margin-right:auto">✕ Detach from parent</button>` : ""}
+        <button id="mCancel" class="btn-ghost" type="button">Cancel</button>
+      </div>
+    </div>
+  `);
+  const body = modal.querySelector("#mParentBody");
+  const statusEl = modal.querySelector("#mParentStatus");
+  modal.querySelector("#mCancel").addEventListener("click", closeModal);
+  modal.querySelector("#mDetach")?.addEventListener("click", () => {
+    closeModal();
+    detachImageParent(imageId, img.display_name);
+  });
+
+  const choose = async (resultId) => {
+    statusEl.textContent = "Linking...";
+    try {
+      const detail = await api.setImageParent(imageId, resultId);
+      closeModal();
+      await applyParentChange(imageId, detail);
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    }
+  };
+
+  const showResults = (parent) => {
+    statusEl.textContent = "";
+    const activeId = parent.active_result_id;
+    const tiles = [...parent.result_evaluations].reverse().map(
+      (r) => `<button type="button" class="parent-result-tile ${r.evaluation} ${r.id === activeId ? "active" : ""}" data-result-id="${r.id}" title="Use this result as the parent">
+        <img src="/api/results/${r.id}/thumbnail" loading="lazy" alt="" />
+      </button>`
+    );
+    body.innerHTML = `
+      <p class="modal-note">Which result of "${escapeHtml(parent.display_name)}" is this image derived from?</p>
+      <div class="parent-result-grid">${tiles.join("")}</div>
+      <div class="dup-group-actions" style="text-align:left"><button id="mParentBack" class="btn-ghost small" type="button">← Back</button></div>
+    `;
+    body.querySelector("#mParentBack").addEventListener("click", showImages);
+    body.querySelectorAll(".parent-result-tile").forEach((tile) => {
+      tile.addEventListener("click", () => choose(tile.dataset.resultId));
+    });
+  };
+
+  const renderRows = () => {
+    const q = search.trim().toLowerCase();
+    const rows = candidates.filter((c) => !q || c.display_name.toLowerCase().includes(q));
+    const list = body.querySelector("#mParentList");
+    list.innerHTML = rows.length
+      ? rows
+          .map(
+            (c) => `<button type="button" class="parent-pick-row ${c.id === img.parent_image_id ? "current" : ""}" data-image-id="${c.id}">
+              <img src="/api/images/${c.id}/thumbnail" loading="lazy" alt="" />
+              <span class="dup-name">${escapeHtml(c.display_name)}</span>
+              <span class="dup-result-summary">${c.id === img.parent_image_id ? "current parent · " : ""}${c.result_evaluations.length} result${c.result_evaluations.length === 1 ? "" : "s"}</span>
+            </button>`
+          )
+          .join("")
+      : `<p class="modal-note">No images with results to choose from.</p>`;
+    list.querySelectorAll(".parent-pick-row").forEach((row) => {
+      row.addEventListener("click", () => showResults(candidates.find((c) => c.id === row.dataset.imageId)));
+    });
+  };
+
+  function showImages() {
+    statusEl.textContent = "";
+    body.innerHTML = `
+      <p class="modal-note">Pick the image this one was derived from. Only images with results are listed.</p>
+      <div class="field"><input id="mParentSearch" type="text" placeholder="Search images..." value="${escapeHtml(search)}" /></div>
+      <div id="mParentList" class="parent-pick-list"></div>
+    `;
+    const input = body.querySelector("#mParentSearch");
+    input.addEventListener("input", () => {
+      search = input.value;
+      renderRows();
+    });
+    renderRows();
+    input.focus();
+  }
+
+  showImages();
+}
+
 function openImageItemMenu(anchorBtn, imageId) {
   const img = state.images.find((i) => i.id === imageId);
   if (!img) return;
+  const lineageItems = [
+    { icon: "↳", label: img.derived_from_result_id ? "Change parent…" : "Set parent…", onClick: () => openSetParentModal(imageId) },
+  ];
+  if (img.derived_from_result_id) {
+    lineageItems.push({ icon: "✕", label: "Detach from parent", onClick: () => detachImageParent(imageId, img.display_name) });
+  }
   openItemMenu(anchorBtn, [
+    ...lineageItems,
     { icon: "📎", label: "Copy as reference image", onClick: () => useAsReferenceFromUrl(`/api/images/${imageId}/file`, img.display_name) },
     { icon: "✂", label: "Move to reference library", onClick: () => moveImageToReference(imageId) },
     { icon: "➜", label: "Move to other library…", onClick: () => openMoveOrCopyImagesModal([imageId], "move") },
@@ -1745,8 +1898,18 @@ function renderProvenanceLine(derivedFrom) {
       }</a>`
     : "";
 
-  els.provenanceLine.innerHTML = `↳ Derived from a result of ${sourceLink}${promptText}${compareHtml}${lineageHtml}`;
+  const editHtml = ` <a href="#" class="lineage-compare" data-change-parent>✎ change</a> <a href="#" class="lineage-compare" data-detach-parent>✕ detach</a>`;
+
+  els.provenanceLine.innerHTML = `↳ Derived from a result of ${sourceLink}${promptText}${compareHtml}${editHtml}${lineageHtml}`;
   els.provenanceLine.style.display = "block";
+  els.provenanceLine.querySelector("[data-change-parent]").addEventListener("click", (e) => {
+    e.preventDefault();
+    if (state.currentImage) openSetParentModal(state.currentImage.id);
+  });
+  els.provenanceLine.querySelector("[data-detach-parent]").addEventListener("click", (e) => {
+    e.preventDefault();
+    if (state.currentImage) detachImageParent(state.currentImage.id, state.currentImage.display_name);
+  });
   els.provenanceLine.querySelectorAll("[data-jump-to-image]").forEach((link) => {
     link.addEventListener("click", (e) => {
       e.preventDefault();

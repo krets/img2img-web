@@ -20,6 +20,10 @@ class ImageUpdateIn(BaseModel):
     comment: Optional[str] = None
 
 
+class ImageParentIn(BaseModel):
+    result_id: str
+
+
 class ImageFromUrlIn(BaseModel):
     url: str
 

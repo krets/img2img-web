@@ -9,7 +9,15 @@ from PIL import Image
 import db
 import preprocess
 import storage
-from models import CopyImagesIn, ImageFromUrlIn, ImageUpdateIn, MergeImagesIn, MoveImagesIn, PreprocessIn
+from models import (
+    CopyImagesIn,
+    ImageFromUrlIn,
+    ImageParentIn,
+    ImageUpdateIn,
+    MergeImagesIn,
+    MoveImagesIn,
+    PreprocessIn,
+)
 
 router = APIRouter(tags=["images"])
 
@@ -310,6 +318,48 @@ def update_image(image_id: str, body: ImageUpdateIn):
     if not db.get_image(image_id):
         raise HTTPException(404, "Image not found")
     return db.update_image(image_id, display_name=body.display_name, comment=body.comment)
+
+
+def _is_ancestor_or_self(candidate_id, image, max_depth=50):
+    """True if `image` is candidate_id or has it anywhere up its parent chain."""
+    seen = set()
+    current = image
+    while current and current["id"] not in seen and len(seen) < max_depth:
+        if current["id"] == candidate_id:
+            return True
+        seen.add(current["id"])
+        result_id = current.get("derived_from_result_id")
+        result = db.get_result(result_id) if result_id else None
+        current = db.get_image(result["image_id"]) if result else None
+    return False
+
+
+@router.put("/api/images/{image_id}/parent")
+def set_image_parent(image_id: str, body: ImageParentIn):
+    """Makes the image a child of one of another image's results, replacing any
+    existing parent. Rejects links that would make an image its own ancestor.
+    """
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    result = db.get_result(body.result_id)
+    parent = db.get_image(result["image_id"]) if result else None
+    if not result or result["is_deleted"] or not parent or parent["is_deleted"]:
+        raise HTTPException(404, "Parent result not found")
+    if parent["project_id"] != image["project_id"]:
+        raise HTTPException(400, "Parent must be in the same project")
+    if _is_ancestor_or_self(image_id, parent):
+        raise HTTPException(400, "An image can't be its own ancestor")
+    return _image_detail(db.set_image_parent(image_id, body.result_id))
+
+
+@router.delete("/api/images/{image_id}/parent")
+def clear_image_parent(image_id: str):
+    """Detaches the image from its parent; it becomes a root of its own lineage."""
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    return _image_detail(db.set_image_parent(image_id, None))
 
 
 @router.delete("/api/images/{image_id}")

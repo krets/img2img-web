@@ -66,6 +66,9 @@ export const api = {
   // both return the refreshed image detail. The stored source file is never modified.
   setImagePreprocess: (id, params) => request("PUT", `/images/${id}/preprocess`, { json: params }),
   clearImagePreprocess: (id) => request("DELETE", `/images/${id}/preprocess`),
+  // Lineage: parent is one of another image's results. Both return the refreshed image detail.
+  setImageParent: (id, resultId) => request("PUT", `/images/${id}/parent`, { json: { result_id: resultId } }),
+  clearImageParent: (id) => request("DELETE", `/images/${id}/parent`),
   deleteImage: (id) => request("DELETE", `/images/${id}`),
   restoreImage: (id) => request("POST", `/images/${id}/restore`),
   permanentlyDeleteImage: (id) => request("DELETE", `/images/${id}/permanent`),

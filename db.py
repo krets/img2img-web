@@ -432,6 +432,16 @@ def set_image_preprocess(image_id, preprocess):
     return get_image(image_id)
 
 
+def set_image_parent(image_id, result_id):
+    """Points the image's lineage at a parent result (or, with None, detaches it
+    so it becomes a root). Callers validate the result -- see routers/images.py.
+    """
+    conn = get_connection()
+    conn.execute("UPDATE images SET derived_from_result_id = ? WHERE id = ?", (result_id, image_id))
+    conn.commit()
+    return get_image(image_id)
+
+
 def find_image_by_hash(project_id, content_hash):
     conn = get_connection()
     row = conn.execute(

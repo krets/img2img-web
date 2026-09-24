@@ -1639,11 +1639,13 @@ function syncViewer() {
     label: `${ancestorRelation(i, ancestors.length)}: ${a.display_name}${a.is_deleted ? " (in trash)" : ""}`,
   }));
   abViewer.setCompareOptions(options, state.compareAgainstId, setCompareAgainst);
-  // Comparing against an ancestor shows what was actually fed into the engine
-  // for that step -- its pre-processed (crop/expand) render when it has one,
-  // same as the image's own source would get.
+  // The base is what was actually fed into the engine: the crop/expand render
+  // recorded with the result being viewed (or, for an ancestor, with the result
+  // its child was promoted from), not whatever the image's settings are now.
   const compareAncestor = state.compareAgainstId ? ancestors.find((a) => a.id === state.compareAgainstId) : null;
-  const base = compareAncestor ? sourceUrlFor(compareAncestor) : sourceUrlFor(img);
+  const base = compareAncestor
+    ? sourceUrlFor(compareAncestor, generatedWithAncestor(compareAncestor))
+    : sourceUrlFor(img, generatedWithResult(active));
   const resultUrl = active ? `/api/results/${active.id}/file` : null;
   abViewer.setImages(base.url, resultUrl, { baseProcessed: base.processed });
   abViewer.setPreprocess({
@@ -1668,7 +1670,7 @@ function syncViewer() {
 // one step behind what's actually selected/on screen everywhere else.
 function buildLineageSteps(img, ancestors, active) {
   const steps = ancestors.map((a, i) => {
-    const { url, processed } = sourceUrlFor(a);
+    const { url, processed } = sourceUrlFor(a, generatedWithAncestor(a));
     return {
       id: a.id,
       label: ancestorRelation(i, ancestors.length),
@@ -1679,7 +1681,7 @@ function buildLineageSteps(img, ancestors, active) {
     };
   });
   steps.reverse();
-  const { url, processed } = sourceUrlFor(img);
+  const { url, processed } = sourceUrlFor(img, generatedWithResult(active));
   steps.push({ id: img.id, label: "Current", url, thumbUrl: `/api/images/${img.id}/thumbnail`, processed, isDeleted: false });
   if (active) {
     steps.push({
@@ -2400,11 +2402,35 @@ function preprocessVersion(params) {
   return (h >>> 0).toString(36);
 }
 
-// What the viewer shows as the image's own source: the processed render if
-// the image has pre-process settings, else the original file.
-function sourceUrlFor(image) {
-  if (!image.preprocess) return { url: `/api/images/${image.id}/file`, processed: false };
-  return { url: `/api/images/${image.id}/processed?v=${preprocessVersion(image.preprocess)}`, processed: true };
+// What the viewer shows as an image's source: the processed render if there
+// are pre-process settings, else the original file.
+//
+// An image's settings are editable, but each result records the settings it was
+// actually generated with. `generatedWith` ({ resultId, params, known }) picks
+// that snapshot instead of the image's current settings, so a comparison shows
+// the crop that produced the result even if it's been changed since. A result
+// from before snapshots were recorded (known: false) falls back to the
+// image's current settings.
+function sourceUrlFor(image, generatedWith = null) {
+  const params = generatedWith?.known ? generatedWith.params : image.preprocess;
+  if (!params) return { url: `/api/images/${image.id}/file`, processed: false };
+  const version = preprocessVersion(params);
+  if (generatedWith?.known && version !== preprocessVersion(image.preprocess)) {
+    return { url: `/api/results/${generatedWith.resultId}/source?v=${version}`, processed: true };
+  }
+  return { url: `/api/images/${image.id}/processed?v=${version}`, processed: true };
+}
+
+// The generatedWith for a result on the image that owns it.
+function generatedWithResult(result) {
+  if (!result) return null;
+  return { resultId: result.id, params: result.source_preprocess, known: result.source_preprocess_known };
+}
+
+// The generatedWith for an ancestor in derived_from.ancestors: the result its
+// child image was promoted from.
+function generatedWithAncestor(ancestor) {
+  return { resultId: ancestor.promoted_result_id, params: ancestor.generated_preprocess, known: ancestor.generated_preprocess_known };
 }
 
 function describePreprocess(p) {

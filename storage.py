@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import re
 import shutil
 import uuid
@@ -160,6 +161,31 @@ def backfill_missing_content_hashes():
             continue
         img = Image.open(path)
         db.set_image_hashes(image["id"], compute_pixel_hash(img), compute_resized_hash(img))
+
+
+def backfill_result_source_preprocess():
+    """One-time (right after results.source_preprocess is added): recovers the
+    pre-process params from the "preprocess" PNG text chunk that generations
+    have always embedded. A result with no such chunk stays "unknown" -- it
+    can't be told apart from one generated before pre-processing existed.
+    """
+    import db
+
+    if not db.needs_source_preprocess_backfill:
+        return
+    for result in db.list_results_missing_source_preprocess():
+        image = db.get_image(result["image_id"])
+        if not image:
+            continue
+        path = result_image_path(image["project_id"], result["file_path"])
+        try:
+            with Image.open(path) as img:
+                raw = img.text.get("preprocess") if hasattr(img, "text") else None
+            params = json.loads(raw) if raw else None
+        except (OSError, ValueError):
+            continue
+        if params:
+            db.set_result_source_preprocess(result["id"], params)
 
 
 def _thumbnail_dir(kind, project_id):

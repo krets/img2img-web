@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS results (
     max_dim           INTEGER,
     revised_prompt    TEXT,
     duration_seconds  REAL,
+    source_preprocess TEXT,
     evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
     is_active_result  INTEGER DEFAULT 0,
     date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -115,6 +116,9 @@ CREATE INDEX IF NOT EXISTS idx_reference_images_deleted_at ON reference_images(i
 """
 
 _db_path = None
+# Set by _migrate() when it adds results.source_preprocess to an existing DB, so
+# the one-time backfill from PNG metadata (storage.py) knows to run.
+needs_source_preprocess_backfill = False
 _local = threading.local()
 
 
@@ -146,6 +150,7 @@ def init_db(db_path: Path):
 
 def _migrate(conn):
     """Hand-rolled column migrations for DBs created before a given column existed."""
+    global needs_source_preprocess_backfill
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)").fetchall()}
     if "content_hash" not in columns:
         conn.execute("ALTER TABLE images ADD COLUMN content_hash TEXT")
@@ -175,6 +180,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE results ADD COLUMN deleted_at TIMESTAMP")
     if "duration_seconds" not in result_columns:
         conn.execute("ALTER TABLE results ADD COLUMN duration_seconds REAL")
+    if "source_preprocess" not in result_columns:
+        conn.execute("ALTER TABLE results ADD COLUMN source_preprocess TEXT")
+        needs_source_preprocess_backfill = True
 
     project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "is_deleted" not in project_columns:
@@ -216,6 +224,8 @@ def _migrate_unrated_evaluation(conn):
             aspect_ratio      TEXT,
             max_dim           INTEGER,
             revised_prompt    TEXT,
+            duration_seconds  REAL,
+            source_preprocess TEXT,
             evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
             is_active_result  INTEGER DEFAULT 0,
             date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -227,10 +237,12 @@ def _migrate_unrated_evaluation(conn):
     """)
     conn.execute("""
         INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path, media_type,
-                              engine, model, aspect_ratio, max_dim, revised_prompt, evaluation,
+                              engine, model, aspect_ratio, max_dim, revised_prompt,
+                              duration_seconds, source_preprocess, evaluation,
                               is_active_result, date_generated, is_deleted, deleted_at)
         SELECT id, image_id, prompt_id, adhoc_prompt_text, file_path, media_type,
                engine, model, aspect_ratio, max_dim, revised_prompt,
+               duration_seconds, source_preprocess,
                CASE WHEN evaluation = 'MAYBE' THEN 'UNRATED' ELSE evaluation END,
                is_active_result, date_generated, is_deleted, deleted_at
         FROM results_old
@@ -807,18 +819,46 @@ def delete_prompt(prompt_id):
 # Results
 # ---------------------------------------------------------------------------
 
+def _encode_source_preprocess(params, known):
+    """results.source_preprocess: NULL = unknown (generated before this was
+    recorded), '{}' = known to have been generated from the uncropped source,
+    otherwise the JSON params (see preprocess.py) the source was rendered with.
+    """
+    if not known:
+        return None
+    return json.dumps(params) if params else "{}"
+
+
+def _decode_result(d):
+    """Splits the stored column into source_preprocess (params dict or None)
+    and source_preprocess_known, so callers needn't special-case '{}'.
+    """
+    raw = d.get("source_preprocess")
+    d["source_preprocess_known"] = raw is not None
+    d["source_preprocess"] = (json.loads(raw) or None) if raw else None
+    return d
+
+
 def create_result(image_id, file_path, prompt_id=None, adhoc_prompt_text=None,
                    engine="grok", model=None, aspect_ratio=None, max_dim=None, revised_prompt=None,
-                   media_type="image", result_id=None, duration_seconds=None):
+                   media_type="image", result_id=None, duration_seconds=None,
+                   source_preprocess=None, source_preprocess_known=False):
+    """source_preprocess is a snapshot of the image's pre-process params at
+    generation time -- the images.preprocess value is mutable, so without this
+    the viewer couldn't show which crop actually produced a given result. Pass
+    source_preprocess_known=True with source_preprocess=None to record that the
+    source was sent uncropped.
+    """
     conn = get_connection()
     result_id = result_id or new_id()
     conn.execute(
         """INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path,
                                  media_type, engine, model, aspect_ratio, max_dim, revised_prompt,
-                                 duration_seconds)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 duration_seconds, source_preprocess)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (result_id, image_id, prompt_id, adhoc_prompt_text, file_path,
-         media_type, engine, model, aspect_ratio, max_dim, revised_prompt, duration_seconds),
+         media_type, engine, model, aspect_ratio, max_dim, revised_prompt, duration_seconds,
+         _encode_source_preprocess(source_preprocess, source_preprocess_known)),
     )
     # Newly generated results become the active one for review.
     conn.execute("UPDATE results SET is_active_result = 0 WHERE image_id = ?", (image_id,))
@@ -834,13 +874,28 @@ def list_results_for_image(image_id, include_deleted=False):
         query += " AND is_deleted = 0"
     query += " ORDER BY date_generated DESC"
     rows = conn.execute(query, (image_id,)).fetchall()
-    return [dict(r) for r in rows]
+    return [_decode_result(dict(r)) for r in rows]
 
 
 def get_result(result_id):
     conn = get_connection()
     row = conn.execute("SELECT * FROM results WHERE id = ?", (result_id,)).fetchone()
-    return dict(row) if row else None
+    return _decode_result(dict(row)) if row else None
+
+
+def list_results_missing_source_preprocess():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM results WHERE source_preprocess IS NULL AND media_type = 'image'"
+    ).fetchall()
+    return [_decode_result(dict(r)) for r in rows]
+
+
+def set_result_source_preprocess(result_id, params):
+    conn = get_connection()
+    conn.execute("UPDATE results SET source_preprocess = ? WHERE id = ?",
+                 (_encode_source_preprocess(params, True), result_id))
+    conn.commit()
 
 
 def set_active_result(result_id):

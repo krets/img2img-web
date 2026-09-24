@@ -258,6 +258,8 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
             revised_prompt=revised_prompt,
             result_id=result_id,
             duration_seconds=comfyui_processing_seconds if comfyui_processing_seconds is not None else time.time() - start_time,
+            source_preprocess=preprocess_params,
+            source_preprocess_known=True,
         )
         jobs.finish_job(job_id, result_id=result["id"])
     except jobs.GenerationCancelled:
@@ -289,6 +291,29 @@ def get_result_thumbnail(result_id: str):
         raise HTTPException(404, "Result file missing on disk")
     thumb_path = storage.get_or_create_thumbnail("results", image["project_id"], result_id, path)
     return FileResponse(thumb_path, media_type="image/jpeg")
+
+
+@router.get("/api/results/{result_id}/source")
+def get_result_source(result_id: str):
+    """The image this result was generated from, as the engine saw it: the
+    result's image's stored file with the pre-process params recorded at
+    generation time applied (the uncropped file if there were none). For a
+    result from before those were recorded, falls back to the image's current
+    pre-process -- the best guess available.
+    """
+    result = db.get_result(result_id)
+    if not result:
+        raise HTTPException(404, "Result not found")
+    image = db.get_image(result["image_id"])
+    if not image:
+        raise HTTPException(404, "Image not found")
+    path = storage.source_image_path(image["project_id"], image["file_name"])
+    if not path.exists():
+        raise HTTPException(404, "Source file missing on disk")
+    params = result["source_preprocess"] if result["source_preprocess_known"] else image["preprocess"]
+    if not params:
+        return FileResponse(path)
+    return FileResponse(storage.get_or_create_processed(image["project_id"], image["id"], path, params), media_type="image/png")
 
 
 @router.get("/api/results/{result_id}/preview")

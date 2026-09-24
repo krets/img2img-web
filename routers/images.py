@@ -194,6 +194,8 @@ def copy_images(body: CopyImagesIn):
                 revised_prompt=result["revised_prompt"],
                 media_type=result["media_type"],
                 duration_seconds=result["duration_seconds"],
+                source_preprocess=result["source_preprocess"],
+                source_preprocess_known=result["source_preprocess_known"],
             )
             db.update_evaluation(new_result["id"], result["evaluation"])
             if result["is_active_result"]:
@@ -278,6 +280,12 @@ def _resolve_ancestors(image, max_depth=50):
             "display_name": parent["display_name"],
             "is_deleted": bool(parent["is_deleted"]),
             "preprocess": parent["preprocess"],
+            # The result the next link in the chain was promoted from, and the
+            # crop it was generated with -- what "this ancestor" really looked
+            # like as an engine input, even if the crop has since been edited.
+            "promoted_result_id": result["id"],
+            "generated_preprocess": result["source_preprocess"],
+            "generated_preprocess_known": result["source_preprocess_known"],
         })
         current = parent
     return chain

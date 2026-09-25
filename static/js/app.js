@@ -2246,6 +2246,13 @@ function setPromptText(text) {
 
 els.promptTextarea.addEventListener("input", () => {
   localStorage.setItem(PROMPT_TEXT_STORAGE_KEY, els.promptTextarea.value);
+  // Editing away from the picked saved prompt makes the title stale, so drop
+  // the pick and fall back to ad-hoc.
+  const selected = state.prompts.find((p) => p.id === state.selectedPromptId);
+  if (selected && els.promptTextarea.value.trim() !== selected.prompt_text.trim()) {
+    state.selectedPromptId = null;
+    renderPromptMenuButton();
+  }
 });
 
 const savedPromptText = localStorage.getItem(PROMPT_TEXT_STORAGE_KEY);

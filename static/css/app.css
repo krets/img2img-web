@@ -100,7 +100,7 @@ kbd {
 }
 .project-panel-head { display: flex; gap: 8px; padding: 0 12px 10px; flex-shrink: 0; }
 .project-panel-search { flex: 1; min-width: 0; }
-.project-panel-recent { flex-shrink: 0; padding: 0 6px 6px; border-bottom: 1px solid #2a2c35; }
+.project-panel-recent { flex-shrink: 0; max-height: 40vh; overflow-y: auto; padding: 0 6px 6px; border-bottom: 1px solid #2a2c35; }
 .project-panel-subhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px 4px 6px; flex-shrink: 0; }
 .project-panel-subhead select { padding: 2px 6px; font-size: 12px; }
 .project-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #9ea2b0; padding: 6px 8px 4px; }
@@ -130,6 +130,11 @@ kbd {
 .project-row-actions.visible { opacity: 1; }
 .project-row-btn { width: 26px; height: 26px; padding: 0; line-height: 1; background: transparent; border-color: transparent; color: #9ea2b0; }
 .project-row-btn:hover { border-color: #565a68; color: #e6e6eb; }
+.project-row-pin { flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.project-row:hover .project-row-pin,
+.project-row:focus-within .project-row-pin,
+.project-row-pin.on { opacity: 1; }
+.project-row-pin.on { color: #fbbf24; }
 .project-row-btn.danger:hover { background: #7f1d1d; border-color: #7f1d1d; color: white; }
 .project-row-rename { width: 100%; padding: 2px 6px; font-size: 14px; font-weight: 600; }
 

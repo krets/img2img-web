@@ -317,6 +317,24 @@ function showPromptModal(text) {
 const RECENT_PROJECT_COUNT = 4;
 const PROJECT_OPENED_KEY = "grok_img2img.projectOpenedAt";
 const PROJECT_SORT_KEY = "grok_img2img.projectSort";
+const PROJECT_PINNED_KEY = "grok_img2img.pinnedProjects";
+
+// Starred projects, shown above Recent. Client-side like projectOpenedAt.
+const pinnedProjects = (() => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(PROJECT_PINNED_KEY)) || []);
+  } catch {
+    return new Set();
+  }
+})();
+function toggleProjectPinned(id) {
+  if (!pinnedProjects.delete(id)) pinnedProjects.add(id);
+  try {
+    localStorage.setItem(PROJECT_PINNED_KEY, JSON.stringify([...pinnedProjects]));
+  } catch {
+    // storage full/unavailable -- pins just won't persist
+  }
+}
 
 // When each project was last opened *in this browser* ({ id: epoch ms }) --
 // drives the panel's Recent list. Client-side like lastProjectId; a project
@@ -542,6 +560,7 @@ function renderProjectRow(p, timeMode) {
           <span class="project-row-time">${timeLabel}</span>
         </div>
       </div>
+      <button class="project-row-btn project-row-pin${pinnedProjects.has(p.id) ? " on" : ""}" type="button" data-action="pin" title="${pinnedProjects.has(p.id) ? "Unpin project" : "Pin project to the top"}">${pinnedProjects.has(p.id) ? "★" : "☆"}</button>
       <div class="project-row-actions">
         <button class="project-row-btn" type="button" data-action="rename" title="Rename project">✎</button>
         <button class="project-row-btn danger" type="button" data-action="delete" title="Move project to Trash">✕</button>
@@ -560,23 +579,37 @@ function renderProjectPanelRows() {
   const matches = state.projects.filter(
     (p) => !needle || p.name.toLowerCase().includes(needle) || (p.description || "").toLowerCase().includes(needle),
   );
-  const sorted = [...matches].sort(PROJECT_SORTS[projectPanel.sort].cmp);
   const timeMode = projectPanel.sort === "generated" || projectPanel.sort === "created" ? projectPanel.sort : "recent";
 
-  // With RECENT_PROJECT_COUNT projects or fewer, Recent would just repeat the
-  // whole list; while searching, it would hide matches behind unrelated rows.
-  if (!needle && state.projects.length > RECENT_PROJECT_COUNT) {
-    const recent = [...state.projects].sort(PROJECT_SORTS.recent.cmp).slice(0, RECENT_PROJECT_COUNT);
-    recentEl.innerHTML = `<div class="project-section-title">Recent</div>${recent.map((p) => renderProjectRow(p, "recent")).join("")}`;
-    recentEl.style.display = "";
-  } else {
-    recentEl.innerHTML = "";
-    recentEl.style.display = "none";
+  // Pinned and Recent sit above the main list, which then leaves out whatever
+  // they show so no project appears twice. While searching they're skipped, as
+  // they'd hide matches behind unrelated rows.
+  let pinned = [];
+  let recent = [];
+  if (!needle) {
+    pinned = state.projects
+      .filter((p) => pinnedProjects.has(p.id))
+      .sort(PROJECT_SORTS.name.cmp);
+    const unpinned = state.projects.filter((p) => !pinnedProjects.has(p.id));
+    // With RECENT_PROJECT_COUNT unpinned projects or fewer, Recent would just
+    // repeat the whole rest of the list.
+    if (unpinned.length > RECENT_PROJECT_COUNT) {
+      recent = unpinned.sort(PROJECT_SORTS.recent.cmp).slice(0, RECENT_PROJECT_COUNT);
+    }
   }
+  const above = new Set([...pinned, ...recent].map((p) => p.id));
+  const sorted = matches.filter((p) => !above.has(p.id)).sort(PROJECT_SORTS[projectPanel.sort].cmp);
+
+  const section = (title, rows) =>
+    rows.length ? `<div class="project-section-title">${title}</div>${rows.map((p) => renderProjectRow(p, "recent")).join("")}` : "";
+  recentEl.innerHTML = section("Pinned", pinned) + section("Recent", recent);
+  recentEl.style.display = recentEl.innerHTML ? "" : "none";
 
   els.projectPanel.querySelector("#projectAllTitle").textContent = needle
     ? `${matches.length} of ${plural(state.projects.length, "project")}`
-    : `All projects (${state.projects.length})`;
+    : above.size
+      ? `Other projects (${sorted.length})`
+      : `All projects (${state.projects.length})`;
   listEl.innerHTML = sorted.length
     ? sorted.map((p) => renderProjectRow(p, timeMode)).join("")
     : `<div class="empty-state">${state.projects.length ? "No projects match." : "No projects yet."}</div>`;
@@ -687,7 +720,10 @@ els.projectPanel.addEventListener("click", (e) => {
   const id = row.dataset.projectId;
   const action = e.target.closest("[data-action]")?.dataset.action;
 
-  if (action === "rename") {
+  if (action === "pin") {
+    toggleProjectPinned(id);
+    renderProjectPanelRows();
+  } else if (action === "rename") {
     projectPanel.confirmDeleteId = null;
     projectPanel.renamingId = id;
     renderProjectPanelRows();

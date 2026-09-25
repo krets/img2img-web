@@ -441,15 +441,24 @@ function resetProjectSelection() {
   renderDetails();
 }
 
+// Reference images picked for generation, per project ({ projectId: [ids] }).
+// Reference images belong to one project's library, so the strip can only show
+// the open project's picks; stashing them here lets a detour through another
+// project leave the working set intact for when you come back.
+const referencePicksByProject = new Map();
+
 // Makes `id` the open project and bumps it to the top of the recent list.
 async function switchProject(id) {
   closeProjectPanel();
   markProjectOpened(id);
   if (id === state.currentProjectId) return;
+  referencePicksByProject.set(state.currentProjectId, state.referenceImageIds);
   state.currentProjectId = id;
   localStorage.setItem("lastProjectId", id);
   renderProjectMenuButton();
   resetProjectSelection();
+  // Set before the load so loadReferenceImages prunes any that were deleted meanwhile.
+  state.referenceImageIds = [...(referencePicksByProject.get(id) || [])];
   await Promise.all([loadImages(), loadReferenceImages()]);
 }
 
@@ -2312,7 +2321,8 @@ function useResultPromptAsCurrent(promptText) {
 // Supported by all engines (ComfyUI, Grok, and fal.ai models whose request
 // shape takes an image array -- an unsupported fal model errors out at
 // generate time with a message naming the model). Selection persists across
-// image switches, same as the engine/aspect-ratio selects.
+// image switches, same as the engine/aspect-ratio selects, and is remembered
+// per project across project switches (see referencePicksByProject).
 // ---------------------------------------------------------------------------
 const MAX_REFERENCE_IMAGES = 2;
 

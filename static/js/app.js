@@ -1189,9 +1189,10 @@ function descendantImageIds(imageId) {
   return found;
 }
 
-// Two steps in one modal: pick the parent image, then which of its results the
-// child descends from (lineage points at a specific result, so the "Compare
-// with parent" view can show the crop that result was generated with).
+// Pick the parent image and the child links to its active result in one click.
+// Lineage points at a specific result (so "Compare with parent" can show the
+// crop that result was generated with), so a parent with several results also
+// offers "Choose result…", which opens a grid of them.
 function openSetParentModal(imageId) {
   const img = state.images.find((i) => i.id === imageId);
   if (!img) return;
@@ -1230,16 +1231,26 @@ function openSetParentModal(imageId) {
     }
   };
 
+  // The result a one-click link uses: the parent's active one, else its newest.
+  const defaultResultId = (parent) => {
+    const results = parent.result_evaluations;
+    return results.some((r) => r.id === parent.active_result_id) ? parent.active_result_id : results[results.length - 1].id;
+  };
+
   const showResults = (parent) => {
     statusEl.textContent = "";
-    const activeId = parent.active_result_id;
+    // Marks what's linked now when changing within the same parent, otherwise
+    // what a one-click link would pick.
+    const isCurrentParent = parent.id === img.parent_image_id;
+    const markedId = isCurrentParent ? img.derived_from_result_id : defaultResultId(parent);
+    const markedTitle = isCurrentParent ? "Currently linked result" : "Active result (used by a one-click link)";
     const tiles = [...parent.result_evaluations].reverse().map(
-      (r) => `<button type="button" class="parent-result-tile ${r.evaluation} ${r.id === activeId ? "active" : ""}" data-result-id="${r.id}" title="Use this result as the parent">
+      (r) => `<button type="button" class="parent-result-tile ${r.evaluation} ${r.id === markedId ? "active" : ""}" data-result-id="${r.id}" title="${r.id === markedId ? markedTitle : "Use this result as the parent"}">
         <img src="/api/results/${r.id}/thumbnail" loading="lazy" alt="" />
       </button>`
     );
     body.innerHTML = `
-      <p class="modal-note">Which result of "${escapeHtml(parent.display_name)}" is this image derived from?</p>
+      <p class="modal-note">Which result of "${escapeHtml(parent.display_name)}" is this image derived from? This sets what "compare with parent" and the lineage slider show; it doesn't change where the image sits in the list.</p>
       <div class="parent-result-grid">${tiles.join("")}</div>
       <div class="dup-group-actions" style="text-align:left"><button id="mParentBack" class="btn-ghost small" type="button">← Back</button></div>
     `;
@@ -1256,23 +1267,33 @@ function openSetParentModal(imageId) {
     list.innerHTML = rows.length
       ? rows
           .map(
-            (c) => `<button type="button" class="parent-pick-row ${c.id === img.parent_image_id ? "current" : ""}" data-image-id="${c.id}">
-              <img src="/api/images/${c.id}/thumbnail" loading="lazy" alt="" />
-              <span class="dup-name">${escapeHtml(c.display_name)}</span>
-              <span class="dup-result-summary">${c.id === img.parent_image_id ? "current parent · " : ""}${c.result_evaluations.length} result${c.result_evaluations.length === 1 ? "" : "s"}</span>
-            </button>`
+            (c) => `<div class="parent-pick-row ${c.id === img.parent_image_id ? "current" : ""}" data-image-id="${c.id}">
+              <button type="button" class="parent-pick-main" title="Link to this image's active result">
+                <img src="/api/images/${c.id}/thumbnail" loading="lazy" alt="" />
+                <span class="dup-name">${escapeHtml(c.display_name)}</span>
+                <span class="dup-result-summary">${c.id === img.parent_image_id ? "current parent · " : ""}${c.result_evaluations.length} result${c.result_evaluations.length === 1 ? "" : "s"}</span>
+              </button>
+              ${c.result_evaluations.length > 1 ? `<button type="button" class="btn-ghost small" data-choose-result>Choose result…</button>` : ""}
+            </div>`
           )
           .join("")
       : `<p class="modal-note">No images with results to choose from.</p>`;
     list.querySelectorAll(".parent-pick-row").forEach((row) => {
-      row.addEventListener("click", () => showResults(candidates.find((c) => c.id === row.dataset.imageId)));
+      const parent = candidates.find((c) => c.id === row.dataset.imageId);
+      // Clicking the current parent again can only mean picking another of its
+      // results, so it opens the grid rather than re-linking to the same image.
+      row.querySelector(".parent-pick-main").addEventListener("click", () => {
+        if (parent.id === img.parent_image_id && parent.result_evaluations.length > 1) showResults(parent);
+        else choose(defaultResultId(parent));
+      });
+      row.querySelector("[data-choose-result]")?.addEventListener("click", () => showResults(parent));
     });
   };
 
   function showImages() {
     statusEl.textContent = "";
     body.innerHTML = `
-      <p class="modal-note">Pick the image this one was derived from. Only images with results are listed.</p>
+      <p class="modal-note">Pick the image this one was derived from; it links to that image's active result. Only images with results are listed.</p>
       <div class="field"><input id="mParentSearch" type="text" placeholder="Search images..." value="${escapeHtml(search)}" /></div>
       <div id="mParentList" class="parent-pick-list"></div>
     `;

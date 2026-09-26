@@ -1110,11 +1110,16 @@ kbd {
 .modal:has(.parent-picker) { width: 560px; }
 .parent-pick-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .parent-pick-row {
-  display: flex; align-items: center; gap: 8px; padding: 4px 6px; width: 100%; text-align: left;
-  background: transparent; border: 1px solid transparent; border-radius: 6px; color: inherit; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; padding: 4px 6px; width: 100%;
+  border: 1px solid transparent; border-radius: 6px;
 }
 .parent-pick-row:hover { background: #21232c; }
 .parent-pick-row.current { border-color: #8B5CF6; }
+.parent-pick-main {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0; text-align: left;
+  background: transparent; border: 0; color: inherit; cursor: pointer;
+}
+.parent-pick-row .btn-ghost { flex-shrink: 0; }
 .parent-pick-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
 .parent-result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 50vh; overflow-y: auto; }
 .parent-result-tile {

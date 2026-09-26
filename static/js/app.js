@@ -66,14 +66,12 @@ const els = {
   settingsBtn: document.getElementById("settingsBtn"),
   searchInput: document.getElementById("searchInput"),
   sortSelect: document.getElementById("sortSelect"),
-  lineageToggleBtn: document.getElementById("lineageToggleBtn"),
   filterSelect: document.getElementById("filterSelect"),
   uploadDrop: document.getElementById("uploadDrop"),
   uploadInput: document.getElementById("uploadInput"),
   autoGenOnUploadToggle: document.getElementById("autoGenOnUploadToggle"),
   uploadStatus: document.getElementById("uploadStatus"),
-  cleanupNoBtn: document.getElementById("cleanupNoBtn"),
-  refreshImagesBtn: document.getElementById("refreshImagesBtn"),
+  libraryMenuBtn: document.getElementById("libraryMenuBtn"),
   imagesTabBtn: document.getElementById("imagesTabBtn"),
   referencesTabBtn: document.getElementById("referencesTabBtn"),
   imagesTabPanel: document.getElementById("imagesTabPanel"),
@@ -84,10 +82,10 @@ const els = {
   referenceLibraryGrid: document.getElementById("referenceLibraryGrid"),
   duplicatesBtn: document.getElementById("duplicatesBtn"),
   logsBtn: document.getElementById("logsBtn"),
-  multiSelectToggleBtn: document.getElementById("multiSelectToggleBtn"),
   multiSelectBar: document.getElementById("multiSelectBar"),
   multiSelectCount: document.getElementById("multiSelectCount"),
   multiSelectMoveBtn: document.getElementById("multiSelectMoveBtn"),
+  multiSelectDoneBtn: document.getElementById("multiSelectDoneBtn"),
   imageList: document.getElementById("imageList"),
   viewer: document.getElementById("viewer"),
   detailsEmpty: document.getElementById("detailsEmpty"),
@@ -1448,19 +1446,23 @@ function toggleImageSelection(id) {
   updateMultiSelectBar();
 }
 
+// The bar is the only on-screen sign of select mode besides the row checkboxes,
+// so it stays up (with Move disabled) until the mode is left, not just while
+// something is ticked.
 function updateMultiSelectBar() {
   const count = state.selectedImageIds.size;
-  els.multiSelectBar.style.display = state.multiSelectMode && count ? "contents" : "none";
+  els.multiSelectBar.style.display = state.multiSelectMode ? "flex" : "none";
   els.multiSelectCount.textContent = `${count} selected`;
+  els.multiSelectMoveBtn.disabled = !count;
 }
 
-els.multiSelectToggleBtn.addEventListener("click", () => {
-  state.multiSelectMode = !state.multiSelectMode;
+function setMultiSelectMode(on) {
+  state.multiSelectMode = on;
   state.selectedImageIds.clear();
-  els.multiSelectToggleBtn.classList.toggle("active", state.multiSelectMode);
   updateMultiSelectBar();
   renderImageList();
-});
+}
+els.multiSelectDoneBtn.addEventListener("click", () => setMultiSelectMode(false));
 
 // Shared by the multi-select "Move" bar button and each image row's menu
 // ("Move to other library" / "Copy to other library") -- lets the user send
@@ -1527,12 +1529,7 @@ function openMoveOrCopyImagesModal(imageIds, mode) {
         state.currentImage = null;
         renderDetails();
       }
-      if (state.multiSelectMode) {
-        state.selectedImageIds.clear();
-        state.multiSelectMode = false;
-        els.multiSelectToggleBtn.classList.remove("active");
-        updateMultiSelectBar();
-      }
+      if (state.multiSelectMode) setMultiSelectMode(false);
       await loadProjects();
     } catch (e) {
       statusEl.textContent = `Error: ${e.message}`;
@@ -1572,20 +1569,17 @@ els.searchInput.addEventListener("input", debounce(() => {
   state.search = els.searchInput.value.trim();
   loadImages();
 }, 250));
-function syncLineageToggleBtn() {
-  els.lineageToggleBtn.classList.toggle("active", state.groupByLineage);
-}
-syncLineageToggleBtn();
-els.lineageToggleBtn.addEventListener("click", () => {
+// Groups images under the image they were derived from (via "use as new
+// source" on a result).
+function toggleLineageGrouping() {
   state.groupByLineage = !state.groupByLineage;
   try {
     localStorage.setItem("grok_img2img.groupByLineage", state.groupByLineage ? "1" : "0");
   } catch {
     // preference just won't persist
   }
-  syncLineageToggleBtn();
   renderImageList();
-});
+}
 els.sortSelect.addEventListener("change", () => {
   state.sort = els.sortSelect.value;
   loadImages();
@@ -1595,7 +1589,7 @@ els.filterSelect.addEventListener("change", () => {
   loadImages();
 });
 
-els.cleanupNoBtn.addEventListener("click", async () => {
+async function clearNoResults() {
   if (!state.currentProjectId) return;
   const ok = await openConfirmModal({
     title: "Clear NO Results",
@@ -1611,6 +1605,19 @@ els.cleanupNoBtn.addEventListener("click", async () => {
     renderDetails();
   }
   els.uploadStatus.textContent = `Trashed ${trashed.length} NO-rated result(s).`;
+}
+
+// Kebab next to the Images/References tabs, for actions on the source library
+// as a whole. Only shown on the Images tab (see setSidebarTab). The two view
+// toggles show a check while on, like the topbar menu's.
+els.libraryMenuBtn.addEventListener("click", () => {
+  const checked = (on) => (on ? " ✓" : "");
+  openItemMenu(els.libraryMenuBtn, [
+    { icon: "☑", label: `Select images${checked(state.multiSelectMode)}`, onClick: () => setMultiSelectMode(!state.multiSelectMode) },
+    { icon: "⑂", label: `Group by lineage${checked(state.groupByLineage)}`, onClick: toggleLineageGrouping },
+    { icon: "⟳", label: "Force full refresh", onClick: forceRefreshImages },
+    { icon: "🗑", label: "Clear NO results…", danger: true, onClick: clearNoResults },
+  ]);
 });
 
 function reportUploadResult({ created, skipped }) {
@@ -2724,6 +2731,7 @@ function setSidebarTab(tab) {
   els.referencesTabBtn.classList.toggle("active", tab === "references");
   els.imagesTabPanel.style.display = tab === "images" ? "flex" : "none";
   els.referencesTabPanel.style.display = tab === "references" ? "flex" : "none";
+  els.libraryMenuBtn.style.display = tab === "images" ? "" : "none";
 }
 els.imagesTabBtn.addEventListener("click", () => setSidebarTab("images"));
 els.referencesTabBtn.addEventListener("click", () => setSidebarTab("references"));
@@ -3086,15 +3094,9 @@ function updatePendingTiles(imageId) {
 // server, bypassing every local-patch shortcut above -- the "did I miss an
 // update?" escape hatch for whatever those shortcuts don't cover.
 async function forceRefreshImages() {
-  els.refreshImagesBtn.disabled = true;
-  try {
-    await loadImages();
-    await pollQueue();
-  } finally {
-    els.refreshImagesBtn.disabled = false;
-  }
+  await loadImages();
+  await pollQueue();
 }
-els.refreshImagesBtn.addEventListener("click", forceRefreshImages);
 
 // Whether #generateStatus currently holds a job-progress label written below,
 // so it can be cleared once those jobs finish without wiping an unrelated

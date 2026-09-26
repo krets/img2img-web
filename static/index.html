@@ -41,6 +41,7 @@
         <div class="sidebar-tabs">
           <button class="sidebar-tab-btn active" id="imagesTabBtn" data-sidebar-tab="images">Images</button>
           <button class="sidebar-tab-btn" id="referencesTabBtn" data-sidebar-tab="references">References</button>
+          <button id="libraryMenuBtn" class="sidebar-menu-btn" type="button" aria-haspopup="true" aria-label="Source library actions" title="Source library actions">⋮</button>
         </div>
         <div id="imagesTabPanel">
           <div class="sidebar-controls">
@@ -60,8 +61,6 @@
                 <option value="MAYBE">Maybe</option>
                 <option value="NO">Rejected</option>
               </select>
-              <button id="cleanupNoBtn" class="btn-ghost small" title="Move all NO-rated results in this project to trash">🗑 Clear NO</button>
-              <button id="refreshImagesBtn" class="btn-ghost small" title="Force a full refresh of the image list, in case an update was missed">⟳</button>
             </div>
           </div>
           <label class="upload-drop" id="uploadDrop">
@@ -73,13 +72,10 @@
             Auto-generate with current prompt
           </label>
           <div id="uploadStatus" class="status-line"></div>
-          <div class="sidebar-controls-row">
-            <button id="multiSelectToggleBtn" class="btn-ghost small">☑ Select</button>
-            <button id="lineageToggleBtn" class="btn-ghost small" title="Group images under the image they were derived from (via &quot;use as new source&quot; on a result)">⑂ Lineage</button>
-            <span id="multiSelectBar" class="multi-select-bar" style="display:none">
-              <span id="multiSelectCount"></span>
-              <button id="multiSelectMoveBtn" class="btn-ghost small">Move</button>
-            </span>
+          <div id="multiSelectBar" class="sidebar-controls-row multi-select-bar" style="display:none">
+            <span id="multiSelectCount"></span>
+            <button id="multiSelectMoveBtn" class="btn-ghost small">Move</button>
+            <button id="multiSelectDoneBtn" class="btn-ghost small">Done</button>
           </div>
           <div id="imageList" class="image-list"></div>
         </div>

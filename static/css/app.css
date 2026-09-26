@@ -254,6 +254,12 @@ kbd {
   flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid transparent;
   background: transparent; color: #9ea2b0; font-size: 13px; cursor: pointer;
 }
+.sidebar-menu-btn {
+  flex-shrink: 0; width: 30px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 6px; color: #9ea2b0;
+  font-size: 16px; padding: 0; cursor: pointer;
+}
+.sidebar-menu-btn:hover, .sidebar-menu-btn.menu-open { background: rgba(139,92,246,0.25); color: #e6e6eb; }
 .sidebar-tab-btn:hover { color: #e6e6eb; }
 .sidebar-tab-btn.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
 
@@ -397,14 +403,11 @@ kbd {
 .reference-library-item-btn.danger:hover { background: #7f1d1d; }
 
 .btn-ghost.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
-.multi-select-bar {
-  display: contents;
-}
+.multi-select-bar { align-items: center; }
 #multiSelectCount {
   font-size: 12px;
   color: #9ea2b0;
   white-space: nowrap;
-  padding-top: 2px;
 }
 #multiSelectMoveBtn { margin-left: auto; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 10px; font-weight: 600; flex-shrink: 0; }

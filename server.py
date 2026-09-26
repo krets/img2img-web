@@ -44,6 +44,7 @@ def startup():
     db.init_db(cfg.DB_PATH)
     storage.backfill_missing_content_hashes()
     storage.backfill_result_source_preprocess()
+    db.backfill_prompt_hashes()
     pruning.start_background_pruner()
 
 

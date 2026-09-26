@@ -6,6 +6,8 @@ import threading
 import uuid
 from pathlib import Path
 
+import prompt_utils
+
 TABLES_SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -80,6 +82,7 @@ CREATE TABLE IF NOT EXISTS results (
     revised_prompt    TEXT,
     duration_seconds  REAL,
     source_preprocess TEXT,
+    prompt_hash       TEXT,
     evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
     is_active_result  INTEGER DEFAULT 0,
     date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -87,6 +90,19 @@ CREATE TABLE IF NOT EXISTS results (
     deleted_at        TIMESTAMP,
     FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
     FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE SET NULL
+);
+
+-- The reference images a result was generated with, in the order they were sent.
+-- reference_image_id deliberately has no FK: references are hard-deleted by the
+-- trash pruner, and that must neither cascade into results nor be blocked by
+-- them. The id stays behind as a tombstone (the row/file it named is gone).
+-- Copied results keep pointing at the source project's reference ids.
+CREATE TABLE IF NOT EXISTS result_references (
+    result_id           TEXT NOT NULL,
+    reference_image_id  TEXT NOT NULL,
+    position            INTEGER NOT NULL,
+    PRIMARY KEY (result_id, position),
+    FOREIGN KEY (result_id) REFERENCES results(id) ON DELETE CASCADE
 );
 """
 
@@ -103,6 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_results_prompt       ON results(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_results_evaluation   ON results(evaluation);
 CREATE INDEX IF NOT EXISTS idx_results_active       ON results(image_id, is_active_result);
 CREATE INDEX IF NOT EXISTS idx_results_deleted_at   ON results(is_deleted, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_results_prompt_hash  ON results(prompt_hash, is_deleted);
+CREATE INDEX IF NOT EXISTS idx_result_references_ref ON result_references(reference_image_id);
 -- Covers list_images()'s per-image subqueries (count / latest date / chit list)
 -- entirely from the index. Without it the planner picked idx_results_deleted_at
 -- (is_deleted=0 matches nearly every row) for each of them, scanning the whole
@@ -119,6 +137,9 @@ _db_path = None
 # Set by _migrate() when it adds results.source_preprocess to an existing DB, so
 # the one-time backfill from PNG metadata (storage.py) knows to run.
 needs_source_preprocess_backfill = False
+# Set by _migrate() when it adds results.prompt_hash to an existing DB, so
+# backfill_prompt_hashes() knows to hash the rows that predate it.
+needs_prompt_hash_backfill = False
 _local = threading.local()
 
 
@@ -150,7 +171,7 @@ def init_db(db_path: Path):
 
 def _migrate(conn):
     """Hand-rolled column migrations for DBs created before a given column existed."""
-    global needs_source_preprocess_backfill
+    global needs_source_preprocess_backfill, needs_prompt_hash_backfill
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)").fetchall()}
     if "content_hash" not in columns:
         conn.execute("ALTER TABLE images ADD COLUMN content_hash TEXT")
@@ -183,6 +204,9 @@ def _migrate(conn):
     if "source_preprocess" not in result_columns:
         conn.execute("ALTER TABLE results ADD COLUMN source_preprocess TEXT")
         needs_source_preprocess_backfill = True
+    if "prompt_hash" not in result_columns:
+        conn.execute("ALTER TABLE results ADD COLUMN prompt_hash TEXT")
+        needs_prompt_hash_backfill = True
 
     project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "is_deleted" not in project_columns:
@@ -210,6 +234,8 @@ def _migrate_unrated_evaluation(conn):
         return
 
     conn.execute("PRAGMA foreign_keys = OFF")
+    # Without this, RENAME rewrites result_references' FK to point at results_old.
+    conn.execute("PRAGMA legacy_alter_table = ON")
     conn.execute("ALTER TABLE results RENAME TO results_old")
     conn.execute("""
         CREATE TABLE results (
@@ -226,6 +252,7 @@ def _migrate_unrated_evaluation(conn):
             revised_prompt    TEXT,
             duration_seconds  REAL,
             source_preprocess TEXT,
+            prompt_hash       TEXT,
             evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
             is_active_result  INTEGER DEFAULT 0,
             date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -238,16 +265,17 @@ def _migrate_unrated_evaluation(conn):
     conn.execute("""
         INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path, media_type,
                               engine, model, aspect_ratio, max_dim, revised_prompt,
-                              duration_seconds, source_preprocess, evaluation,
+                              duration_seconds, source_preprocess, prompt_hash, evaluation,
                               is_active_result, date_generated, is_deleted, deleted_at)
         SELECT id, image_id, prompt_id, adhoc_prompt_text, file_path, media_type,
                engine, model, aspect_ratio, max_dim, revised_prompt,
-               duration_seconds, source_preprocess,
+               duration_seconds, source_preprocess, prompt_hash,
                CASE WHEN evaluation = 'MAYBE' THEN 'UNRATED' ELSE evaluation END,
                is_active_result, date_generated, is_deleted, deleted_at
         FROM results_old
     """)
     conn.execute("DROP TABLE results_old")
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
 
 
@@ -852,24 +880,36 @@ def _decode_result(d):
 def create_result(image_id, file_path, prompt_id=None, adhoc_prompt_text=None,
                    engine="grok", model=None, aspect_ratio=None, max_dim=None, revised_prompt=None,
                    media_type="image", result_id=None, duration_seconds=None,
-                   source_preprocess=None, source_preprocess_known=False):
+                   source_preprocess=None, source_preprocess_known=False,
+                   reference_image_ids=None):
     """source_preprocess is a snapshot of the image's pre-process params at
     generation time -- the images.preprocess value is mutable, so without this
     the viewer couldn't show which crop actually produced a given result. Pass
     source_preprocess_known=True with source_preprocess=None to record that the
     source was sent uncropped.
+
+    reference_image_ids is the ordered list of reference images sent with the
+    generation; it is stored in result_references in the same transaction.
+    prompt_hash is derived from adhoc_prompt_text (the text actually sent), never
+    from prompt_id, since palette prompts can be edited after the fact.
     """
     conn = get_connection()
     result_id = result_id or new_id()
     conn.execute(
         """INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path,
                                  media_type, engine, model, aspect_ratio, max_dim, revised_prompt,
-                                 duration_seconds, source_preprocess)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 duration_seconds, source_preprocess, prompt_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (result_id, image_id, prompt_id, adhoc_prompt_text, file_path,
          media_type, engine, model, aspect_ratio, max_dim, revised_prompt, duration_seconds,
-         _encode_source_preprocess(source_preprocess, source_preprocess_known)),
+         _encode_source_preprocess(source_preprocess, source_preprocess_known),
+         prompt_utils.prompt_hash(adhoc_prompt_text)),
     )
+    if reference_image_ids:
+        conn.executemany(
+            "INSERT INTO result_references (result_id, reference_image_id, position) VALUES (?, ?, ?)",
+            [(result_id, ref_id, position) for position, ref_id in enumerate(reference_image_ids)],
+        )
     # Newly generated results become the active one for review.
     conn.execute("UPDATE results SET is_active_result = 0 WHERE image_id = ?", (image_id,))
     conn.execute("UPDATE results SET is_active_result = 1 WHERE id = ?", (result_id,))
@@ -884,13 +924,51 @@ def list_results_for_image(image_id, include_deleted=False):
         query += " AND is_deleted = 0"
     query += " ORDER BY date_generated DESC"
     rows = conn.execute(query, (image_id,)).fetchall()
-    return [_decode_result(dict(r)) for r in rows]
+    return _attach_reference_ids(conn, [_decode_result(dict(r)) for r in rows])
 
 
 def get_result(result_id):
     conn = get_connection()
     row = conn.execute("SELECT * FROM results WHERE id = ?", (result_id,)).fetchone()
-    return _decode_result(dict(row)) if row else None
+    return _attach_reference_ids(conn, [_decode_result(dict(row))])[0] if row else None
+
+
+def _attach_reference_ids(conn, results):
+    """Sets result["reference_image_ids"] (ordered; [] for none, which is also
+    what results generated before result_references existed get).
+    """
+    by_result = {r["id"]: [] for r in results}
+    ids = list(by_result)
+    for start in range(0, len(ids), 500):  # stay well under SQLite's variable limit
+        chunk = ids[start:start + 500]
+        rows = conn.execute(
+            "SELECT result_id, reference_image_id FROM result_references"
+            f" WHERE result_id IN ({','.join('?' * len(chunk))}) ORDER BY result_id, position",
+            chunk,
+        ).fetchall()
+        for row in rows:
+            by_result[row["result_id"]].append(row["reference_image_id"])
+    for r in results:
+        r["reference_image_ids"] = by_result[r["id"]]
+    return results
+
+
+def backfill_prompt_hashes():
+    """One-time (right after results.prompt_hash is added): hashes every result's
+    adhoc_prompt_text, soft-deleted rows included, in a single transaction.
+    Blank/NULL prompts stay NULL. Idempotent, so a crash just re-runs it.
+    """
+    global needs_prompt_hash_backfill
+    if not needs_prompt_hash_backfill:
+        return
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, adhoc_prompt_text FROM results WHERE prompt_hash IS NULL AND adhoc_prompt_text IS NOT NULL"
+    ).fetchall()
+    updates = [(prompt_utils.prompt_hash(r["adhoc_prompt_text"]), r["id"]) for r in rows]
+    conn.executemany("UPDATE results SET prompt_hash = ? WHERE id = ?", [u for u in updates if u[0]])
+    conn.commit()
+    needs_prompt_hash_backfill = False
 
 
 def list_results_missing_source_preprocess():

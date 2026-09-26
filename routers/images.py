@@ -204,6 +204,9 @@ def copy_images(body: CopyImagesIn):
                 duration_seconds=result["duration_seconds"],
                 source_preprocess=result["source_preprocess"],
                 source_preprocess_known=result["source_preprocess_known"],
+                # Still the source project's reference ids -- references are
+                # per-project and aren't copied along with the image.
+                reference_image_ids=result["reference_image_ids"],
             )
             db.update_evaluation(new_result["id"], result["evaluation"])
             if result["is_active_result"]:

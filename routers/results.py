@@ -260,6 +260,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
             duration_seconds=comfyui_processing_seconds if comfyui_processing_seconds is not None else time.time() - start_time,
             source_preprocess=preprocess_params,
             source_preprocess_known=True,
+            reference_image_ids=body.reference_image_ids,
         )
         jobs.finish_job(job_id, result_id=result["id"])
     except jobs.GenerationCancelled:

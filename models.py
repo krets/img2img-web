@@ -116,6 +116,23 @@ class ConfigIn(BaseModel):
     xai_management_key: Optional[str] = None
 
 
+class ManageFilterIn(BaseModel):
+    """Filter for the cross-library management views (results, reports, export).
+    An empty list means no constraint. Stored verbatim as reports.filter_json.
+    """
+    project_ids: list[str] = []
+    prompt_hashes: list[str] = []
+    evaluations: list[Literal["YES", "NO", "MAYBE", "UNRATED"]] = ["YES", "MAYBE", "NO", "UNRATED"]
+    # The current export only takes the active result per image; review usually wants all.
+    active_only: bool = False
+    engines: list[str] = []
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    # Collapse copies (same content_hash) into one row, keeping the earliest.
+    dedupe_copies: bool = True
+    sort: str = "date_desc"
+
+
 class ExportRequestIn(BaseModel):
     status_filter: Literal["YES", "NO", "MAYBE", "UNRATED", "ALL"] = "YES"
     mode: Literal["clean", "side_by_side"] = "clean"

@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS images (
     resized_hash           TEXT,
     derived_from_result_id TEXT,
     preprocess             TEXT,
+    phash                  INTEGER,
+    dhash                  INTEGER,
+    aspect                 REAL,
     date_added             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted             INTEGER DEFAULT 0,
     deleted_at             TIMESTAMP,
@@ -54,6 +57,10 @@ CREATE TABLE IF NOT EXISTS reference_images (
     orig_height         INTEGER,
     width               INTEGER,
     height              INTEGER,
+    content_hash        TEXT,
+    phash               INTEGER,
+    dhash               INTEGER,
+    aspect              REAL,
     date_added          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted          INTEGER DEFAULT 0,
     deleted_at          TIMESTAMP,
@@ -106,6 +113,30 @@ CREATE TABLE IF NOT EXISTS result_references (
     PRIMARY KEY (result_id, position),
     FOREIGN KEY (result_id) REFERENCES results(id) ON DELETE CASCADE
 );
+
+-- Saved management reports (see manage_db.py): filter_json is a serialized
+-- ManageFilterIn, display_json the view options (grouping, columns, ...).
+CREATE TABLE IF NOT EXISTS reports (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    filter_json   TEXT NOT NULL,
+    display_json  TEXT,
+    date_created  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    date_updated  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Duplicate-review decisions. image_id names a row in images or reference_images
+-- depending on image_kind, so it can't carry an FK; rows for images that are later
+-- purged are simply orphaned. cluster_anchor_id is the cluster's anchor image when
+-- the decision was made, so a re-cluster can tell whether it still applies.
+CREATE TABLE IF NOT EXISTS dup_decisions (
+    image_kind         TEXT NOT NULL CHECK (image_kind IN ('source','reference')),
+    image_id           TEXT NOT NULL,
+    role               TEXT NOT NULL CHECK (role IN ('canonical','ignore')),
+    cluster_anchor_id  TEXT,
+    date_set           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (image_kind, image_id)
+);
 """
 
 # Applied after _migrate() so columns added by hand-rolled migrations already exist.
@@ -134,6 +165,41 @@ CREATE INDEX IF NOT EXISTS idx_results_image_live   ON results(image_id, is_dele
 CREATE INDEX IF NOT EXISTS idx_projects_deleted_at  ON projects(is_deleted, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_reference_images_project ON reference_images(project_id, is_deleted);
 CREATE INDEX IF NOT EXISTS idx_reference_images_deleted_at ON reference_images(is_deleted, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_images_aspect        ON images(aspect);
+CREATE INDEX IF NOT EXISTS idx_reference_images_aspect ON reference_images(aspect);
+"""
+
+# Cross-library index for the management views (manage_db.py): every live source
+# image, reference image and result as one row shape, so callers can filter and
+# aggregate across projects without a branch per kind. A row counts as live when
+# it, its parent image (results only) and its project are all not deleted.
+# Archived projects are NOT excluded here -- a view can't take a parameter, so
+# queries join projects and filter is_archived themselves.
+# image_id is the owning source image: itself for sources, the parent for results,
+# NULL for references. Results carry no size, aspect or phash columns, so those
+# are NULL for them, and evaluation/prompt_hash are NULL for the other two kinds.
+# Dropped and recreated on every startup so the definition can't go stale.
+MGMT_INDEX_VIEW = """
+DROP VIEW IF EXISTS mgmt_index;
+CREATE VIEW mgmt_index AS
+SELECT 'source' AS kind, i.id AS id, i.project_id AS project_id, p.name AS project_name,
+       i.file_name AS file_name, i.width AS width, i.height AS height,
+       i.aspect AS aspect, i.phash AS phash, NULL AS evaluation, NULL AS prompt_hash,
+       i.id AS image_id
+FROM images i JOIN projects p ON p.id = i.project_id
+WHERE i.is_deleted = 0 AND p.is_deleted = 0
+UNION ALL
+SELECT 'reference', ri.id, ri.project_id, p.name, ri.file_name, ri.width, ri.height,
+       ri.aspect, ri.phash, NULL, NULL, NULL
+FROM reference_images ri JOIN projects p ON p.id = ri.project_id
+WHERE ri.is_deleted = 0 AND p.is_deleted = 0
+UNION ALL
+SELECT 'result', r.id, i.project_id, p.name, r.file_path, NULL, NULL, NULL, NULL,
+       r.evaluation, r.prompt_hash, r.image_id
+FROM results r
+JOIN images i ON i.id = r.image_id
+JOIN projects p ON p.id = i.project_id
+WHERE r.is_deleted = 0 AND i.is_deleted = 0 AND p.is_deleted = 0;
 """
 
 _db_path = None
@@ -167,6 +233,7 @@ def init_db(db_path: Path):
     conn.executescript(TABLES_SCHEMA)
     _migrate(conn)
     conn.executescript(INDEXES_SCHEMA)
+    conn.executescript(MGMT_INDEX_VIEW)
     conn.commit()
     _local.connection = conn
     return conn
@@ -188,12 +255,22 @@ def _migrate(conn):
         conn.execute("ALTER TABLE images ADD COLUMN derived_from_result_id TEXT")
     if "preprocess" not in columns:
         conn.execute("ALTER TABLE images ADD COLUMN preprocess TEXT")
+    if "phash" not in columns:
+        conn.execute("ALTER TABLE images ADD COLUMN phash INTEGER")
+    if "dhash" not in columns:
+        conn.execute("ALTER TABLE images ADD COLUMN dhash INTEGER")
+    if "aspect" not in columns:
+        conn.execute("ALTER TABLE images ADD COLUMN aspect REAL")
 
     reference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reference_images)").fetchall()}
     if "is_deleted" not in reference_columns:
         conn.execute("ALTER TABLE reference_images ADD COLUMN is_deleted INTEGER DEFAULT 0")
     if "deleted_at" not in reference_columns:
         conn.execute("ALTER TABLE reference_images ADD COLUMN deleted_at TIMESTAMP")
+    for column, decl in (("content_hash", "TEXT"), ("phash", "INTEGER"),
+                         ("dhash", "INTEGER"), ("aspect", "REAL")):
+        if column not in reference_columns:
+            conn.execute(f"ALTER TABLE reference_images ADD COLUMN {column} {decl}")
 
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()}
     if "engine" not in result_columns:

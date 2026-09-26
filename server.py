@@ -23,7 +23,7 @@ import config as cfg
 import db
 import pruning
 import storage
-from routers import config_router, export, images, projects, prompts, references, results
+from routers import config_router, export, images, manage, projects, prompts, references, results
 
 HOST = "0.0.0.0"
 
@@ -35,6 +35,7 @@ app.include_router(references.router)
 app.include_router(prompts.router)
 app.include_router(results.router)
 app.include_router(export.router)
+app.include_router(manage.router)
 app.include_router(config_router.router)
 
 

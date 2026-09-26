@@ -515,9 +515,6 @@ kbd {
 .viewer-mode-btn { padding: 4px 9px; font-size: 13px; line-height: 1.2; }
 .viewer-mode-btn.active { background: rgba(139,92,246,0.25); border-color: #8B5CF6; color: #e6e6eb; }
 .viewer-modebar-right { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.viewer-compare { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9ea2b0; min-width: 0; }
-.viewer-compare-select { max-width: 260px; padding: 3px 6px; font-size: 12px; }
-.viewer-blend-slider {
 .vi { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
 .viewer-mode-btn, .viewer-mode-item { display: inline-flex; align-items: center; gap: 6px; }
 .viewer-icon-btn { padding: 4px 7px; }
@@ -538,6 +535,9 @@ kbd {
 .viewer-actions { display: inline-flex; align-items: center; gap: 4px; padding-left: 8px; border-left: 1px solid #33353f; }
 .viewer-modebar.pp-active .viewer-actions,
 .viewer-modebar.lineage-active .viewer-actions { display: none !important; }
+.viewer-compare { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9ea2b0; min-width: 0; }
+.viewer-compare-select { max-width: 260px; padding: 3px 6px; font-size: 12px; }
+.viewer-blend-slider {
   flex: 1;
   max-width: 260px;
   margin: 0 10px;

@@ -67,7 +67,7 @@ async def import_result(
     result_bytes = await result_file.read()
     result_id = db.new_id()
     try:
-        result_file_name = storage.save_result_image(
+        result_file_name, content_hash = storage.save_result_image(
             project_id, result_id, prompt_text or "imported", result_bytes, metadata={"engine": "imported"}
         )
     except Exception as e:
@@ -79,6 +79,7 @@ async def import_result(
         adhoc_prompt_text=prompt_text or None,
         engine="imported",
         result_id=result_id,
+        content_hash=content_hash,
     )
     if evaluation != "UNRATED":
         result = db.update_evaluation(result["id"], evaluation)
@@ -236,7 +237,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
                 raise RuntimeError(f"Grok API request failed: {e}") from e
 
         result_id = db.new_id()
-        file_name = storage.save_result_image(
+        file_name, content_hash = storage.save_result_image(
             image["project_id"], result_id, body.adhoc_prompt_text, image_bytes,
             metadata={
                 "revised_prompt": revised_prompt,
@@ -261,6 +262,7 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
             source_preprocess=preprocess_params,
             source_preprocess_known=True,
             reference_image_ids=body.reference_image_ids,
+            content_hash=content_hash,
         )
         jobs.finish_job(job_id, result_id=result["id"])
     except jobs.GenerationCancelled:

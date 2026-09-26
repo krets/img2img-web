@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS results (
     duration_seconds  REAL,
     source_preprocess TEXT,
     prompt_hash       TEXT,
+    content_hash      TEXT,
+    copied_from_result_id TEXT,
     evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
     is_active_result  INTEGER DEFAULT 0,
     date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -120,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_results_evaluation   ON results(evaluation);
 CREATE INDEX IF NOT EXISTS idx_results_active       ON results(image_id, is_active_result);
 CREATE INDEX IF NOT EXISTS idx_results_deleted_at   ON results(is_deleted, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_results_prompt_hash  ON results(prompt_hash, is_deleted);
+CREATE INDEX IF NOT EXISTS idx_results_content_hash ON results(content_hash);
 CREATE INDEX IF NOT EXISTS idx_result_references_ref ON result_references(reference_image_id);
 -- Covers list_images()'s per-image subqueries (count / latest date / chit list)
 -- entirely from the index. Without it the planner picked idx_results_deleted_at
@@ -207,6 +210,10 @@ def _migrate(conn):
     if "prompt_hash" not in result_columns:
         conn.execute("ALTER TABLE results ADD COLUMN prompt_hash TEXT")
         needs_prompt_hash_backfill = True
+    if "content_hash" not in result_columns:
+        conn.execute("ALTER TABLE results ADD COLUMN content_hash TEXT")
+    if "copied_from_result_id" not in result_columns:
+        conn.execute("ALTER TABLE results ADD COLUMN copied_from_result_id TEXT")
 
     project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "is_deleted" not in project_columns:
@@ -253,6 +260,8 @@ def _migrate_unrated_evaluation(conn):
             duration_seconds  REAL,
             source_preprocess TEXT,
             prompt_hash       TEXT,
+            content_hash      TEXT,
+            copied_from_result_id TEXT,
             evaluation        TEXT CHECK (evaluation IN ('YES','NO','MAYBE','UNRATED')) DEFAULT 'UNRATED',
             is_active_result  INTEGER DEFAULT 0,
             date_generated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -265,11 +274,13 @@ def _migrate_unrated_evaluation(conn):
     conn.execute("""
         INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path, media_type,
                               engine, model, aspect_ratio, max_dim, revised_prompt,
-                              duration_seconds, source_preprocess, prompt_hash, evaluation,
+                              duration_seconds, source_preprocess, prompt_hash, content_hash,
+                              copied_from_result_id, evaluation,
                               is_active_result, date_generated, is_deleted, deleted_at)
         SELECT id, image_id, prompt_id, adhoc_prompt_text, file_path, media_type,
                engine, model, aspect_ratio, max_dim, revised_prompt,
-               duration_seconds, source_preprocess, prompt_hash,
+               duration_seconds, source_preprocess, prompt_hash, content_hash,
+               copied_from_result_id,
                CASE WHEN evaluation = 'MAYBE' THEN 'UNRATED' ELSE evaluation END,
                is_active_result, date_generated, is_deleted, deleted_at
         FROM results_old
@@ -881,7 +892,7 @@ def create_result(image_id, file_path, prompt_id=None, adhoc_prompt_text=None,
                    engine="grok", model=None, aspect_ratio=None, max_dim=None, revised_prompt=None,
                    media_type="image", result_id=None, duration_seconds=None,
                    source_preprocess=None, source_preprocess_known=False,
-                   reference_image_ids=None):
+                   reference_image_ids=None, content_hash=None, copied_from_result_id=None):
     """source_preprocess is a snapshot of the image's pre-process params at
     generation time -- the images.preprocess value is mutable, so without this
     the viewer couldn't show which crop actually produced a given result. Pass
@@ -892,18 +903,24 @@ def create_result(image_id, file_path, prompt_id=None, adhoc_prompt_text=None,
     generation; it is stored in result_references in the same transaction.
     prompt_hash is derived from adhoc_prompt_text (the text actually sent), never
     from prompt_id, since palette prompts can be edited after the fact.
+
+    content_hash is storage.compute_pixel_hash of the result image, so identical
+    pixels can be recognised across projects. copied_from_result_id is set by
+    copy_images to the result a copy was made from (no FK: the original may be
+    purged later, and the id then just stays behind as a tombstone).
     """
     conn = get_connection()
     result_id = result_id or new_id()
     conn.execute(
         """INSERT INTO results (id, image_id, prompt_id, adhoc_prompt_text, file_path,
                                  media_type, engine, model, aspect_ratio, max_dim, revised_prompt,
-                                 duration_seconds, source_preprocess, prompt_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 duration_seconds, source_preprocess, prompt_hash,
+                                 content_hash, copied_from_result_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (result_id, image_id, prompt_id, adhoc_prompt_text, file_path,
          media_type, engine, model, aspect_ratio, max_dim, revised_prompt, duration_seconds,
          _encode_source_preprocess(source_preprocess, source_preprocess_known),
-         prompt_utils.prompt_hash(adhoc_prompt_text)),
+         prompt_utils.prompt_hash(adhoc_prompt_text), content_hash, copied_from_result_id),
     )
     if reference_image_ids:
         conn.executemany(

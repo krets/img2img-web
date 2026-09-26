@@ -135,7 +135,8 @@ def save_result_image(project_id, result_id, prompt_text, image_bytes, metadata=
     """Saves generated result bytes under the project's result_images folder,
     embedding the prompt (and any extra metadata) as PNG text chunks so it's
     still inspectable (e.g. via `exiftool`) if the file is exported or moved
-    outside the app. Returns the relative file name.
+    outside the app. Returns (file_name, content_hash), the hash being
+    compute_pixel_hash of the saved pixels.
     """
     slug = slugify(prompt_text)
     file_name = f"{result_id}_{slug}.png"
@@ -148,7 +149,7 @@ def save_result_image(project_id, result_id, prompt_text, image_bytes, metadata=
         if value:
             pnginfo.add_text(key, str(value))
     img.save(dest, format="PNG", pnginfo=pnginfo)
-    return file_name
+    return file_name, compute_pixel_hash(img)
 
 
 def backfill_missing_content_hashes():

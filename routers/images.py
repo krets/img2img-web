@@ -179,6 +179,8 @@ def copy_images(body: CopyImagesIn):
             height=image["height"],
             comment=image["comment"],
             preprocess=image["preprocess"],
+            content_hash=image["content_hash"],
+            resized_hash=image["resized_hash"],
         )
 
         active_result_id = None
@@ -207,6 +209,8 @@ def copy_images(body: CopyImagesIn):
                 # Still the source project's reference ids -- references are
                 # per-project and aren't copied along with the image.
                 reference_image_ids=result["reference_image_ids"],
+                content_hash=result["content_hash"],
+                copied_from_result_id=result["id"],
             )
             db.update_evaluation(new_result["id"], result["evaluation"])
             if result["is_active_result"]:

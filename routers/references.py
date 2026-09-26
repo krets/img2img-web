@@ -47,11 +47,11 @@ async def upload_reference_image(
     name = (display_name or (file.filename.rsplit(".", 1)[0] if file.filename else "reference")).strip() or "reference"
     ref_id = db.new_id()
     try:
-        original_file_name, orig_width, orig_height = storage.save_reference_image_original(
-            project_id, ref_id, name, file_bytes
-        )
+        original = storage.save_reference_image_original(project_id, ref_id, name, file_bytes)
     except Exception as e:
         raise HTTPException(400, f"Could not process reference image: {e}")
+
+    original_file_name, orig_width, orig_height = original.file_name, original.width, original.height
 
     crop_box = None
     if None not in (crop_x, crop_y, crop_w, crop_h):
@@ -79,6 +79,7 @@ async def upload_reference_image(
         orig_height=orig_height,
         width=width,
         height=height,
+        **original.hash_fields(),
     )
 
 

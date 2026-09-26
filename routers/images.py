@@ -44,16 +44,14 @@ async def upload_images(project_id: str, files: list[UploadFile] = File(...)):
         display_name = upload.filename.rsplit(".", 1)[0] if upload.filename else "image"
         image_id = db.new_id()
         try:
-            file_name, width, height, content_hash, resized_hash = storage.save_source_image(
-                project_id, image_id, display_name, file_bytes
-            )
+            saved = storage.save_source_image(project_id, image_id, display_name, file_bytes)
         except Exception as e:
             raise HTTPException(400, f"Could not process image '{upload.filename}': {e}")
 
-        existing = db.find_image_by_hash(project_id, content_hash)
-        duplicate_of = existing or seen_hashes.get(content_hash)
+        existing = db.find_image_by_hash(project_id, saved.content_hash)
+        duplicate_of = existing or seen_hashes.get(saved.content_hash)
         if duplicate_of:
-            storage.delete_source_image(project_id, file_name)
+            storage.delete_source_image(project_id, saved.file_name)
             skipped.append({
                 "filename": upload.filename,
                 "duplicate_of": duplicate_of["display_name"],
@@ -61,15 +59,14 @@ async def upload_images(project_id: str, files: list[UploadFile] = File(...)):
             })
             continue
 
-        seen_hashes[content_hash] = {"id": image_id, "display_name": display_name}
+        seen_hashes[saved.content_hash] = {"id": image_id, "display_name": display_name}
         image = db.create_image(
             project_id=project_id,
-            file_name=file_name,
+            file_name=saved.file_name,
             display_name=display_name,
-            width=width,
-            height=height,
-            content_hash=content_hash,
-            resized_hash=resized_hash,
+            width=saved.width,
+            height=saved.height,
+            **saved.hash_fields(),
         )
         created.append(image)
     return {"created": created, "skipped": skipped}
@@ -96,15 +93,13 @@ def import_image_from_url(project_id: str, body: ImageFromUrlIn):
     display_name = unquote(Path(urlparse(url).path).stem) or "image"
     image_id = db.new_id()
     try:
-        file_name, width, height, content_hash, resized_hash = storage.save_source_image(
-            project_id, image_id, display_name, resp.content
-        )
+        saved = storage.save_source_image(project_id, image_id, display_name, resp.content)
     except Exception as e:
         raise HTTPException(400, f"Could not process image from URL: {e}")
 
-    existing = db.find_image_by_hash(project_id, content_hash)
+    existing = db.find_image_by_hash(project_id, saved.content_hash)
     if existing:
-        storage.delete_source_image(project_id, file_name)
+        storage.delete_source_image(project_id, saved.file_name)
         return {
             "created": [],
             "skipped": [{
@@ -116,12 +111,11 @@ def import_image_from_url(project_id: str, body: ImageFromUrlIn):
 
     image = db.create_image(
         project_id=project_id,
-        file_name=file_name,
+        file_name=saved.file_name,
         display_name=display_name,
-        width=width,
-        height=height,
-        content_hash=content_hash,
-        resized_hash=resized_hash,
+        width=saved.width,
+        height=saved.height,
+        **saved.hash_fields(),
         comment=url,
     )
     return {"created": [image], "skipped": []}
@@ -181,6 +175,9 @@ def copy_images(body: CopyImagesIn):
             preprocess=image["preprocess"],
             content_hash=image["content_hash"],
             resized_hash=image["resized_hash"],
+            phash=image["phash"],
+            dhash=image["dhash"],
+            aspect=image["aspect"],
         )
 
         active_result_id = None

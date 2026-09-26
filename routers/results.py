@@ -46,20 +46,18 @@ async def import_result(
         name = (display_name or (source_file.filename.rsplit(".", 1)[0] if source_file.filename else "image")).strip()
         new_image_id = db.new_id()
         try:
-            file_name, width, height, content_hash, resized_hash = storage.save_source_image(
-                project_id, new_image_id, name, source_bytes
-            )
+            saved = storage.save_source_image(project_id, new_image_id, name, source_bytes)
         except Exception as e:
             raise HTTPException(400, f"Could not process source image: {e}")
 
-        existing = db.find_image_by_hash(project_id, content_hash)
+        existing = db.find_image_by_hash(project_id, saved.content_hash)
         if existing:
-            storage.delete_source_image(project_id, file_name)
+            storage.delete_source_image(project_id, saved.file_name)
             raise HTTPException(409, f"Source image is a duplicate of existing image '{existing['display_name']}'")
 
         image = db.create_image(
-            project_id=project_id, file_name=file_name, display_name=name, width=width, height=height,
-            content_hash=content_hash, resized_hash=resized_hash,
+            project_id=project_id, file_name=saved.file_name, display_name=name, width=saved.width, height=saved.height,
+            **saved.hash_fields(),
         )
     else:
         raise HTTPException(400, "Either image_id or source_file must be provided")
@@ -375,25 +373,22 @@ def promote_result_to_source(result_id: str):
     display_name = f"{origin_image['display_name']} (from result)"
     new_image_id = db.new_id()
     try:
-        file_name, width, height, content_hash, resized_hash = storage.save_source_image(
-            project_id, new_image_id, display_name, result_path.read_bytes()
-        )
+        saved = storage.save_source_image(project_id, new_image_id, display_name, result_path.read_bytes())
     except Exception as e:
         raise HTTPException(400, f"Could not process result as source image: {e}")
 
-    existing = db.find_image_by_hash(project_id, content_hash)
+    existing = db.find_image_by_hash(project_id, saved.content_hash)
     if existing:
-        storage.delete_source_image(project_id, file_name)
+        storage.delete_source_image(project_id, saved.file_name)
         raise HTTPException(409, f"This result is already a source image: '{existing['display_name']}'")
 
     return db.create_image(
         project_id=project_id,
-        file_name=file_name,
+        file_name=saved.file_name,
         display_name=display_name,
-        width=width,
-        height=height,
-        content_hash=content_hash,
-        resized_hash=resized_hash,
+        width=saved.width,
+        height=saved.height,
+        **saved.hash_fields(),
         derived_from_result_id=result_id,
     )
 

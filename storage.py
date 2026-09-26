@@ -8,7 +8,9 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
+from typing import NamedTuple
 
+import imagehash
 from PIL import Image, ImageOps, PngImagePlugin
 
 import config as cfg
@@ -48,6 +50,67 @@ def compute_resized_hash(img: Image.Image):
     return hashlib.md5(small.tobytes()).hexdigest()
 
 
+def to_signed64(value):
+    """SQLite INTEGERs are signed 64-bit, perceptual hashes unsigned."""
+    return value - (1 << 64) if value >= 1 << 63 else value
+
+
+def to_unsigned64(value):
+    """Inverse of to_signed64; use before XOR / popcount when comparing hashes."""
+    return value & 0xFFFFFFFFFFFFFFFF
+
+
+def compute_perceptual(img: Image.Image):
+    """(phash, dhash) of the image, each as a signed 64-bit int for SQLite.
+
+    Hashes the pixels exactly as stored: no EXIF transpose. Stored PNGs carry no
+    orientation tag and ingest doesn't rotate, so transposing here would only make
+    the hash computed at ingest (from a still-tagged in-memory image) disagree with
+    the one the backfill computes from the saved file.
+    """
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    return (
+        to_signed64(int(str(imagehash.phash(img, hash_size=8)), 16)),
+        to_signed64(int(str(imagehash.dhash(img, hash_size=8)), 16)),
+    )
+
+
+def compute_aspect(width, height):
+    return width / height if width and height else None
+
+
+class SavedSource(NamedTuple):
+    file_name: str
+    width: int
+    height: int
+    content_hash: str
+    resized_hash: str
+    phash: int
+    dhash: int
+    aspect: float
+
+    def hash_fields(self):
+        """The hash columns, as db.create_image() keyword arguments."""
+        return {"content_hash": self.content_hash, "resized_hash": self.resized_hash,
+                "phash": self.phash, "dhash": self.dhash, "aspect": self.aspect}
+
+
+class SavedReferenceOriginal(NamedTuple):
+    file_name: str
+    width: int
+    height: int
+    content_hash: str
+    phash: int
+    dhash: int
+    aspect: float
+
+    def hash_fields(self):
+        """The hash columns, as db.create_reference_image() keyword arguments."""
+        return {"content_hash": self.content_hash, "phash": self.phash,
+                "dhash": self.dhash, "aspect": self.aspect}
+
+
 def slugify(text, max_len=40):
     text = (text or "").lower().strip()
     text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
@@ -57,7 +120,7 @@ def slugify(text, max_len=40):
 def save_source_image(project_id, image_id, display_name, file_bytes):
     """Normalizes an uploaded image to full-resolution PNG (flattening transparency
     onto white) and saves it under the project's source_images folder.
-    Returns (relative_file_name, width, height, content_hash, resized_hash).
+    Returns a SavedSource (file name, size and every hash column).
     """
     img = Image.open(io.BytesIO(file_bytes))
     if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
@@ -75,15 +138,17 @@ def save_source_image(project_id, image_id, display_name, file_bytes):
     file_name = f"{image_id}_{slug}.png"
     dest = cfg.project_source_dir(project_id) / file_name
     img.save(dest, format="PNG")
-    return file_name, img.width, img.height, content_hash, resized_hash
+    phash, dhash = compute_perceptual(img)
+    return SavedSource(file_name, img.width, img.height, content_hash, resized_hash,
+                       phash, dhash, compute_aspect(img.width, img.height))
 
 
 def save_reference_image_original(project_id, ref_id, display_name, file_bytes):
     """Normalizes an uploaded reference image to full-resolution PNG (like
     save_source_image) and saves the untouched original under the project's
     reference_images folder. The original is kept around even after cropping,
-    so a reference can always be re-cropped from full quality. Returns
-    (file_name, width, height).
+    so a reference can always be re-cropped from full quality. Returns a
+    SavedReferenceOriginal; its hashes are of the original, not any crop.
     """
     img = Image.open(io.BytesIO(file_bytes))
     if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
@@ -98,7 +163,9 @@ def save_reference_image_original(project_id, ref_id, display_name, file_bytes):
     file_name = f"{ref_id}_{slug}_orig.png"
     dest = cfg.project_reference_dir(project_id) / file_name
     img.save(dest, format="PNG")
-    return file_name, img.width, img.height
+    phash, dhash = compute_perceptual(img)
+    return SavedReferenceOriginal(file_name, img.width, img.height, compute_pixel_hash(img),
+                                  phash, dhash, compute_aspect(img.width, img.height))
 
 
 def apply_reference_crop(project_id, ref_id, display_name, original_file_name, crop_box):
@@ -150,18 +217,6 @@ def save_result_image(project_id, result_id, prompt_text, image_bytes, metadata=
             pnginfo.add_text(key, str(value))
     img.save(dest, format="PNG", pnginfo=pnginfo)
     return file_name, compute_pixel_hash(img)
-
-
-def backfill_missing_content_hashes():
-    """Computes content_hash/resized_hash for any images ingested before those columns existed."""
-    import db
-
-    for image in db.list_images_missing_hashes():
-        path = source_image_path(image["project_id"], image["file_name"])
-        if not path.exists():
-            continue
-        img = Image.open(path)
-        db.set_image_hashes(image["id"], compute_pixel_hash(img), compute_resized_hash(img))
 
 
 def backfill_result_source_preprocess():

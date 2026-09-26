@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 import config as cfg
 import db
+import hash_worker
 import pruning
 import storage
 from routers import config_router, export, images, manage, projects, prompts, references, results
@@ -43,9 +44,9 @@ app.include_router(config_router.router)
 def startup():
     cfg.ensure_workspace()
     db.init_db(cfg.DB_PATH)
-    storage.backfill_missing_content_hashes()
     storage.backfill_result_source_preprocess()
     db.backfill_prompt_hashes()
+    hash_worker.start_background_hasher()
     pruning.start_background_pruner()
 
 

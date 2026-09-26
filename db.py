@@ -525,15 +525,17 @@ def _decode_image(d):
 
 
 def create_image(project_id, file_name, display_name, width=None, height=None, comment=None,
-                  content_hash=None, resized_hash=None, derived_from_result_id=None, preprocess=None):
+                  content_hash=None, resized_hash=None, derived_from_result_id=None, preprocess=None,
+                  phash=None, dhash=None, aspect=None):
     conn = get_connection()
     image_id = new_id()
     conn.execute(
         """INSERT INTO images (id, project_id, file_name, display_name, comment, width, height,
-                                content_hash, resized_hash, derived_from_result_id, preprocess)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                content_hash, resized_hash, derived_from_result_id, preprocess,
+                                phash, dhash, aspect)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (image_id, project_id, file_name, display_name, comment, width, height, content_hash, resized_hash,
-         derived_from_result_id, json.dumps(preprocess) if preprocess else None),
+         derived_from_result_id, json.dumps(preprocess) if preprocess else None, phash, dhash, aspect),
     )
     conn.commit()
     return get_image(image_id)
@@ -565,23 +567,6 @@ def find_image_by_hash(project_id, content_hash):
         (project_id, content_hash),
     ).fetchone()
     return dict(row) if row else None
-
-
-def list_images_missing_hashes():
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM images WHERE (content_hash IS NULL OR resized_hash IS NULL) AND is_deleted = 0"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def set_image_hashes(image_id, content_hash, resized_hash):
-    conn = get_connection()
-    conn.execute(
-        "UPDATE images SET content_hash = ?, resized_hash = ? WHERE id = ?",
-        (content_hash, resized_hash, image_id),
-    )
-    conn.commit()
 
 
 def _with_results(image_rows):
@@ -798,15 +783,18 @@ def merge_images(keep_id, remove_id):
 # ---------------------------------------------------------------------------
 
 def create_reference_image(project_id, display_name, original_file_name, file_name,
-                            crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height, ref_id=None):
+                            crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height, ref_id=None,
+                            content_hash=None, phash=None, dhash=None, aspect=None):
     conn = get_connection()
     ref_id = ref_id or new_id()
     conn.execute(
         """INSERT INTO reference_images (id, project_id, display_name, original_file_name, file_name,
-                                          crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
+                                          content_hash, phash, dhash, aspect)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (ref_id, project_id, display_name, original_file_name, file_name,
-         crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height),
+         crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
+         content_hash, phash, dhash, aspect),
     )
     conn.commit()
     return get_reference_image(ref_id)

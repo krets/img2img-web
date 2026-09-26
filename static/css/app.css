@@ -518,6 +518,26 @@ kbd {
 .viewer-compare { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9ea2b0; min-width: 0; }
 .viewer-compare-select { max-width: 260px; padding: 3px 6px; font-size: 12px; }
 .viewer-blend-slider {
+.vi { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.viewer-mode-btn, .viewer-mode-item { display: inline-flex; align-items: center; gap: 6px; }
+.viewer-icon-btn { padding: 4px 7px; }
+.viewer-mode-menu-wrap { position: relative; }
+.viewer-mode-trigger { gap: 5px; padding: 4px 8px; }
+.viewer-mode-trigger .mode-caret { stroke-width: 1.4; opacity: 0.7; }
+.viewer-mode-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; min-width: 100%; width: max-content;
+  display: flex; flex-direction: column; padding: 4px;
+  background: #1d1f27; border: 1px solid #3a3c47; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.viewer-mode-menu[hidden] { display: none; }
+.viewer-mode-item { width: 100%; padding: 5px 10px 5px 6px; gap: 10px; border: none; border-radius: 5px; background: transparent; font-size: 13px; text-align: left; white-space: nowrap; }
+.viewer-mode-item:hover, .viewer-mode-item:focus-visible { background: #2a2c35; outline: none; }
+.viewer-mode-item.selected { background: rgba(139,92,246,0.25); }
+.viewer-mode-item .mode-icon { flex: 0 0 22px; width: 22px; display: inline-flex; justify-content: center; }
+/* Result actions (Copy / Open), right-aligned and set apart from the tools. */
+.viewer-actions { display: inline-flex; align-items: center; gap: 4px; padding-left: 8px; border-left: 1px solid #33353f; }
+.viewer-modebar.pp-active .viewer-actions,
+.viewer-modebar.lineage-active .viewer-actions { display: none !important; }
   flex: 1;
   max-width: 260px;
   margin: 0 10px;
@@ -721,26 +741,6 @@ kbd {
   position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); padding: 1px 6px; border-radius: 4px;
   font-size: 11px; color: #fff; background: rgba(0,0,0,0.6); pointer-events: none; white-space: nowrap;
 }
-
-.ab-actions {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 5;
-  display: none;
-  gap: 6px;
-}
-.ab-action-btn {
-  background: rgba(13, 14, 18, 0.75);
-  border: 1px solid #2a2c35;
-  color: #e6e6e9;
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  backdrop-filter: blur(4px);
-}
-.ab-action-btn:hover { background: rgba(28, 30, 38, 0.9); border-color: #3a3c47; }
 
 #detailsPanel {
   position: relative;

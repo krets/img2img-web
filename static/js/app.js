@@ -1876,7 +1876,9 @@ function syncViewer() {
       els.generateStatus.textContent = `Error: ${message}`;
     },
   });
-  abViewer.setLineage(buildLineageSteps(img, ancestors, active));
+  // A lone parent isn't a lineage worth stepping through (that's just the
+  // "Compare with" dropdown), so lineage mode needs at least a grandparent.
+  abViewer.setLineage(ancestors.length >= 2 ? buildLineageSteps(img, ancestors, active) : []);
 }
 
 // Walks the same ancestor chain as the "Compare with" dropdown, just oldest

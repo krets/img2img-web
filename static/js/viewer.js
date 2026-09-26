@@ -2,6 +2,10 @@
  * All modes share the same two <img> elements (repositioned/restyled per mode
  * via CSS keyed off ab-stage[data-mode]) rather than duplicating image nodes.
  *
+ * Comparison modes are chosen from a dropdown in the modebar (the choice is
+ * remembered in localStorage). Lineage and crop stay as their own toolbar
+ * buttons. Copy/Open for the result sit right-aligned at the end of the modebar.
+ *
  * Modes:
  *  - wipe-lr / wipe-tb: draggable clip-path wipe (default: wipe-lr)
  *  - hold-result / hold-source: press-and-hold swaps which image is on top
@@ -15,9 +19,11 @@
  * alternative bases via setCompareOptions() -- a dropdown appears in the
  * modebar, and the host swaps the base url passed to setImages() on change.
  *
- * Also alongside those comparison modes is lineage mode: for an image with a
- * parent chain (see setCompareOptions() above), steps through every image in
- * that chain -- oldest ancestor to the current image -- one at a time, via a
+ * Alongside those comparison modes is lineage mode (a button, only shown when
+ * the host supplies steps -- it does so for an image with at least a
+ * grandparent): for an image with a parent chain (see setCompareOptions()
+ * above), steps through every image in that chain -- oldest ancestor to the
+ * current image -- one at a time, via a
  * slider and a thumbnail sub-toolbar (setLineage()). It only ever walks the
  * existing ancestor chain the host already resolves; it doesn't gather
  * anything beyond that (e.g. sibling branches or intermediate results).
@@ -34,14 +40,34 @@ const STORAGE_KEY = "grok_img2img.viewerMode";
 const PREPROCESS_MODE = "preprocess";
 const LINEAGE_MODE = "lineage";
 
+// Inline SVG icons (20x20 grid, stroked in currentColor via .vi) so every
+// icon has the same footprint -- the dropdown's icon column stays aligned.
+const svg = (body) =>
+  `<svg class="vi" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">${body}</svg>`;
+const eye = (letter) =>
+  svg(
+    `<g transform="translate(0 -2.5)"><path d="M1.8 10S5 4.8 10 4.8 18.2 10 18.2 10 15 15.2 10 15.2 1.8 10 1.8 10z"/><circle cx="10" cy="10" r="2.4"/></g>` +
+      `<text x="10" y="18.6" font-size="8" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none">${letter}</text>`,
+  );
+const ICONS = {
+  copy: svg('<rect x="7" y="7" width="10" height="10" rx="1.6"/><path d="M13 7V4.6A1.6 1.6 0 0 0 11.4 3H4.6A1.6 1.6 0 0 0 3 4.6v6.8A1.6 1.6 0 0 0 4.6 13H7"/>'),
+  open: svg('<path d="M11 3h6v6M17 3l-8 8M15 12v3.4a1.6 1.6 0 0 1-1.6 1.6H4.6A1.6 1.6 0 0 1 3 15.4V6.6A1.6 1.6 0 0 1 4.6 5H8"/>'),
+  check: svg('<path d="M4 10.5l4 4 8-9"/>'),
+  cross: svg('<path d="M5 5l10 10M15 5L5 15"/>'),
+};
 const MODES = [
-  { id: "wipe-lr", icon: "⬌", title: "Wipe left/right" },
-  { id: "wipe-tb", icon: "⬍", title: "Wipe top/bottom" },
-  { id: "hold-result", icon: "👁︎R", title: "Hold to reveal result (default: source)" },
-  { id: "hold-source", icon: "👁︎S", title: "Hold to reveal original (default: result)" },
-  { id: "side-by-side", icon: "▥", title: "Side by side" },
-  { id: "diff", icon: "±", title: "Difference" },
-  { id: "blend", icon: "◐", title: "Blend" },
+  { id: "wipe-lr", label: "Wipe left/right", title: "Drag a divider left/right to reveal the result over the source",
+    icon: svg('<rect x="2.5" y="4" width="15" height="12" rx="1.5"/><path d="M10 4v12M7 8l-2 2 2 2M13 8l2 2-2 2"/>') },
+  { id: "wipe-tb", label: "Wipe top/bottom", title: "Drag a divider up/down to reveal the result over the source",
+    icon: svg('<rect x="4" y="2.5" width="12" height="15" rx="1.5"/><path d="M4 10h12M8 7l2-2 2 2M8 13l2 2 2-2"/>') },
+  { id: "hold-result", label: "Hold to reveal result", title: "Shows the source; press and hold to reveal the result", icon: eye("R") },
+  { id: "hold-source", label: "Hold to reveal source", title: "Shows the result; press and hold to reveal the original", icon: eye("S") },
+  { id: "side-by-side", label: "Side by side", title: "Source and result next to each other",
+    icon: svg('<rect x="2.5" y="4" width="6.5" height="12" rx="1.2"/><rect x="11" y="4" width="6.5" height="12" rx="1.2"/>') },
+  { id: "diff", label: "Difference", title: "Highlight what changed between source and result",
+    icon: svg('<path d="M10 3.5v7M6.5 7h7M6.5 15.5h7"/>') },
+  { id: "blend", label: "Blend", title: "Crossfade between source and result",
+    icon: svg('<circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 0 0 0 14z" fill="currentColor"/>') },
 ];
 // Modes with an on-image drag handle. Blend is deliberately excluded -- its
 // crossfade slider lives in the modebar instead of overlaying the image.
@@ -59,7 +85,12 @@ function loadState() {
 export function initABViewer(container) {
   container.innerHTML = `
     <div class="viewer-modebar" id="viewerModebar">
-      ${MODES.map((m) => `<button class="viewer-mode-btn" data-mode="${m.id}" title="${m.title}">${m.icon}</button>`).join("")}
+      <div class="viewer-mode-menu-wrap" id="modeMenuWrap">
+        <button type="button" class="viewer-mode-btn viewer-mode-trigger" id="modeBtn" aria-haspopup="listbox" aria-expanded="false"></button>
+        <div class="viewer-mode-menu" id="modeMenu" role="listbox" aria-label="Comparison mode" hidden>
+          ${MODES.map((m) => `<button type="button" class="viewer-mode-item" role="option" data-mode-id="${m.id}" title="${m.title}"><span class="mode-icon">${m.icon}</span><span class="mode-label">${m.label}</span></button>`).join("")}
+        </div>
+      </div>
       <input type="range" id="blendSlider" class="viewer-blend-slider" min="0" max="100" value="50" title="Blend crossfade" style="display:none" />
       <button class="viewer-mode-btn viewer-lineage-btn" id="lineageBtn" data-mode="${LINEAGE_MODE}" title="Step through this image's lineage, oldest ancestor to newest" style="display:none">
         <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="7.4" fill="none" stroke="currentColor" stroke-width="1.6" /><path d="M10 6v4.2l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -75,6 +106,10 @@ export function initABViewer(container) {
           <select id="compareSelect" class="viewer-compare-select"></select>
         </label>
         <button class="viewer-mode-btn viewer-orientation-btn" id="orientationToggleBtn" title="Toggle row/column layout" style="display:none">⟳</button>
+        <span class="viewer-actions" id="abActions" style="display:none">
+          <button class="viewer-mode-btn viewer-icon-btn" id="abCopyBtn" title="Copy result image to clipboard" aria-label="Copy result image to clipboard">${ICONS.copy}</button>
+          <button class="viewer-mode-btn viewer-icon-btn" id="abOpenBtn" title="Open result image in a new tab" aria-label="Open result image in a new tab">${ICONS.open}</button>
+        </span>
       </span>
     </div>
     <div class="viewer-lineage-toolbar" id="lineageToolbar" style="display:none">
@@ -89,10 +124,6 @@ export function initABViewer(container) {
         </div>
         <div class="ab-handle" id="abHandle"><div class="ab-handle-grip"></div></div>
         <div class="ab-badge" id="abBadge" style="display:none" title="The image on the left is the pre-processed source that gets sent to the service. The stored original is unchanged.">✂ Pre-processed source</div>
-        <div class="ab-actions" id="abActions">
-          <button class="ab-action-btn" id="abCopyBtn" title="Copy result image to clipboard">📋 Copy</button>
-          <button class="ab-action-btn" id="abOpenBtn" title="Open result image in a new tab">↗ Open</button>
-        </div>
       </div>
       <div class="pp-stage" id="ppStage" style="display:none"></div>
       <div class="lineage-stage" id="lineageStage" style="display:none">
@@ -113,6 +144,10 @@ export function initABViewer(container) {
   const actions = container.querySelector("#abActions");
   const copyBtn = container.querySelector("#abCopyBtn");
   const openBtn = container.querySelector("#abOpenBtn");
+  const modeWrap = container.querySelector("#modeMenuWrap");
+  const modeBtn = container.querySelector("#modeBtn");
+  const modeMenu = container.querySelector("#modeMenu");
+  const modeItems = [...modeMenu.querySelectorAll(".viewer-mode-item")];
   const orientationBtn = container.querySelector("#orientationToggleBtn");
   const blendSlider = container.querySelector("#blendSlider");
   const compareWrap = container.querySelector("#compareWrap");
@@ -301,15 +336,17 @@ export function initABViewer(container) {
   copyBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!currentResultUrl) return;
-    const original = copyBtn.textContent;
     try {
       await copyImageToClipboard(currentResultUrl);
-      copyBtn.textContent = "✓ Copied";
+      copyBtn.innerHTML = ICONS.check;
+      copyBtn.title = "Copied";
     } catch (err) {
-      copyBtn.textContent = "✕ Failed";
+      copyBtn.innerHTML = ICONS.cross;
+      copyBtn.title = "Copy failed";
     } finally {
       setTimeout(() => {
-        copyBtn.textContent = original;
+        copyBtn.innerHTML = ICONS.copy;
+        copyBtn.title = "Copy result image to clipboard";
       }, 1200);
     }
   });
@@ -374,6 +411,68 @@ export function initABViewer(container) {
     if (DRAG_MODES.has(mode) || HOLD_MODES.has(mode)) evt.preventDefault();
   });
 
+  // Comparison-mode dropdown: the trigger shows only the current mode's icon;
+  // the menu lists icon + text. Custom (not a <select>) since a native select
+  // can't render icons or show different content closed vs. open.
+  function syncModeMenu() {
+    const current = MODES.find((m) => m.id === compareMode);
+    modeBtn.innerHTML = `${current.icon}<svg class="vi mode-caret" viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>`;
+    modeBtn.title = `Comparison mode: ${current.label}`;
+    modeBtn.setAttribute("aria-label", modeBtn.title);
+    modeBtn.classList.toggle("active", mode === compareMode); // not highlighted while crop/lineage has taken over
+    for (const item of modeItems) {
+      const selected = item.dataset.modeId === compareMode;
+      item.classList.toggle("selected", selected);
+      item.setAttribute("aria-selected", String(selected));
+    }
+  }
+
+  function openModeMenu(focusId = compareMode) {
+    modeMenu.hidden = false;
+    modeBtn.setAttribute("aria-expanded", "true");
+    modeItems.find((el) => el.dataset.modeId === focusId)?.focus();
+  }
+
+  function closeModeMenu(refocus = false) {
+    if (modeMenu.hidden) return;
+    modeMenu.hidden = true;
+    modeBtn.setAttribute("aria-expanded", "false");
+    if (refocus) modeBtn.focus();
+  }
+
+  modeBtn.addEventListener("click", () => (modeMenu.hidden ? openModeMenu() : closeModeMenu()));
+  modeBtn.addEventListener("keydown", (evt) => {
+    if (evt.key === "ArrowDown" || evt.key === "ArrowUp") {
+      evt.preventDefault();
+      openModeMenu();
+    }
+  });
+  modeMenu.addEventListener("click", (evt) => {
+    const item = evt.target.closest(".viewer-mode-item");
+    if (!item) return;
+    closeModeMenu(true);
+    setMode(item.dataset.modeId); // re-picking the current mode while in lineage/crop returns to it
+  });
+  modeMenu.addEventListener("keydown", (evt) => {
+    const at = modeItems.indexOf(document.activeElement);
+    const step = { ArrowDown: 1, ArrowUp: -1 }[evt.key];
+    if (step) {
+      evt.preventDefault();
+      modeItems[(at + step + modeItems.length) % modeItems.length].focus();
+    } else if (evt.key === "Home" || evt.key === "End") {
+      evt.preventDefault();
+      modeItems[evt.key === "Home" ? 0 : modeItems.length - 1].focus();
+    } else if (evt.key === "Escape") {
+      evt.preventDefault();
+      closeModeMenu(true);
+    } else if (evt.key === "Tab") {
+      closeModeMenu();
+    }
+  });
+  document.addEventListener("pointerdown", (evt) => {
+    if (!modeWrap.contains(evt.target)) closeModeMenu();
+  });
+
   function setMode(nextMode) {
     if (nextMode === PREPROCESS_MODE) {
       if (!preprocessCtx) return;
@@ -393,6 +492,7 @@ export function initABViewer(container) {
     modebar.querySelectorAll(".viewer-mode-btn[data-mode]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.mode === mode);
     });
+    syncModeMenu();
     modebar.classList.toggle("pp-active", inPreprocess);
     modebar.classList.toggle("lineage-active", inLineage);
     preprocessControls.style.display = inPreprocess ? "inline-flex" : "none";

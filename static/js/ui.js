@@ -256,3 +256,26 @@ export function debounce(fn, ms) {
     t = setTimeout(() => fn(...args), ms);
   };
 }
+
+// Formats a duration in seconds as e.g. "45s", "3m 12s", "1h 05m". Used both
+// for live elapsed time (queue/job in progress) and total generation time
+// stored on finished results.
+export function formatElapsed(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const remSec = s % 60;
+  if (m < 60) return `${m}m ${String(remSec).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  const remMin = m % 60;
+  return `${h}h ${String(remMin).padStart(2, "0")}m`;
+}
+
+// Cache-busts the thumbnail URL whenever the crop box changes, so a recrop
+// is reflected immediately instead of the browser reusing whatever it last
+// fetched for that same URL -- this also doubles as a visual confirmation
+// that a crop was actually saved (the thumbnail visibly updates).
+export function refThumbUrl(ref) {
+  const crop = ref.crop_x != null ? `${ref.crop_x}-${ref.crop_y}-${ref.crop_w}-${ref.crop_h}` : "full";
+  return `/api/reference-images/${ref.id}/thumbnail?v=${crop}`;
+}

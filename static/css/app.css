@@ -46,6 +46,18 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
 .brand { font-weight: 600; margin-right: 8px; }
 
+/* Top-level sections, shared by / and /manage. The active tab can hold
+   section-specific controls (the library picker on the Image Library). */
+.topbar-tabs { gap: 4px; min-width: 0; }
+.topbar-tab {
+  display: flex; align-items: center; gap: 10px;
+  box-sizing: border-box; padding: 2px 12px; min-height: 40px; border-radius: 8px; border: 1px solid transparent;
+  color: #9ea2b0; font-weight: 600; text-decoration: none; white-space: nowrap;
+}
+a.topbar-tab:hover { color: #e6e6eb; background: rgba(139,92,246,0.12); }
+.topbar-tab.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
+.topbar-tab .project-menu-btn { font-weight: 500; }
+
 /* Hamburger menu: the topbar's secondary actions live in a dropdown. The
    buttons keep their own ids (wired in app.js/panels.js); this only restyles
    them as rows. */

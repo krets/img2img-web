@@ -3,18 +3,30 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Library Management</title>
+<title>Review &amp; Export</title>
 <link rel="stylesheet" href="/css/app.css" />
 <link rel="stylesheet" href="/css/manage.css" />
 </head>
 <body class="manage-page">
   <div id="topbar">
-    <div class="topbar-left">
-      <a href="/" class="btn-ghost" title="Back to the image library">← Library</a>
-      <span class="brand">🗂 Management</span>
-    </div>
+    <nav class="topbar-left topbar-tabs" aria-label="Sections">
+      <a href="/" class="topbar-tab"><span class="topbar-tab-label">🖼️ Image Library</span></a>
+      <div class="topbar-tab active" aria-current="page"><span class="topbar-tab-label">🗂 Review &amp; Export</span></div>
+    </nav>
     <div class="topbar-right">
       <span id="indexStatus" class="manage-index-status"></span>
+      <div class="topbar-menu" id="topbarMenu">
+        <button id="topbarMenuBtn" class="btn-ghost topbar-menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Menu" title="Menu">☰</button>
+        <div id="topbarMenuPanel" class="topbar-menu-panel" style="display:none">
+          <button id="duplicatesBtn" class="topbar-menu-item" type="button" title="Open the Duplicates tab for the selected libraries"><span class="topbar-menu-icon" aria-hidden="true">🔍</span><span class="topbar-menu-label">Find Duplicates</span></button>
+          <button id="logsBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">📜</span><span class="topbar-menu-label">Logs</span></button>
+          <button id="trashBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">🗑</span><span class="topbar-menu-label">Trash</span></button>
+          <button id="exportBtn" class="topbar-menu-item" type="button" title="Open the Review tab, where the current view can be exported"><span class="topbar-menu-icon" aria-hidden="true">📤</span><span class="topbar-menu-label">Export…</span></button>
+          <button id="settingsBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">⚙</span><span class="topbar-menu-label">Settings</span></button>
+          <div class="topbar-menu-divider"></div>
+          <button id="hotkeysBtn" class="topbar-menu-item" type="button"><span class="topbar-menu-icon" aria-hidden="true">⌨</span><span class="topbar-menu-label">Hotkeys</span><kbd>?</kbd></button>
+        </div>
+      </div>
     </div>
   </div>
 

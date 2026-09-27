@@ -4,7 +4,9 @@
 // in-memory state to keep in sync.
 
 import { api } from "./api.js";
-import { escapeHtml } from "./ui.js";
+import { escapeHtml, closeModal, isModalOpen } from "./ui.js";
+import { initTopbarMenu, openHotkeysModal, isHotkeysModalOpen, openLogModal, openTrashModal } from "./topbar_menu.js";
+import { openSettingsModal } from "./settings.js";
 import { renderReviewTab, setReviewPrompt, applyReport, reviewHashParams, applyReviewHash } from "./manage_review.js";
 import { renderPromptsTab } from "./manage_prompts.js";
 import { renderDuplicatesTab } from "./manage_duplicates.js";
@@ -236,6 +238,35 @@ els.tabButtons.forEach((btn) => {
 });
 
 // ---------------------------------------------------------------------------
+// Topbar menu: the library page's menu, minus Maximize (a library-layout
+// toggle). Duplicates and Export are tabs here, so those items open them;
+// Trash has no current library, so it lists just the trashed libraries.
+// ---------------------------------------------------------------------------
+
+initTopbarMenu();
+document.getElementById("duplicatesBtn").addEventListener("click", () => selectTab("duplicates"));
+document.getElementById("exportBtn").addEventListener("click", () => selectTab("review"));
+document.getElementById("logsBtn").addEventListener("click", openLogModal);
+document.getElementById("settingsBtn").addEventListener("click", openSettingsModal);
+document.getElementById("hotkeysBtn").addEventListener("click", openHotkeysModal);
+document.getElementById("trashBtn").addEventListener("click", () =>
+  openTrashModal({
+    projectId: null,
+    onChange: async () => {
+      await loadProjects();
+      renderProjectList();
+      renderTab();
+    },
+  })
+);
+// "?" toggles the hotkeys overlay, as on the library page.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "?" || e.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (isHotkeysModalOpen()) closeModal();
+  else if (!isModalOpen()) openHotkeysModal();
+});
+
+// ---------------------------------------------------------------------------
 // Hash index status (background worker from hash_worker.py)
 // ---------------------------------------------------------------------------
 
@@ -255,7 +286,7 @@ async function pollIndexStatus() {
 // Init
 // ---------------------------------------------------------------------------
 
-(async function init() {
+async function loadProjects() {
   const [projects, summary] = await Promise.all([api.listProjects(true), api.manage.summary(true)]);
   state.projects = projects.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   state.counts = new Map(summary.projects.map((p) => [p.project_id, p]));
@@ -264,6 +295,10 @@ async function pollIndexStatus() {
   const before = state.selectedIds.size;
   state.selectedIds = new Set([...state.selectedIds].filter((id) => live.has(id)));
   if (state.selectedIds.size !== before) persistSelection();
+}
+
+(async function init() {
+  await loadProjects();
   // Deep link from the library page (/manage?project=<id>&tab=<tab>): select
   // just that project and open the tab, then drop the query so a reload
   // keeps whatever was picked since.

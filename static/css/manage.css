@@ -56,3 +56,31 @@ body.manage-page { display: flex; flex-direction: column; }
   #manageLayout { flex-direction: column; }
   #manageSidebar { width: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid #2a2c35; }
 }
+
+/* Review tab */
+.review-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  margin-bottom: 12px; font-size: 13px;
+}
+.review-filter-group { display: flex; gap: 4px; }
+.review-eval-toggle {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 5px; border-bottom: 2px solid #33353f;
+  background: #1d1f27; font-size: 12px; cursor: pointer;
+}
+.review-eval-toggle.YES { border-bottom-color: #22c55e; }
+.review-eval-toggle.MAYBE { border-bottom-color: #f59e0b; }
+.review-eval-toggle.NO { border-bottom-color: #ef4444; }
+.review-eval-toggle.UNRATED { border-bottom-color: #3b82f6; }
+.review-eval-toggle input, .review-filter-check input { margin: 0; padding: 0; }
+.review-filter-check { display: flex; align-items: center; gap: 5px; color: #b9bcc7; cursor: pointer; }
+.review-count { margin: 0 0 0 auto; }
+
+/* Stored thumbnails are 80px, so keep tiles near that size rather than upscaling. */
+.review-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
+.review-copy-badge {
+  position: absolute; top: 3px; right: 3px;
+  padding: 0 5px; border-radius: 8px; font-size: 10px; line-height: 16px;
+  background: rgba(13,14,18,0.8); color: #c4b5fd;
+}
+.review-more { display: flex; justify-content: center; margin: 14px 0; }

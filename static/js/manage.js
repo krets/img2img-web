@@ -5,6 +5,7 @@
 
 import { api } from "./api.js";
 import { escapeHtml, plural } from "./ui.js";
+import { renderReviewTab } from "./manage_review.js";
 
 const SELECTION_KEY = "grok_img2img.manage.projectIds";
 const TAB_KEY = "grok_img2img.manage.tab";
@@ -135,7 +136,6 @@ els.showArchivedInput.addEventListener("change", () => {
 const TAB_PLACEHOLDERS = {
   prompts: "Prompt report: results grouped by prompt across the selected libraries.",
   duplicates: "Near-duplicate clusters of source and reference images.",
-  review: "Result gallery with comparison modes.",
   reports: "Saved report definitions and export.",
 };
 
@@ -151,6 +151,10 @@ function selectionTotals() {
 
 function renderTab() {
   els.tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.manageTab === state.tab));
+  if (state.tab === "review") {
+    renderReviewTab(els.tabPanel, effectiveProjectIds());
+    return;
+  }
   const t = selectionTotals();
   els.tabPanel.innerHTML = `
     <p class="manage-hint">${plural(t.source, "source")} · ${plural(t.reference, "reference")} · ${plural(t.result, "result")}</p>

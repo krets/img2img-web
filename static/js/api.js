@@ -140,6 +140,8 @@ export const api = {
     summary: (includeArchived = false) =>
       request("GET", `/manage/summary?include_archived=${includeArchived}`),
     indexStatus: () => request("GET", "/manage/index/status"),
+    results: (filter, offset = 0, limit = 100) =>
+      request("POST", `/manage/results?offset=${offset}&limit=${limit}`, { json: filter }),
   },
 
   // Export

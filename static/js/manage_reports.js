@@ -27,8 +27,15 @@ export function renderReportsTab(host, { projectNames, onOpen }) {
       </table>
     </div>
   `;
+  view.root = host.querySelector("#reportBody");
   host.querySelector("#reportBody").addEventListener("click", onClick);
   load();
+}
+
+// True once a newer load has started or the tab has been swapped out of the
+// shared panel (another tab rendered over it), so late responses are dropped.
+function stale(seq) {
+  return seq !== view.seq || !view.root?.isConnected;
 }
 
 async function load() {
@@ -37,10 +44,10 @@ async function load() {
   count.textContent = "Loading…";
   try {
     const reports = await api.manage.listReports();
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     view.reports = reports;
   } catch (err) {
-    if (seq === view.seq) count.textContent = `Failed to load: ${err.message}`;
+    if (!stale(seq)) count.textContent = `Failed to load: ${err.message}`;
     return;
   }
   render();

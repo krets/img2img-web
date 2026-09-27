@@ -77,9 +77,16 @@ export function renderPromptsTab(host, projectIds, { projectNames, onOpenInRevie
     renderHead();
     renderBody();
   });
+  view.root = host.querySelector("#promptBody");
   host.querySelector("#promptBody").addEventListener("click", onBodyClick);
   renderHead();
   load();
+}
+
+// True once a newer load has started or the tab has been swapped out of the
+// shared panel (another tab rendered over it), so late responses are dropped.
+function stale(seq) {
+  return seq !== view.seq || !view.root?.isConnected;
 }
 
 async function load() {
@@ -94,10 +101,10 @@ async function load() {
   count.textContent = "Loading…";
   try {
     const { groups } = await api.manage.prompts({ project_ids: view.projectIds });
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     view.groups = groups;
   } catch (err) {
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     count.textContent = `Failed to load: ${err.message}`;
     return;
   }

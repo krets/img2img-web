@@ -279,6 +279,7 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
   });
   host.querySelector("#reviewReportSave")?.addEventListener("click", (e) => saveReportChanges(e.currentTarget));
   host.querySelector("#reviewReportNew").addEventListener("click", saveReportModal);
+  view.root = host.querySelector("#reviewGrid");
   bindGrid(host.querySelector("#reviewGrid"));
   applyGridDisplay();
 
@@ -316,6 +317,12 @@ function reset() {
   loadPage();
 }
 
+// True once a newer load has started or the tab has been swapped out of the
+// shared panel (another tab rendered over it), so late responses are dropped.
+function stale(seq) {
+  return seq !== view.seq || !view.root?.isConnected;
+}
+
 async function loadPage() {
   if (view.loading) return;
   const seq = view.seq;
@@ -323,16 +330,16 @@ async function loadPage() {
   renderStatus();
   try {
     const page = await api.manage.results(requestBody(), view.items.length, PAGE_SIZE);
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     const start = view.items.length;
     view.items.push(...page.items);
     view.total = page.total;
     appendTiles(start);
   } catch (err) {
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     view.error = err.message;
   } finally {
-    if (seq === view.seq) {
+    if (!stale(seq)) {
       view.loading = false;
       renderStatus();
     }

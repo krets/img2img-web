@@ -99,6 +99,7 @@ export function renderDuplicatesTab(host, projectIds) {
     view.shown += PAGE;
     renderList();
   });
+  view.root = host.querySelector("#dupList");
   host.querySelector("#dupList").addEventListener("click", onListClick);
   view.shown = PAGE;
   load();
@@ -111,6 +112,12 @@ function settingsChanged() {
 }
 
 // keepPlace: re-fetch after an action without jumping back to the top.
+// True once a newer load has started or the tab has been swapped out of the
+// shared panel (another tab rendered over it), so late responses are dropped.
+function stale(seq) {
+  return seq !== view.seq || !view.root?.isConnected;
+}
+
 async function load({ keepPlace = false } = {}) {
   const seq = ++view.seq;
   const count = view.host.querySelector("#dupCount");
@@ -124,11 +131,11 @@ async function load({ keepPlace = false } = {}) {
   if (!keepPlace) count.textContent = "Looking for duplicates…";
   try {
     const out = await api.manage.duplicates({ ...view.settings, project_ids: view.projectIds });
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     view.clusters = out.clusters;
     view.meta = out;
   } catch (err) {
-    if (seq !== view.seq) return;
+    if (stale(seq)) return;
     count.textContent = `Failed to load: ${err.message}`;
     return;
   }

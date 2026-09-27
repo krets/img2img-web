@@ -10,7 +10,9 @@ const FILTER_KEY = "grok_img2img.manage.reviewFilter";
 const PAGE_SIZE = 120;
 const EVALUATIONS = ["YES", "MAYBE", "NO", "UNRATED"];
 const SORTS = { date_desc: "Newest first", date_asc: "Oldest first", project: "By library", evaluation: "By rating" };
-const DEFAULT_FILTER = { evaluations: [...EVALUATIONS], active_only: false, dedupe_copies: true, sort: "date_desc" };
+const DEFAULT_FILTER = { evaluations: [...EVALUATIONS], active_only: false, dedupe_copies: true, sort: "date_desc", engines: [] };
+const ENGINE_LABELS = { grok: "Grok", comfyui: "Comfy", fal: "fal.ai" };
+const NO_PROMPT_LABEL = "(no prompt)";
 
 // Gallery display, saved separately from the filter. `compare` uses the names
 // reports will store as display_json.compare.
@@ -31,6 +33,7 @@ function loadFilter() {
     const f = { ...DEFAULT_FILTER, ...saved };
     f.evaluations = EVALUATIONS.filter((e) => f.evaluations.includes(e));
     if (!SORTS[f.sort]) f.sort = DEFAULT_FILTER.sort;
+    if (!Array.isArray(f.engines)) f.engines = [];
     return f;
   } catch {
     return { ...DEFAULT_FILTER };
@@ -42,10 +45,12 @@ const view = {
   display: loadDisplay(),
   hoverIdx: null, // tile under the pointer, the target of Y/M/N in the gallery
   lightboxIdx: null, // item shown in the lightbox while it's open
-  prompt: null, // { hash, label } set from the Prompts tab, or null for all prompts
+  // [{ hash, label }] the gallery is narrowed to (hash null = no prompt text),
+  // set from the Prompts tab, a report or the URL; empty for every prompt.
+  prompts: [],
   report: null, // { id, name } of the saved report this view was opened from
   // Filter fields a report can carry but this tab has no controls for
-  // (engines, dates). Applied while the report is attached, dropped after.
+  // (dates). Applied while the report is attached, dropped after.
   extra: {},
   opts: {}, // renderReviewTab options, kept for re-renders
   projectIds: [],
@@ -78,8 +83,17 @@ function saveFilter() {
 
 function requestBody() {
   const body = { ...view.filter, ...view.extra, project_ids: view.projectIds };
-  if (view.prompt) body.prompt_hashes = [view.prompt.hash];
+  if (view.prompts.length) body.prompt_hashes = view.prompts.map((p) => p.hash);
   return body;
+}
+
+// Tells the page the view changed (it mirrors it into the URL).
+function notifyChange() {
+  view.opts.onChange?.();
+}
+
+function promptLabels() {
+  return Object.fromEntries(view.prompts.map((p) => [p.hash ?? "", p.label]));
 }
 
 // The view as a saved report stores it. project_ids / include_archived come
@@ -92,9 +106,9 @@ function reportPayload() {
       ...view.filter,
       ...view.extra,
       ...sel,
-      prompt_hashes: view.prompt ? [view.prompt.hash] : [],
+      prompt_hashes: view.prompts.map((p) => p.hash),
     },
-    display: { ...view.display, ...(view.prompt ? { prompt_label: view.prompt.label } : {}) },
+    display: { ...view.display, ...(view.prompts.length ? { prompt_labels: promptLabels() } : {}) },
   };
 }
 
@@ -106,12 +120,16 @@ export function applyReport(report) {
     active_only: !!f.active_only,
     dedupe_copies: f.dedupe_copies !== false,
     sort: SORTS[f.sort] ? f.sort : DEFAULT_FILTER.sort,
+    engines: f.engines || [],
   };
   view.extra = {};
-  for (const k of ["engines", "date_from", "date_to"]) if (f[k]?.length) view.extra[k] = f[k];
-  const hashes = f.prompt_hashes || [];
-  view.prompt = hashes.length === 1 ? { hash: hashes[0], label: report.display?.prompt_label || "saved prompt" } : null;
-  if (hashes.length > 1) view.extra.prompt_hashes = hashes; // no chip for several; still applied
+  for (const k of ["date_from", "date_to"]) if (f[k]) view.extra[k] = f[k];
+  // Reports saved before several prompts were possible carry prompt_label.
+  const labels = report.display?.prompt_labels || {};
+  view.prompts = (f.prompt_hashes || []).map((hash) => ({
+    hash,
+    label: labels[hash ?? ""] || report.display?.prompt_label || (hash === null ? NO_PROMPT_LABEL : "saved prompt"),
+  }));
   if (COMPARE_MODES[report.display?.compare]) view.display.compare = report.display.compare;
   if (TILE_SIZES[report.display?.size]) view.display.size = report.display.size;
   view.report = { id: report.id, name: report.name };
@@ -140,7 +158,7 @@ function saveReportModal() {
     </div>
   `);
   const name = modal.querySelector("#mReportName");
-  name.value = view.prompt?.label ? view.prompt.label.slice(0, 80) : "";
+  name.value = view.prompts.length === 1 ? view.prompts[0].label.slice(0, 80) : "";
   name.focus();
   name.select();
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
@@ -178,16 +196,68 @@ async function saveReportChanges(btn) {
   }
 }
 
-// Narrows the gallery to one prompt group (hash null = results with no
-// prompt), as opened from the Prompts tab. Rating and active-only filters are
-// cleared so the gallery holds the whole group the report counted. Not
-// persisted: a reload shows the unfiltered gallery again.
-export function setReviewPrompt(hash, label) {
+// Narrows the gallery to a prompt group (hash null = results with no prompt),
+// as opened from the Prompts tab; add keeps the prompts already chosen.
+// Rating, active-only and engine filters are cleared so the gallery holds the
+// whole group the report counted. The prompts live in the URL, not storage.
+export function setReviewPrompt(hash, label, { add = false } = {}) {
   detachReport();
-  view.prompt = { hash, label };
+  if (!add) view.prompts = [];
+  if (!view.prompts.some((p) => p.hash === hash)) view.prompts.push({ hash, label });
   view.filter.evaluations = [...EVALUATIONS];
   view.filter.active_only = false;
+  view.filter.engines = [];
   saveFilter();
+}
+
+// URL state: the review parts of the page's hash (manage.js adds the tab and
+// library selection). Defaults are left out to keep links short.
+export function reviewHashParams() {
+  const f = view.filter;
+  const q = {};
+  if (f.evaluations.length !== EVALUATIONS.length) q.ev = f.evaluations.join(",");
+  if (f.active_only) q.act = "1";
+  if (!f.dedupe_copies) q.dup = "0";
+  if (f.sort !== DEFAULT_FILTER.sort) q.sort = f.sort;
+  if (f.engines.length) q.eng = f.engines.join(",");
+  if (view.prompts.length) q.ph = view.prompts.map((p) => p.hash ?? "none").join(",");
+  if (view.display.compare !== "result_only") q.cmp = view.display.compare;
+  if (view.display.size !== "S") q.size = view.display.size;
+  return q;
+}
+
+// Applies review params from a URL, overriding what storage restored. Prompt
+// labels aren't in the URL; they're looked up afterwards (resolvePromptLabels).
+export function applyReviewHash(q) {
+  detachReport();
+  const list = (k) => (q.get(k) ? q.get(k).split(",").filter(Boolean) : null);
+  view.filter = {
+    evaluations: list("ev") ? EVALUATIONS.filter((e) => list("ev").includes(e)) : [...EVALUATIONS],
+    active_only: q.get("act") === "1",
+    dedupe_copies: q.get("dup") !== "0",
+    sort: SORTS[q.get("sort")] ? q.get("sort") : DEFAULT_FILTER.sort,
+    engines: list("eng") || [],
+  };
+  view.prompts = (list("ph") || []).map((h) => (h === "none" ? { hash: null, label: NO_PROMPT_LABEL } : { hash: h, label: "…" }));
+  view.display.compare = COMPARE_MODES[q.get("cmp")] ? q.get("cmp") : "result_only";
+  view.display.size = TILE_SIZES[q.get("size")] ? q.get("size") : "S";
+  saveFilter();
+  resolvePromptLabels();
+}
+
+async function resolvePromptLabels() {
+  for (const p of view.prompts.filter((x) => x.label === "…")) {
+    try {
+      const page = await api.manage.results({ prompt_hashes: [p.hash], evaluations: [], include_archived: true }, 0, 1);
+      p.label = page.items[0]?.adhoc_prompt_text?.trim() || "unknown prompt";
+    } catch {
+      p.label = "unknown prompt";
+    }
+    view.host?.querySelectorAll(`[data-prompt-chip="${CSS.escape(p.hash ?? "")}"]`).forEach((chip) => {
+      chip.title = p.label;
+      chip.querySelector(".review-prompt-chip-text").textContent = p.label;
+    });
+  }
 }
 
 // Mounts the tab into host for the given project ids (never empty: an empty
@@ -208,16 +278,17 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
       }
       <button type="button" id="reviewReportNew" class="btn-ghost small" title="Save the current view as a named report">${view.report ? "Save as new…" : "Save as report…"}</button>
       <button type="button" id="reviewExport" class="btn-ghost small" title="Download the results in this view as a zip">Export…</button>
-      ${
-        view.prompt
-          ? `<span class="review-prompt-chip" title="${escapeHtml(view.prompt.label)}">Prompt: <span class="review-prompt-chip-text">${escapeHtml(view.prompt.label)}</span><button type="button" id="reviewPromptClear" aria-label="Clear prompt filter" title="Show all prompts">×</button></span>`
-          : ""
-      }
+      ${view.prompts
+        .map(
+          (p, i) => `<span class="review-prompt-chip" data-prompt-chip="${escapeHtml(p.hash ?? "")}" title="${escapeHtml(p.label)}">Prompt: <span class="review-prompt-chip-text">${escapeHtml(p.label)}</span><button type="button" data-prompt-remove="${i}" aria-label="Remove this prompt from the filter" title="Remove this prompt">×</button></span>`
+        )
+        .join("")}
       <div class="review-filter-group" role="group" aria-label="Rating">
         ${EVALUATIONS.map(
           (e) => `<label class="review-eval-toggle ${e}"><input type="checkbox" data-eval="${e}" ${f.evaluations.includes(e) ? "checked" : ""} /> ${e}</label>`
         ).join("")}
       </div>
+      <div class="review-filter-group" id="reviewEngines" role="group" aria-label="Engine" hidden></div>
       <label class="review-filter-check" title="Only the result currently marked active for each source image">
         <input type="checkbox" id="reviewActiveOnly" ${f.active_only ? "checked" : ""} /> Active only
       </label>
@@ -271,9 +342,22 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
     });
   });
   host.querySelector("#reviewMoreBtn").addEventListener("click", () => loadPage());
-  host.querySelector("#reviewPromptClear")?.addEventListener("click", () => {
-    view.prompt = null;
-    renderReviewTab(host, view.projectIds);
+  host.querySelectorAll("[data-prompt-remove]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      view.prompts.splice(Number(btn.dataset.promptRemove), 1);
+      renderReviewTab(host, view.projectIds);
+      notifyChange();
+    })
+  );
+  host.querySelector("#reviewEngines").addEventListener("change", (e) => {
+    const boxes = [...host.querySelectorAll("[data-engine]")];
+    const ticked = boxes.filter((b) => b.checked).map((b) => b.dataset.engine);
+    if (!ticked.length) {
+      e.target.checked = true; // keep one: none ticked would mean "any engine" to the server
+      return;
+    }
+    f.engines = ticked.length === boxes.length ? [] : ticked;
+    filterChanged();
   });
   host.querySelector("#reviewReportClear")?.addEventListener("click", () => {
     detachReport();
@@ -284,7 +368,7 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
   host.querySelector("#reviewExport").addEventListener("click", () =>
     openExportModal({
       source: { filter: requestBody() },
-      name: view.report?.name || view.prompt?.label?.slice(0, 60) || "export",
+      name: view.report?.name || (view.prompts.length === 1 ? view.prompts[0].label.slice(0, 60) : "") || "export",
       summary: view.total ? `The ${view.total} results in this view, across ${view.projectIds.length === 1 ? "1 library" : `${view.projectIds.length} libraries`}.` : "The results in this view.",
     })
   );
@@ -298,6 +382,7 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
 function filterChanged() {
   saveFilter();
   reset();
+  notifyChange();
 }
 
 // Display changes re-render the loaded tiles in place; no refetch.
@@ -309,6 +394,7 @@ function displayChanged() {
   }
   applyGridDisplay();
   view.host.querySelector("#reviewGrid").innerHTML = view.items.map(tileHtml).join("");
+  notifyChange();
 }
 
 function reset() {
@@ -324,6 +410,29 @@ function reset() {
     return;
   }
   loadPage();
+  loadEngines(view.seq);
+}
+
+// Fills the engine picker with the engines present under the other filters.
+// Hidden while there's only one and it isn't narrowing anything.
+async function loadEngines(seq) {
+  let engines;
+  try {
+    engines = await api.manage.engines(requestBody());
+  } catch {
+    return;
+  }
+  if (stale(seq)) return;
+  const chosen = view.filter.engines;
+  for (const e of chosen) if (!engines.some((x) => x.engine === e)) engines.push({ engine: e, n: 0 });
+  const box = view.host.querySelector("#reviewEngines");
+  box.hidden = engines.length < 2 && !chosen.length;
+  box.innerHTML = engines
+    .map(
+      ({ engine, n }) =>
+        `<label class="review-eval-toggle engine" title="${n} results"><input type="checkbox" data-engine="${escapeHtml(engine)}" ${!chosen.length || chosen.includes(engine) ? "checked" : ""} /> ${escapeHtml(ENGINE_LABELS[engine] || engine)}</label>`
+    )
+    .join("");
 }
 
 // True once a newer load has started or the tab has been swapped out of the
@@ -393,6 +502,7 @@ function tileHtml(r, idx) {
       <img class="review-tile-result" src="${tileImageUrl(r)}" loading="lazy" alt="" draggable="false" />
       ${reveal}
       ${r.copy_count > 1 ? `<span class="review-copy-badge">×${r.copy_count}</span>` : ""}
+      ${r.reference_image_ids?.length ? `<span class="review-ref-badge" title="Generated with ${r.reference_image_ids.length} reference image${r.reference_image_ids.length === 1 ? "" : "s"}">⧉${r.reference_image_ids.length}</span>` : ""}
     </div>
   `;
 }
@@ -542,6 +652,19 @@ async function stepLightbox(delta) {
   if (lightboxOpen()) openLightbox(idx);
 }
 
+// Thumbnails of the references a result was generated with, each opening the
+// full reference in a new tab.
+function referenceStrip(r) {
+  const ids = r.reference_image_ids || [];
+  if (!ids.length) return "";
+  return `<span class="review-ref-strip" title="Reference images used">Refs ${ids
+    .map(
+      (id) =>
+        `<a class="review-ref-thumb" href="/api/reference-images/${id}/original" target="_blank" rel="noopener"><img src="/api/reference-images/${id}/thumbnail" alt="Reference image" /></a>`
+    )
+    .join("")}</span>`;
+}
+
 function renderLightboxHeader(message = "") {
   const bar = document.getElementById("rlBar");
   if (!bar) return;
@@ -557,10 +680,22 @@ function renderLightboxHeader(message = "") {
         .map(([ev, key]) => `<button type="button" class="btn-ghost small review-rate ${ev} ${current === ev ? "active" : ""}" data-rate="${ev}" title="Rate ${ev} (${key})">${ev}</button>`)
         .join("")}
     </span>
+    ${referenceStrip(r)}
     <span class="review-lightbox-msg">${escapeHtml(message)}</span>
     <a class="btn-ghost small" href="${editorUrl}" target="_blank" rel="noopener" title="Open this image in the library, in a new tab">Open in editor ↗</a>
   `;
   bar.querySelectorAll("[data-rate]").forEach((btn) => btn.addEventListener("click", () => rate(idx, btn.dataset.rate)));
+  // A reference hard-deleted by the trash pruner leaves only its id behind.
+  bar.querySelectorAll(".review-ref-thumb img").forEach((img) =>
+    img.addEventListener("error", () => {
+      const a = img.closest("a");
+      a.replaceWith(Object.assign(document.createElement("span"), {
+        className: "review-ref-thumb gone",
+        title: "This reference image has been deleted",
+        textContent: "deleted",
+      }));
+    })
+  );
   document.getElementById("rlPrev").disabled = idx <= 0;
   document.getElementById("rlNext").disabled = idx + 1 >= view.total;
 }

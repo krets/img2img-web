@@ -141,6 +141,7 @@ export const api = {
       request("GET", `/manage/summary?include_archived=${includeArchived}`),
     indexStatus: () => request("GET", "/manage/index/status"),
     prompts: (filter) => request("POST", "/manage/prompts", { json: filter }),
+    engines: (filter) => request("POST", "/manage/engines", { json: filter }),
     duplicates: (body) => request("POST", "/manage/duplicates", { json: body }),
     listReports: () => request("GET", "/manage/reports"),
     getReport: (id) => request("GET", `/manage/reports/${id}`),

@@ -41,7 +41,7 @@ const view = {
 };
 
 // Mounts the tab. projectIds is never empty (see manage.js); projectNames maps
-// id -> name for the Libraries column; onOpenInReview(hash, label) switches to
+// id -> name for the Libraries column; onOpenInReview(hash, label, { add }) switches to
 // the Review tab filtered to that prompt.
 export function renderPromptsTab(host, projectIds, { projectNames, onOpenInReview }) {
   view.host = host;
@@ -155,7 +155,7 @@ function rowHtml(g, idx) {
        ${g.revised_n ? `<button type="button" class="btn-ghost small" data-act="revised" title="Versions the engine rewrote this prompt into">Revised (${g.revised_n})</button>` : ""}`
     : "";
   return `
-    <tr data-idx="${idx}" title="Show these results in Review">
+    <tr data-idx="${idx}" title="Show these results in Review (Ctrl/Shift+click: add to the prompts already there)">
       <td class="prompt-cell">
         ${g.palette_title ? `<span class="prompt-palette-chip" title="In the prompt palette">${escapeHtml(g.palette_title)}</span>` : ""}
         <div class="prompt-text ${expanded ? "expanded" : ""}">${text}</div>
@@ -200,8 +200,10 @@ function onBodyClick(e) {
   } else if (act === "revised") {
     showRevised(g);
   } else if (!window.getSelection()?.toString()) {
-    // A plain click (not a text selection drag) opens the results.
-    view.onOpenInReview?.(g.prompt_hash, g.palette_title || g.text || NO_PROMPT);
+    // A plain click (not a text selection drag) opens the results; with Ctrl
+    // or Shift the prompt joins the ones Review is already narrowed to.
+    const add = e.ctrlKey || e.metaKey || e.shiftKey;
+    view.onOpenInReview?.(g.prompt_hash, g.palette_title || g.text || NO_PROMPT, { add });
   }
 }
 

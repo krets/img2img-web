@@ -64,7 +64,11 @@ export function describeFilter(report, projectNames) {
   if (report.missing_project_ids.length) parts.push(`${report.missing_project_ids.length} deleted`);
   const evs = f.evaluations || [];
   if (evs.length && evs.length < EVALUATIONS.length) parts.push(evs.join("/"));
-  if (f.prompt_hashes?.length) parts.push(report.display?.prompt_label ? `prompt “${report.display.prompt_label}”` : plural(f.prompt_hashes.length, "prompt"));
+  if (f.prompt_hashes?.length) {
+    const labels = report.display?.prompt_labels || {};
+    const one = f.prompt_hashes.length === 1 && (labels[f.prompt_hashes[0] ?? ""] || report.display?.prompt_label);
+    parts.push(one ? `prompt “${one}”` : plural(f.prompt_hashes.length, "prompt"));
+  }
   if (f.engines?.length) parts.push(f.engines.join("/"));
   if (f.date_from || f.date_to) parts.push(`${f.date_from || "…"} to ${f.date_to || "…"}`);
   if (f.active_only) parts.push("active only");

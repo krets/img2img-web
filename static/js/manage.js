@@ -5,7 +5,7 @@
 
 import { api } from "./api.js";
 import { escapeHtml } from "./ui.js";
-import { renderReviewTab, setReviewPrompt, applyReport } from "./manage_review.js";
+import { renderReviewTab, setReviewPrompt, applyReport, reviewHashParams, applyReviewHash } from "./manage_review.js";
 import { renderPromptsTab } from "./manage_prompts.js";
 import { renderDuplicatesTab } from "./manage_duplicates.js";
 import { renderReportsTab } from "./manage_reports.js";
@@ -164,20 +164,21 @@ function openReport(report) {
 function renderTab() {
   els.tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.manageTab === state.tab));
   if (state.tab === "review") {
-    renderReviewTab(els.tabPanel, effectiveProjectIds(), { selection: reportSelection });
+    renderReviewTab(els.tabPanel, effectiveProjectIds(), { selection: reportSelection, onChange: writeHash });
   } else if (state.tab === "duplicates") {
     renderDuplicatesTab(els.tabPanel, effectiveProjectIds());
   } else if (state.tab === "prompts") {
     renderPromptsTab(els.tabPanel, effectiveProjectIds(), {
       projectNames: projectNames(),
-      onOpenInReview: (hash, label) => {
-        setReviewPrompt(hash, label);
+      onOpenInReview: (hash, label, opts) => {
+        setReviewPrompt(hash, label, opts);
         selectTab("review");
       },
     });
   } else if (state.tab === "reports") {
     renderReportsTab(els.tabPanel, { projectNames: projectNames(), onOpen: openReport });
   }
+  writeHash();
 }
 
 function selectTab(tab) {
@@ -189,6 +190,46 @@ function selectTab(tab) {
   }
   renderTab();
 }
+
+// ---------------------------------------------------------------------------
+// Linkable views: the URL hash mirrors the tab, the library selection and,
+// on Review, its filter and display: #review?p=<id>,<id>&arch=1&ev=YES&...
+// No p means none ticked, i.e. every library. A hash on load (or pasted in
+// later) wins over what localStorage restored.
+// ---------------------------------------------------------------------------
+
+function writeHash() {
+  const q = new URLSearchParams();
+  if (state.selectedIds.size) q.set("p", [...state.selectedIds].join(","));
+  if (state.showArchived) q.set("arch", "1");
+  if (state.tab === "review") for (const [k, v] of Object.entries(reviewHashParams())) q.set(k, v);
+  const query = q.toString().replace(/%2C/g, ",");
+  const hash = `#${state.tab}${query ? `?${query}` : ""}`;
+  if (location.hash !== hash) history.replaceState(null, "", `${location.pathname}${hash}`);
+}
+
+// Returns true when the hash named a view and it was applied to state.
+function readHash() {
+  const raw = location.hash.slice(1);
+  if (!raw) return false;
+  const [tab, query = ""] = raw.split("?");
+  if (!TABS.includes(tab)) return false;
+  const q = new URLSearchParams(query);
+  const live = new Set(state.projects.map((p) => p.id));
+  state.selectedIds = new Set((q.get("p") || "").split(",").filter((id) => live.has(id)));
+  const archived = new Set(state.projects.filter((p) => p.is_archived).map((p) => p.id));
+  state.showArchived = q.get("arch") === "1" || [...state.selectedIds].some((id) => archived.has(id));
+  els.showArchivedInput.checked = state.showArchived;
+  state.tab = tab;
+  if (tab === "review") applyReviewHash(q);
+  return true;
+}
+
+window.addEventListener("hashchange", () => {
+  if (!readHash()) return;
+  renderProjectList();
+  renderTab();
+});
 
 els.tabButtons.forEach((btn) => {
   btn.addEventListener("click", () => selectTab(btn.dataset.manageTab));
@@ -246,6 +287,7 @@ async function pollIndexStatus() {
     }
   }
   if (params.has("project") || params.has("tab")) history.replaceState(null, "", location.pathname);
+  else readHash();
   renderProjectList();
   renderTab();
   pollIndexStatus();

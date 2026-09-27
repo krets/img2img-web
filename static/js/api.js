@@ -141,6 +141,11 @@ export const api = {
       request("GET", `/manage/summary?include_archived=${includeArchived}`),
     indexStatus: () => request("GET", "/manage/index/status"),
     prompts: (filter) => request("POST", "/manage/prompts", { json: filter }),
+    duplicates: (body) => request("POST", "/manage/duplicates", { json: body }),
+    dupDecisions: (items, clusterAnchorId = null) =>
+      request("POST", "/manage/duplicates/decisions", { json: { items, cluster_anchor_id: clusterAnchorId } }),
+    mergeReferences: (keepId, removeIds) =>
+      request("POST", "/manage/duplicates/merge-references", { json: { keep_id: keepId, remove_ids: removeIds } }),
     revisedPrompts: (hash, filter) =>
       request("POST", `/manage/prompts/${encodeURIComponent(hash)}/revised`, { json: filter }),
     results: (filter, offset = 0, limit = 100) =>

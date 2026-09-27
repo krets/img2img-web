@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { escapeHtml, plural } from "./ui.js";
 import { renderReviewTab, setReviewPrompt } from "./manage_review.js";
 import { renderPromptsTab } from "./manage_prompts.js";
+import { renderDuplicatesTab } from "./manage_duplicates.js";
 
 const SELECTION_KEY = "grok_img2img.manage.projectIds";
 const TAB_KEY = "grok_img2img.manage.tab";
@@ -135,7 +136,6 @@ els.showArchivedInput.addEventListener("change", () => {
 // ---------------------------------------------------------------------------
 
 const TAB_PLACEHOLDERS = {
-  duplicates: "Near-duplicate clusters of source and reference images.",
   reports: "Saved report definitions and export.",
 };
 
@@ -153,6 +153,10 @@ function renderTab() {
   els.tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.manageTab === state.tab));
   if (state.tab === "review") {
     renderReviewTab(els.tabPanel, effectiveProjectIds());
+    return;
+  }
+  if (state.tab === "duplicates") {
+    renderDuplicatesTab(els.tabPanel, effectiveProjectIds());
     return;
   }
   if (state.tab === "prompts") {

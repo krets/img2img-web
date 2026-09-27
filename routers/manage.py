@@ -26,3 +26,15 @@ def list_results(f: ManageFilterIn, offset: int = Query(0, ge=0), limit: int = Q
     are built client-side from the result id (/api/results/{id}/thumbnail etc.).
     """
     return manage_db.list_filtered_results(f, offset=offset, limit=limit)
+
+
+@router.post("/prompts")
+def prompt_report(f: ManageFilterIn):
+    """Results matching the filter grouped by prompt (f.prompt_hashes is ignored)."""
+    return manage_db.prompt_report(f)
+
+
+@router.post("/prompts/{prompt_hash}/revised")
+def revised_prompts(prompt_hash: str, f: ManageFilterIn):
+    """Distinct engine-revised versions of one prompt, with counts, within the filter."""
+    return manage_db.revised_prompts(prompt_hash, f)

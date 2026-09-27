@@ -124,7 +124,8 @@ class ManageFilterIn(BaseModel):
     # Only consulted when project_ids is empty: whether "all projects" takes in
     # archived ones. Explicitly listed projects are used whether archived or not.
     include_archived: bool = False
-    prompt_hashes: list[str] = []
+    # None stands for "no prompt text" (results whose prompt_hash is NULL).
+    prompt_hashes: list[Optional[str]] = []
     evaluations: list[Literal["YES", "NO", "MAYBE", "UNRATED"]] = ["YES", "MAYBE", "NO", "UNRATED"]
     # The current export only takes the active result per image; review usually wants all.
     active_only: bool = False

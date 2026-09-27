@@ -7,6 +7,7 @@ themselves.
 """
 
 import db
+import prompt_utils
 
 KINDS = ("source", "reference", "result")
 
@@ -60,20 +61,23 @@ def _in_clause(column, values, params):
     return f"{column} IN ({','.join('?' * len(values))})"
 
 
-def _filtered_results_sql(f):
-    """(sql, params) for every live result matching filter f, one row per
-    result plus copy_rank/copy_count over its content_hash. Filtering happens
-    before the copy window, so a copy outside the selection never hides one
-    inside it.
+def _filter_where(f, params, prompts=True):
+    """WHERE clause (appending to params) over results r / images i / projects p
+    for filter f: live rows only, plus each constraint f sets. prompts=False
+    ignores f.prompt_hashes, for the prompt report that groups by them.
     """
-    params = []
     where = ["r.is_deleted = 0", "i.is_deleted = 0", "p.is_deleted = 0"]
     if f.project_ids:
         where.append(_in_clause("i.project_id", f.project_ids, params))
     elif not f.include_archived:
         where.append("p.is_archived = 0")
-    if f.prompt_hashes:
-        where.append(_in_clause("r.prompt_hash", f.prompt_hashes, params))
+    if prompts and f.prompt_hashes:
+        # None in the list stands for results with no prompt text (NULL hash).
+        hashes = [h for h in f.prompt_hashes if h is not None]
+        terms = [_in_clause("r.prompt_hash", hashes, params)] if hashes else []
+        if None in f.prompt_hashes:
+            terms.append("r.prompt_hash IS NULL")
+        where.append(f"({' OR '.join(terms)})")
     if f.evaluations:
         where.append(_in_clause("COALESCE(r.evaluation, 'UNRATED')", f.evaluations, params))
     if f.engines:
@@ -88,6 +92,17 @@ def _filtered_results_sql(f):
     if f.date_to:
         where.append("r.date_generated < date(?, '+1 day')")
         params.append(f.date_to)
+    return " AND ".join(where)
+
+
+def _filtered_results_sql(f):
+    """(sql, params) for every live result matching filter f, one row per
+    result plus copy_rank/copy_count over its content_hash. Filtering happens
+    before the copy window, so a copy outside the selection never hides one
+    inside it.
+    """
+    params = []
+    where = _filter_where(f, params)
     sql = f"""
         SELECT r.*, i.project_id AS project_id, p.name AS project_name,
                i.display_name AS image_display_name, i.file_name AS image_file_name,
@@ -97,7 +112,7 @@ def _filtered_results_sql(f):
         FROM results r
         JOIN images i ON i.id = r.image_id
         JOIN projects p ON p.id = i.project_id
-        WHERE {' AND '.join(where)}
+        WHERE {where}
     """
     return sql, params
 
@@ -205,3 +220,88 @@ def set_result_content_hashes(updates):
     conn = db.get_connection()
     conn.executemany("UPDATE results SET content_hash = ? WHERE id = ?", [(h, rid) for rid, h in updates])
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Prompt report: results grouped by prompt_hash (normalized prompt text).
+# ---------------------------------------------------------------------------
+
+
+def _palette_titles():
+    """prompt_hash -> title of the palette prompt whose current text hashes the
+    same (the most recently updated one, if several do).
+    """
+    titles = {}
+    for p in reversed(db.list_prompts()):  # oldest first, so newer ones win
+        h = prompt_utils.prompt_hash(p["prompt_text"])
+        if h:
+            titles[h] = p["title"]
+    return titles
+
+
+def prompt_report(f):
+    """One row per prompt across the results matching f (its prompt_hashes are
+    ignored): n results, unique_n distinct images (copies counted once), the
+    projects they're in, rating counts and when it was last used. The NULL-hash
+    row gathers results with no prompt text.
+    """
+    conn = db.get_connection()
+    params = []
+    where = _filter_where(f, params, prompts=False)
+    rows = conn.execute(
+        f"""
+        SELECT r.prompt_hash AS prompt_hash,
+               MIN(r.adhoc_prompt_text) AS text,
+               COUNT(*) AS n,
+               COUNT(DISTINCT COALESCE(r.content_hash, r.id)) AS unique_n,
+               COUNT(DISTINCT i.project_id) AS project_count,
+               GROUP_CONCAT(DISTINCT i.project_id) AS project_ids,
+               SUM(r.evaluation = 'YES') AS yes,
+               SUM(r.evaluation = 'MAYBE') AS maybe,
+               SUM(r.evaluation = 'NO') AS no,
+               SUM(COALESCE(r.evaluation, 'UNRATED') = 'UNRATED') AS unrated,
+               COUNT(DISTINCT r.revised_prompt) AS revised_n,
+               MAX(r.date_generated) AS last_used
+        FROM results r
+        JOIN images i ON i.id = r.image_id
+        JOIN projects p ON p.id = i.project_id
+        WHERE {where}
+        GROUP BY r.prompt_hash
+        ORDER BY n DESC
+        """,
+        params,
+    ).fetchall()
+    titles = _palette_titles()
+    groups = []
+    for row in rows:
+        g = dict(row)
+        # Members differ at most in whitespace; show the normalized form.
+        g["text"] = prompt_utils.normalize_prompt(g["text"]) or None
+        g["project_ids"] = g["project_ids"].split(",") if g["project_ids"] else []
+        g["palette_title"] = titles.get(g["prompt_hash"])
+        groups.append(g)
+    return {"groups": groups}
+
+
+def revised_prompts(prompt_hash, f):
+    """Distinct revised_prompt values (engine rewrites, e.g. Grok's) among the
+    results for prompt_hash that match f, most common first.
+    """
+    conn = db.get_connection()
+    params = []
+    where = _filter_where(f, params, prompts=False)
+    return [
+        dict(r)
+        for r in conn.execute(
+            f"""
+            SELECT r.revised_prompt AS revised_prompt, COUNT(*) AS n
+            FROM results r
+            JOIN images i ON i.id = r.image_id
+            JOIN projects p ON p.id = i.project_id
+            WHERE {where} AND r.prompt_hash = ? AND r.revised_prompt IS NOT NULL
+            GROUP BY r.revised_prompt
+            ORDER BY n DESC
+            """,
+            [*params, prompt_hash],
+        )
+    ]

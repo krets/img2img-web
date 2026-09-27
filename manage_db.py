@@ -119,6 +119,21 @@ def _filtered_results_sql(f):
     return sql, params
 
 
+def engine_counts(f):
+    """[{engine, n}] among results matching f with its engines constraint
+    ignored, so the engine picker can list every engine it could choose."""
+    conn = db.get_connection()
+    params = []
+    where = _filter_where(f.model_copy(update={"engines": []}), params)
+    rows = conn.execute(
+        f"""SELECT r.engine AS engine, COUNT(*) AS n FROM results r
+            JOIN images i ON i.id = r.image_id JOIN projects p ON p.id = i.project_id
+            WHERE {where} GROUP BY r.engine ORDER BY n DESC""",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_filtered_results(f, offset=0, limit=100):
     """{total, items} for one page of results matching ManageFilterIn f.
     With f.dedupe_copies, results sharing a content_hash collapse to the

@@ -483,3 +483,11 @@ def test_legacy_project_export_wrapper(client, export_lib):
     assert len(sbs) == 1 and f"/side_by_side/alpha/cat_{d['rno'][:8]}_ab.png" in sbs[0]
     assert post({}, project="nope").status_code == 404
     assert client.get(f"/api/projects/{d['A']}/export/preview").status_code in (404, 405)       # preview route is gone
+
+
+def test_engine_counts_ignore_engine_filter(client, two_projects):
+    t = two_projects
+    body = {"project_ids": [t["A"]], "engines": ["fal"]}
+    counts = client.post("/api/manage/engines", json=body).json()
+    assert counts == [{"engine": "grok", "n": 2}, {"engine": "fal", "n": 1}]
+    assert client.post("/api/manage/engines", json={"evaluations": ["NO"]}).json() == [{"engine": "fal", "n": 1}]

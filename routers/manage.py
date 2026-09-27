@@ -32,6 +32,12 @@ def list_results(f: ManageFilterIn, offset: int = Query(0, ge=0), limit: int = Q
     return manage_db.list_filtered_results(f, offset=offset, limit=limit)
 
 
+@router.post("/engines")
+def engine_counts(f: ManageFilterIn):
+    """Engines used by the results matching the filter (its engines ignored), with counts."""
+    return manage_db.engine_counts(f)
+
+
 @router.post("/prompts")
 def prompt_report(f: ManageFilterIn):
     """Results matching the filter grouped by prompt (f.prompt_hashes is ignored)."""

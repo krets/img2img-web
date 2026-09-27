@@ -4192,7 +4192,18 @@ function formatElapsed(seconds) {
 
 (async function init() {
   abViewer.setImages(null, null);
+  // Deep link from the management page's "Open in editor": /?project=<id>&image=<id>.
+  // The project goes through lastProjectId so loadProjects() falls back as usual
+  // if it's gone or archived; the query is dropped so a reload doesn't reapply it.
+  const deepLink = new URLSearchParams(location.search);
+  if (deepLink.has("project")) {
+    localStorage.setItem("lastProjectId", deepLink.get("project"));
+    history.replaceState(null, "", location.pathname);
+  }
   await loadProjects();
+  if (deepLink.has("image") && state.currentProjectId === deepLink.get("project")) {
+    await selectImage(deepLink.get("image"));
+  }
   await loadPrompts();
   const config = await api.getConfig();
   const savedEngine = localStorage.getItem(ENGINE_STORAGE_KEY);

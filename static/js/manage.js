@@ -5,7 +5,8 @@
 
 import { api } from "./api.js";
 import { escapeHtml, plural } from "./ui.js";
-import { renderReviewTab } from "./manage_review.js";
+import { renderReviewTab, setReviewPrompt } from "./manage_review.js";
+import { renderPromptsTab } from "./manage_prompts.js";
 
 const SELECTION_KEY = "grok_img2img.manage.projectIds";
 const TAB_KEY = "grok_img2img.manage.tab";
@@ -134,7 +135,6 @@ els.showArchivedInput.addEventListener("change", () => {
 // ---------------------------------------------------------------------------
 
 const TAB_PLACEHOLDERS = {
-  prompts: "Prompt report: results grouped by prompt across the selected libraries.",
   duplicates: "Near-duplicate clusters of source and reference images.",
   reports: "Saved report definitions and export.",
 };
@@ -155,6 +155,16 @@ function renderTab() {
     renderReviewTab(els.tabPanel, effectiveProjectIds());
     return;
   }
+  if (state.tab === "prompts") {
+    renderPromptsTab(els.tabPanel, effectiveProjectIds(), {
+      projectNames: new Map(state.projects.map((p) => [p.id, p.name])),
+      onOpenInReview: (hash, label) => {
+        setReviewPrompt(hash, label);
+        selectTab("review");
+      },
+    });
+    return;
+  }
   const t = selectionTotals();
   els.tabPanel.innerHTML = `
     <p class="manage-hint">${plural(t.source, "source")} · ${plural(t.reference, "reference")} · ${plural(t.result, "result")}</p>
@@ -162,16 +172,18 @@ function renderTab() {
   `;
 }
 
+function selectTab(tab) {
+  state.tab = tab;
+  try {
+    localStorage.setItem(TAB_KEY, state.tab);
+  } catch {
+    // ignore
+  }
+  renderTab();
+}
+
 els.tabButtons.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    state.tab = btn.dataset.manageTab;
-    try {
-      localStorage.setItem(TAB_KEY, state.tab);
-    } catch {
-      // ignore
-    }
-    renderTab();
-  });
+  btn.addEventListener("click", () => selectTab(btn.dataset.manageTab));
 });
 
 // ---------------------------------------------------------------------------

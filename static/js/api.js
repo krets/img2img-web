@@ -140,6 +140,9 @@ export const api = {
     summary: (includeArchived = false) =>
       request("GET", `/manage/summary?include_archived=${includeArchived}`),
     indexStatus: () => request("GET", "/manage/index/status"),
+    prompts: (filter) => request("POST", "/manage/prompts", { json: filter }),
+    revisedPrompts: (hash, filter) =>
+      request("POST", `/manage/prompts/${encodeURIComponent(hash)}/revised`, { json: filter }),
     results: (filter, offset = 0, limit = 100) =>
       request("POST", `/manage/results?offset=${offset}&limit=${limit}`, { json: filter }),
   },

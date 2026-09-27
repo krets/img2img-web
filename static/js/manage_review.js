@@ -41,6 +41,7 @@ const view = {
   display: loadDisplay(),
   hoverIdx: null, // tile under the pointer, the target of Y/M/N in the gallery
   lightboxIdx: null, // item shown in the lightbox while it's open
+  prompt: null, // { hash, label } set from the Prompts tab, or null for all prompts
   projectIds: [],
   items: [],
   total: 0,
@@ -70,7 +71,20 @@ function saveFilter() {
 }
 
 function requestBody() {
-  return { ...view.filter, project_ids: view.projectIds };
+  const body = { ...view.filter, project_ids: view.projectIds };
+  if (view.prompt) body.prompt_hashes = [view.prompt.hash];
+  return body;
+}
+
+// Narrows the gallery to one prompt group (hash null = results with no
+// prompt), as opened from the Prompts tab. Rating and active-only filters are
+// cleared so the gallery holds the whole group the report counted. Not
+// persisted: a reload shows the unfiltered gallery again.
+export function setReviewPrompt(hash, label) {
+  view.prompt = { hash, label };
+  view.filter.evaluations = [...EVALUATIONS];
+  view.filter.active_only = false;
+  saveFilter();
 }
 
 // Mounts the tab into host for the given project ids (never empty: an empty
@@ -81,6 +95,11 @@ export function renderReviewTab(host, projectIds) {
   const f = view.filter;
   host.innerHTML = `
     <div class="review-filters">
+      ${
+        view.prompt
+          ? `<span class="review-prompt-chip" title="${escapeHtml(view.prompt.label)}">Prompt: <span class="review-prompt-chip-text">${escapeHtml(view.prompt.label)}</span><button type="button" id="reviewPromptClear" aria-label="Clear prompt filter" title="Show all prompts">×</button></span>`
+          : ""
+      }
       <div class="review-filter-group" role="group" aria-label="Rating">
         ${EVALUATIONS.map(
           (e) => `<label class="review-eval-toggle ${e}"><input type="checkbox" data-eval="${e}" ${f.evaluations.includes(e) ? "checked" : ""} /> ${e}</label>`
@@ -139,6 +158,10 @@ export function renderReviewTab(host, projectIds) {
     });
   });
   host.querySelector("#reviewMoreBtn").addEventListener("click", () => loadPage());
+  host.querySelector("#reviewPromptClear")?.addEventListener("click", () => {
+    view.prompt = null;
+    renderReviewTab(host, view.projectIds);
+  });
   bindGrid(host.querySelector("#reviewGrid"));
   applyGridDisplay();
 

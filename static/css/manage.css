@@ -121,3 +121,51 @@ body.manage-page { display: flex; flex-direction: column; }
 .review-viewer .viewer-preprocess-btn,
 .review-viewer .viewer-mode-sep { display: none; }
 .review-lightbox-body .lightbox-nav-btn { top: calc(50% + 20px); }
+
+.review-prompt-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 360px;
+  padding: 2px 4px 2px 8px; border-radius: 12px; font-size: 12px;
+  background: rgba(139,92,246,0.2); border: 1px solid #8B5CF6; color: #e6e6eb;
+}
+.review-prompt-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.review-prompt-chip button {
+  padding: 0 5px; border: none; background: transparent; font-size: 14px; line-height: 1; color: #c4b5fd;
+}
+
+/* Prompts tab */
+.prompt-report-search { width: 280px; max-width: 100%; }
+.prompt-report-wrap { overflow-x: auto; }
+.prompt-report { width: 100%; border-collapse: collapse; font-size: 13px; }
+.prompt-report th {
+  position: sticky; top: 0; z-index: 1; background: #14151a;
+  text-align: left; font-weight: 600; font-size: 12px; color: #9ea2b0;
+  padding: 6px 8px; border-bottom: 1px solid #2a2c35; white-space: nowrap;
+}
+.prompt-report th.sortable { cursor: pointer; user-select: none; }
+.prompt-report th.sortable:hover, .prompt-report th.sorted { color: #e6e6eb; }
+.prompt-report td { padding: 6px 8px; border-bottom: 1px solid #22242c; vertical-align: top; }
+.prompt-report tbody tr { cursor: pointer; }
+.prompt-report tbody tr:hover { background: rgba(139,92,246,0.08); }
+.prompt-report td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.prompt-report td.nowrap { white-space: nowrap; color: #9ea2b0; }
+.prompt-cell { min-width: 280px; max-width: 640px; }
+.prompt-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.prompt-text.expanded { display: block; -webkit-line-clamp: unset; white-space: pre-wrap; }
+.prompt-none { color: #6b6f7d; font-style: italic; }
+.prompt-expand { margin-top: 2px; padding: 0; border: none; background: transparent; font-size: 11px; color: #a78bfa; }
+.prompt-palette-chip {
+  display: inline-block; margin-bottom: 2px; padding: 0 6px; border-radius: 8px;
+  font-size: 11px; background: rgba(139,92,246,0.2); color: #c4b5fd;
+}
+.prompt-actions { white-space: nowrap; text-align: right; }
+.prompt-actions .btn-ghost + .btn-ghost { margin-left: 4px; }
+.rating-bar { display: flex; width: 110px; height: 8px; margin-top: 5px; border-radius: 4px; overflow: hidden; background: #22242c; }
+.rating-seg.YES { background: #22c55e; }
+.rating-seg.MAYBE { background: #f59e0b; }
+.rating-seg.NO { background: #ef4444; }
+.rating-seg.UNRATED { background: #3b82f6; }
+
+.modal:has(.revised-list) { width: 640px; }
+.revised-list { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.revised-item { display: flex; gap: 10px; font-size: 13px; overflow-wrap: anywhere; }
+.revised-n { flex-shrink: 0; color: #9ea2b0; font-variant-numeric: tabular-nums; }

@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProjectIn(BaseModel):
@@ -121,16 +121,20 @@ class ManageFilterIn(BaseModel):
     An empty list means no constraint. Stored verbatim as reports.filter_json.
     """
     project_ids: list[str] = []
+    # Only consulted when project_ids is empty: whether "all projects" takes in
+    # archived ones. Explicitly listed projects are used whether archived or not.
+    include_archived: bool = False
     prompt_hashes: list[str] = []
     evaluations: list[Literal["YES", "NO", "MAYBE", "UNRATED"]] = ["YES", "MAYBE", "NO", "UNRATED"]
     # The current export only takes the active result per image; review usually wants all.
     active_only: bool = False
     engines: list[str] = []
-    date_from: Optional[str] = None
-    date_to: Optional[str] = None
+    # Inclusive UTC calendar days, "YYYY-MM-DD".
+    date_from: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    date_to: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     # Collapse copies (same content_hash) into one row, keeping the earliest.
     dedupe_copies: bool = True
-    sort: str = "date_desc"
+    sort: Literal["date_desc", "date_asc", "project", "evaluation"] = "date_desc"
 
 
 class ExportRequestIn(BaseModel):

@@ -39,6 +39,95 @@ def index_summary(include_archived=False):
 
 
 # ---------------------------------------------------------------------------
+# Filtered results across projects (ManageFilterIn). Queries the base tables
+# rather than mgmt_index: SQLite materializes the view under the window
+# function, which would scan every source and reference row too.
+# ---------------------------------------------------------------------------
+
+_RESULT_SORTS = {
+    "date_desc": "date_generated DESC, id DESC",
+    "date_asc": "date_generated ASC, id ASC",
+    "project": "project_name COLLATE NOCASE, project_id, date_generated DESC, id DESC",
+    "evaluation": (
+        "CASE evaluation WHEN 'YES' THEN 0 WHEN 'MAYBE' THEN 1 WHEN 'UNRATED' THEN 2 ELSE 3 END,"
+        " date_generated DESC, id DESC"
+    ),
+}
+
+
+def _in_clause(column, values, params):
+    params.extend(values)
+    return f"{column} IN ({','.join('?' * len(values))})"
+
+
+def _filtered_results_sql(f):
+    """(sql, params) for every live result matching filter f, one row per
+    result plus copy_rank/copy_count over its content_hash. Filtering happens
+    before the copy window, so a copy outside the selection never hides one
+    inside it.
+    """
+    params = []
+    where = ["r.is_deleted = 0", "i.is_deleted = 0", "p.is_deleted = 0"]
+    if f.project_ids:
+        where.append(_in_clause("i.project_id", f.project_ids, params))
+    elif not f.include_archived:
+        where.append("p.is_archived = 0")
+    if f.prompt_hashes:
+        where.append(_in_clause("r.prompt_hash", f.prompt_hashes, params))
+    if f.evaluations:
+        where.append(_in_clause("COALESCE(r.evaluation, 'UNRATED')", f.evaluations, params))
+    if f.engines:
+        where.append(_in_clause("r.engine", f.engines, params))
+    if f.active_only:
+        where.append("r.is_active_result = 1")
+    # date_generated is "YYYY-MM-DD HH:MM:SS" UTC, so plain string comparison
+    # against day boundaries works; date_to is inclusive.
+    if f.date_from:
+        where.append("r.date_generated >= ?")
+        params.append(f.date_from)
+    if f.date_to:
+        where.append("r.date_generated < date(?, '+1 day')")
+        params.append(f.date_to)
+    sql = f"""
+        SELECT r.*, i.project_id AS project_id, p.name AS project_name,
+               i.display_name AS image_display_name, i.file_name AS image_file_name,
+               ROW_NUMBER() OVER (PARTITION BY COALESCE(r.content_hash, r.id)
+                                  ORDER BY r.date_generated, r.id) AS copy_rank,
+               COUNT(*) OVER (PARTITION BY COALESCE(r.content_hash, r.id)) AS copy_count
+        FROM results r
+        JOIN images i ON i.id = r.image_id
+        JOIN projects p ON p.id = i.project_id
+        WHERE {' AND '.join(where)}
+    """
+    return sql, params
+
+
+def list_filtered_results(f, offset=0, limit=100):
+    """{total, items} for one page of results matching ManageFilterIn f.
+    With f.dedupe_copies, results sharing a content_hash collapse to the
+    earliest generated one; copy_count on each item says how many it stands for.
+    """
+    conn = db.get_connection()
+    base_sql, params = _filtered_results_sql(f)
+    keep = "WHERE copy_rank = 1" if f.dedupe_copies else ""
+    # The total rides along on each row so the window pass runs once; only a
+    # page past the end (no rows) needs a separate count.
+    rows = conn.execute(
+        f"SELECT *, COUNT(*) OVER () AS total FROM ({base_sql}) {keep}"
+        f" ORDER BY {_RESULT_SORTS[f.sort]} LIMIT ? OFFSET ?",
+        [*params, limit, offset],
+    ).fetchall()
+    if rows:
+        total = rows[0]["total"]
+    else:
+        total = conn.execute(f"SELECT COUNT(*) FROM ({base_sql}) {keep}", params).fetchone()[0]
+    items = [db._decode_result(dict(r)) for r in rows]
+    for item in items:
+        del item["copy_rank"], item["total"]
+    return {"total": total, "items": db._attach_reference_ids(conn, items)}
+
+
+# ---------------------------------------------------------------------------
 # Hash maintenance, driven by hash_worker.py. Covers every row whose file might
 # still be on disk, trashed ones included, so restoring from the trash never
 # leaves an unhashed row behind.

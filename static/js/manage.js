@@ -4,10 +4,11 @@
 // in-memory state to keep in sync.
 
 import { api } from "./api.js";
-import { escapeHtml, plural } from "./ui.js";
-import { renderReviewTab, setReviewPrompt } from "./manage_review.js";
+import { escapeHtml } from "./ui.js";
+import { renderReviewTab, setReviewPrompt, applyReport } from "./manage_review.js";
 import { renderPromptsTab } from "./manage_prompts.js";
 import { renderDuplicatesTab } from "./manage_duplicates.js";
+import { renderReportsTab } from "./manage_reports.js";
 
 const SELECTION_KEY = "grok_img2img.manage.projectIds";
 const TAB_KEY = "grok_img2img.manage.tab";
@@ -135,45 +136,48 @@ els.showArchivedInput.addEventListener("change", () => {
 // Tabs
 // ---------------------------------------------------------------------------
 
-const TAB_PLACEHOLDERS = {
-  reports: "Saved report definitions and export.",
-};
+const projectNames = () => new Map(state.projects.map((p) => [p.id, p.name]));
 
-function selectionTotals() {
-  const totals = { source: 0, reference: 0, result: 0 };
-  for (const id of effectiveProjectIds()) {
-    const c = state.counts.get(id);
-    if (!c) continue;
-    for (const k in totals) totals[k] += c[k];
+// The library selection as a saved report stores it: the ticked projects, or
+// none for "every library" (archived ones too if they're shown).
+function reportSelection() {
+  const project_ids = [...state.selectedIds];
+  return { project_ids, include_archived: !project_ids.length && state.showArchived };
+}
+
+// Opens a saved report in Review: its libraries become the selection.
+function openReport(report) {
+  const ids = (report.filter.project_ids || []).filter((id) => !report.missing_project_ids.includes(id));
+  state.selectedIds = new Set(ids);
+  const archived = new Set(state.projects.filter((p) => p.is_archived).map((p) => p.id));
+  if (report.filter.include_archived || ids.some((id) => archived.has(id))) {
+    state.showArchived = true;
+    els.showArchivedInput.checked = true;
+    saveJson(ARCHIVED_KEY, true);
   }
-  return totals;
+  persistSelection();
+  renderProjectList();
+  applyReport(report);
+  selectTab("review");
 }
 
 function renderTab() {
   els.tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.manageTab === state.tab));
   if (state.tab === "review") {
-    renderReviewTab(els.tabPanel, effectiveProjectIds());
-    return;
-  }
-  if (state.tab === "duplicates") {
+    renderReviewTab(els.tabPanel, effectiveProjectIds(), { selection: reportSelection });
+  } else if (state.tab === "duplicates") {
     renderDuplicatesTab(els.tabPanel, effectiveProjectIds());
-    return;
-  }
-  if (state.tab === "prompts") {
+  } else if (state.tab === "prompts") {
     renderPromptsTab(els.tabPanel, effectiveProjectIds(), {
-      projectNames: new Map(state.projects.map((p) => [p.id, p.name])),
+      projectNames: projectNames(),
       onOpenInReview: (hash, label) => {
         setReviewPrompt(hash, label);
         selectTab("review");
       },
     });
-    return;
+  } else if (state.tab === "reports") {
+    renderReportsTab(els.tabPanel, { projectNames: projectNames(), onOpen: openReport });
   }
-  const t = selectionTotals();
-  els.tabPanel.innerHTML = `
-    <p class="manage-hint">${plural(t.source, "source")} · ${plural(t.reference, "reference")} · ${plural(t.result, "result")}</p>
-    <div class="empty-state">${escapeHtml(TAB_PLACEHOLDERS[state.tab])} Not built yet.</div>
-  `;
 }
 
 function selectTab(tab) {

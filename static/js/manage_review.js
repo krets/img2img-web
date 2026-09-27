@@ -2,7 +2,7 @@
 // selected projects, driven by POST /api/manage/results (ManageFilterIn).
 
 import { api } from "./api.js";
-import { escapeHtml, formatRelativeTime, parseDbTime, openModal, isModalOpen } from "./ui.js";
+import { escapeHtml, formatRelativeTime, parseDbTime, openModal, closeModal, isModalOpen } from "./ui.js";
 import { initABViewer } from "./viewer.js";
 
 const FILTER_KEY = "grok_img2img.manage.reviewFilter";
@@ -42,6 +42,11 @@ const view = {
   hoverIdx: null, // tile under the pointer, the target of Y/M/N in the gallery
   lightboxIdx: null, // item shown in the lightbox while it's open
   prompt: null, // { hash, label } set from the Prompts tab, or null for all prompts
+  report: null, // { id, name } of the saved report this view was opened from
+  // Filter fields a report can carry but this tab has no controls for
+  // (engines, dates). Applied while the report is attached, dropped after.
+  extra: {},
+  opts: {}, // renderReviewTab options, kept for re-renders
   projectIds: [],
   items: [],
   total: 0,
@@ -71,9 +76,105 @@ function saveFilter() {
 }
 
 function requestBody() {
-  const body = { ...view.filter, project_ids: view.projectIds };
+  const body = { ...view.filter, ...view.extra, project_ids: view.projectIds };
   if (view.prompt) body.prompt_hashes = [view.prompt.hash];
   return body;
+}
+
+// The view as a saved report stores it. project_ids / include_archived come
+// from the page's library selection (opts.selection): an empty list keeps
+// meaning "every library" when the report is run later.
+function reportPayload() {
+  const sel = view.opts.selection?.() || { project_ids: [], include_archived: false };
+  return {
+    filter: {
+      ...view.filter,
+      ...view.extra,
+      ...sel,
+      prompt_hashes: view.prompt ? [view.prompt.hash] : [],
+    },
+    display: { ...view.display, ...(view.prompt ? { prompt_label: view.prompt.label } : {}) },
+  };
+}
+
+// Loads a saved report into the tab (the caller sets the library selection).
+export function applyReport(report) {
+  const f = report.filter;
+  view.filter = {
+    evaluations: EVALUATIONS.filter((e) => (f.evaluations?.length ? f.evaluations : EVALUATIONS).includes(e)),
+    active_only: !!f.active_only,
+    dedupe_copies: f.dedupe_copies !== false,
+    sort: SORTS[f.sort] ? f.sort : DEFAULT_FILTER.sort,
+  };
+  view.extra = {};
+  for (const k of ["engines", "date_from", "date_to"]) if (f[k]?.length) view.extra[k] = f[k];
+  const hashes = f.prompt_hashes || [];
+  view.prompt = hashes.length === 1 ? { hash: hashes[0], label: report.display?.prompt_label || "saved prompt" } : null;
+  if (hashes.length > 1) view.extra.prompt_hashes = hashes; // no chip for several; still applied
+  if (COMPARE_MODES[report.display?.compare]) view.display.compare = report.display.compare;
+  if (TILE_SIZES[report.display?.size]) view.display.size = report.display.size;
+  view.report = { id: report.id, name: report.name };
+  saveFilter();
+  try {
+    localStorage.setItem(DISPLAY_KEY, JSON.stringify(view.display));
+  } catch {
+    // ignore
+  }
+}
+
+function detachReport() {
+  view.report = null;
+  view.extra = {};
+}
+
+function saveReportModal() {
+  const modal = openModal(`
+    <h3>Save as report</h3>
+    <p class="modal-note">Saves the libraries, filters and display. Opening it later re-runs the filter on the library as it is then.</p>
+    <div class="field"><label for="mReportName">Name</label><input id="mReportName" type="text" maxlength="200" /></div>
+    <div id="mStatus" class="status-line"></div>
+    <div class="modal-actions">
+      <button id="mCancel" class="btn-ghost" type="button">Cancel</button>
+      <button id="mSave" class="btn-primary" type="button">Save</button>
+    </div>
+  `);
+  const name = modal.querySelector("#mReportName");
+  name.value = view.prompt?.label ? view.prompt.label.slice(0, 80) : "";
+  name.focus();
+  name.select();
+  modal.querySelector("#mCancel").addEventListener("click", closeModal);
+  const save = async () => {
+    const n = name.value.trim();
+    if (!n) return;
+    try {
+      const report = await api.manage.createReport({ name: n, ...reportPayload() });
+      view.report = { id: report.id, name: report.name };
+      closeModal();
+      renderReviewTab(view.host, view.projectIds, view.opts);
+    } catch (err) {
+      modal.querySelector("#mStatus").textContent = `Save failed: ${err.message}`;
+    }
+  };
+  modal.querySelector("#mSave").addEventListener("click", save);
+  name.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+  });
+}
+
+async function saveReportChanges(btn) {
+  btn.disabled = true;
+  try {
+    await api.manage.updateReport(view.report.id, reportPayload());
+    btn.textContent = "Saved";
+    setTimeout(() => {
+      btn.textContent = "Save changes";
+      btn.disabled = false;
+    }, 1200);
+  } catch (err) {
+    btn.textContent = "Save failed";
+    btn.title = err.message;
+    btn.disabled = false;
+  }
 }
 
 // Narrows the gallery to one prompt group (hash null = results with no
@@ -81,6 +182,7 @@ function requestBody() {
 // cleared so the gallery holds the whole group the report counted. Not
 // persisted: a reload shows the unfiltered gallery again.
 export function setReviewPrompt(hash, label) {
+  detachReport();
   view.prompt = { hash, label };
   view.filter.evaluations = [...EVALUATIONS];
   view.filter.active_only = false;
@@ -88,13 +190,22 @@ export function setReviewPrompt(hash, label) {
 }
 
 // Mounts the tab into host for the given project ids (never empty: an empty
-// list would mean "every project" to the endpoint).
-export function renderReviewTab(host, projectIds) {
+// list would mean "every project" to the endpoint). opts.selection() returns
+// the page's library selection as a report stores it.
+export function renderReviewTab(host, projectIds, opts = view.opts) {
   view.host = host;
   view.projectIds = projectIds;
+  view.opts = opts;
   const f = view.filter;
   host.innerHTML = `
     <div class="review-filters">
+      ${
+        view.report
+          ? `<span class="review-prompt-chip review-report-chip" title="Opened from a saved report">Report: <span class="review-prompt-chip-text">${escapeHtml(view.report.name)}</span><button type="button" id="reviewReportClear" aria-label="Detach report" title="Stop editing this report">×</button></span>
+             <button type="button" id="reviewReportSave" class="btn-ghost small" title="Store the current libraries, filters and display in this report">Save changes</button>`
+          : ""
+      }
+      <button type="button" id="reviewReportNew" class="btn-ghost small" title="Save the current view as a named report">${view.report ? "Save as new…" : "Save as report…"}</button>
       ${
         view.prompt
           ? `<span class="review-prompt-chip" title="${escapeHtml(view.prompt.label)}">Prompt: <span class="review-prompt-chip-text">${escapeHtml(view.prompt.label)}</span><button type="button" id="reviewPromptClear" aria-label="Clear prompt filter" title="Show all prompts">×</button></span>`
@@ -162,6 +273,12 @@ export function renderReviewTab(host, projectIds) {
     view.prompt = null;
     renderReviewTab(host, view.projectIds);
   });
+  host.querySelector("#reviewReportClear")?.addEventListener("click", () => {
+    detachReport();
+    renderReviewTab(host, view.projectIds);
+  });
+  host.querySelector("#reviewReportSave")?.addEventListener("click", (e) => saveReportChanges(e.currentTarget));
+  host.querySelector("#reviewReportNew").addEventListener("click", saveReportModal);
   bindGrid(host.querySelector("#reviewGrid"));
   applyGridDisplay();
 

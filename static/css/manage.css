@@ -206,3 +206,11 @@ body.manage-page { display: flex; flex-direction: column; }
 .dup-badge.resolved { background: rgba(34,197,94,0.2); color: #86efac; }
 .dup-member-actions { display: flex; gap: 4px; margin-top: auto; }
 .dup-member-actions .btn-ghost { flex: 1; }
+
+/* Reports */
+.review-report-chip { background: rgba(59,130,246,0.18); border-color: #3b82f6; }
+.review-report-chip button { color: #93c5fd; }
+.report-list .report-name { font-weight: 600; white-space: nowrap; }
+.report-list .report-filter { color: #9ea2b0; font-size: 12px; }
+.report-list .empty-row { cursor: default; }
+.report-list .empty-row:hover { background: none; }

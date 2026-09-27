@@ -142,6 +142,11 @@ export const api = {
     indexStatus: () => request("GET", "/manage/index/status"),
     prompts: (filter) => request("POST", "/manage/prompts", { json: filter }),
     duplicates: (body) => request("POST", "/manage/duplicates", { json: body }),
+    listReports: () => request("GET", "/manage/reports"),
+    getReport: (id) => request("GET", `/manage/reports/${id}`),
+    createReport: (body) => request("POST", "/manage/reports", { json: body }),
+    updateReport: (id, body) => request("PUT", `/manage/reports/${id}`, { json: body }),
+    deleteReport: (id) => request("DELETE", `/manage/reports/${id}`),
     dupDecisions: (items, clusterAnchorId = null) =>
       request("POST", "/manage/duplicates/decisions", { json: { items, cluster_anchor_id: clusterAnchorId } }),
     mergeReferences: (keepId, removeIds) =>

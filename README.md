@@ -67,6 +67,15 @@ This starts a local FastAPI server on `http://127.0.0.1:8765`. Set `OPEN_BROWSER
 5. Generate additional variants for the same image if needed — switch the active one from the Results dropdown.
 6. When ready, use **Export** to pull out approved results (clean or side-by-side) as a zip.
 
+### Tests
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Each test runs against its own temporary workspace, never `workspace/`. `python -m tests.hash_fixtures` prints the perceptual-hash distance report behind the near-duplicate threshold in `dupes.py`.
+
 ---
 
 ## Standalone CLI

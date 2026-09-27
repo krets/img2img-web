@@ -236,6 +236,7 @@ def init_db(db_path: Path):
     conn.executescript(MGMT_INDEX_VIEW)
     conn.commit()
     _local.connection = conn
+    _local.path = db_path
     return conn
 
 
@@ -385,9 +386,12 @@ def get_connection():
     if _db_path is None:
         raise RuntimeError("Database not initialized. Call init_db() first.")
     conn = getattr(_local, "connection", None)
-    if conn is None:
+    # Reconnect if init_db() has since pointed at another file (the tests do,
+    # once per test, while the threadpool keeps its threads).
+    if conn is None or getattr(_local, "path", None) != _db_path:
         conn = _connect(_db_path)
         _local.connection = conn
+        _local.path = _db_path
     return conn
 
 

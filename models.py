@@ -153,6 +153,22 @@ class DuplicatesIn(BaseModel):
     include_resolved: bool = False
 
 
+class DupDecisionItem(BaseModel):
+    kind: Literal["source", "reference"]
+    id: str
+    role: Optional[Literal["canonical", "ignore"]]  # None clears the decision
+
+
+class DupDecisionsIn(BaseModel):
+    items: list[DupDecisionItem]
+    cluster_anchor_id: Optional[str] = None
+
+
+class MergeReferencesIn(BaseModel):
+    keep_id: str
+    remove_ids: list[str]
+
+
 class ExportRequestIn(BaseModel):
     status_filter: Literal["YES", "NO", "MAYBE", "UNRATED", "ALL"] = "YES"
     mode: Literal["clean", "side_by_side"] = "clean"

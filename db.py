@@ -775,6 +775,7 @@ def merge_images(keep_id, remove_id):
         conn.execute("UPDATE results SET is_active_result = 0 WHERE image_id = ?", (keep_id,))
         conn.execute("UPDATE results SET is_active_result = 1 WHERE id = ?", (latest["id"],))
     conn.execute("DELETE FROM images WHERE id = ?", (remove_id,))
+    conn.execute("DELETE FROM dup_decisions WHERE image_kind = 'source' AND image_id = ?", (remove_id,))
     conn.commit()
 
 

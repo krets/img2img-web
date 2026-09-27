@@ -1,11 +1,11 @@
 """Cross-library management endpoints (see manage_db.py for the queries)."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 import dupes
 import hash_worker
 import manage_db
-from models import DuplicatesIn, ManageFilterIn
+from models import DupDecisionsIn, DuplicatesIn, ManageFilterIn, MergeReferencesIn
 
 router = APIRouter(prefix="/api/manage", tags=["manage"])
 
@@ -53,3 +53,19 @@ def find_duplicates(body: DuplicatesIn):
         exclude_lineage=body.exclude_lineage,
         include_resolved=body.include_resolved,
     )
+
+
+@router.post("/duplicates/decisions")
+def set_duplicate_decisions(body: DupDecisionsIn):
+    """Marks members canonical / ignore (role null clears), all at once."""
+    dupes.set_decisions([i.model_dump() for i in body.items], body.cluster_anchor_id)
+    return {"ok": True}
+
+
+@router.post("/duplicates/merge-references")
+def merge_references(body: MergeReferencesIn):
+    """Trash duplicate references in keep_id's project, repointing their uses to it."""
+    try:
+        return dupes.merge_references(body.keep_id, body.remove_ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e))

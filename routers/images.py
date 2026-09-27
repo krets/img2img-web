@@ -227,14 +227,24 @@ def merge_images(body: MergeImagesIn):
     if not keep:
         raise HTTPException(404, "Keep image not found")
 
-    merged = []
-    for remove_id in body.remove_ids:
+    # Checked up front so a bad id aborts the whole request rather than leaving
+    # it half merged. Cross-project merges are refused: merge_images reassigns
+    # results.image_id without moving their files, which live under the
+    # project's folder, so the moved results would point at missing files.
+    removals = []
+    for remove_id in dict.fromkeys(body.remove_ids):
         if remove_id == body.keep_id:
             continue
         remove_image = db.get_image(remove_id)
-        if not remove_image or remove_image["project_id"] != keep["project_id"]:
-            continue
+        if not remove_image:
+            raise HTTPException(404, f"Image {remove_id} not found")
+        if remove_image["project_id"] != keep["project_id"]:
+            raise HTTPException(400, "Can't merge images from different projects; move them into one project first")
+        removals.append(remove_image)
 
+    merged = []
+    for remove_image in removals:
+        remove_id = remove_image["id"]
         db.merge_images(body.keep_id, remove_id)
         storage.delete_source_image(remove_image["project_id"], remove_image["file_name"])
         storage.clear_thumbnail("images", remove_image["project_id"], remove_id)

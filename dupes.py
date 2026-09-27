@@ -285,3 +285,49 @@ def find_duplicates(project_ids=(), include_archived=False, kinds=("source", "re
                 m["used_in_results"] = uses[m["id"]]
     out.sort(key=lambda c: (c["resolved"], -len(c["members"]), c["max_distance"]))
     return {"clusters": out, "total_items": total, "unhashed": unhashed, "resolved_hidden": hidden}
+
+
+def set_decisions(items, cluster_anchor_id=None):
+    """Applies [{kind, id, role}] in one transaction; role None clears it."""
+    conn = db.get_connection()
+    for it in items:
+        if it["role"] is None:
+            conn.execute("DELETE FROM dup_decisions WHERE image_kind = ? AND image_id = ?", (it["kind"], it["id"]))
+        else:
+            conn.execute(
+                """INSERT INTO dup_decisions (image_kind, image_id, role, cluster_anchor_id) VALUES (?, ?, ?, ?)
+                   ON CONFLICT (image_kind, image_id) DO UPDATE
+                   SET role = excluded.role, cluster_anchor_id = excluded.cluster_anchor_id, date_set = CURRENT_TIMESTAMP""",
+                (it["kind"], it["id"], it["role"], cluster_anchor_id),
+            )
+    conn.commit()
+
+
+def merge_references(keep_id, remove_ids):
+    """Folds duplicate references into keep_id: results that used a removed
+    reference now point at keep_id, then the removed ones go to the trash.
+    All must be live and in keep_id's project (references are per project).
+    Raises ValueError otherwise, before changing anything.
+    """
+    conn = db.get_connection()
+    keep = db.get_reference_image(keep_id)
+    if not keep or keep["is_deleted"]:
+        raise ValueError("Reference to keep not found")
+    removals = [r for r in dict.fromkeys(remove_ids) if r != keep_id]
+    for ref_id in removals:
+        ref = db.get_reference_image(ref_id)
+        if not ref or ref["is_deleted"]:
+            raise ValueError(f"Reference {ref_id} not found")
+        if ref["project_id"] != keep["project_id"]:
+            raise ValueError("Can't merge references from different projects")
+    for ref_id in removals:
+        # A result that used both keeps a single entry for keep_id.
+        conn.execute(
+            """DELETE FROM result_references WHERE reference_image_id = ? AND result_id IN
+               (SELECT result_id FROM result_references WHERE reference_image_id = ?)""",
+            (ref_id, keep_id),
+        )
+        conn.execute("UPDATE result_references SET reference_image_id = ? WHERE reference_image_id = ?", (keep_id, ref_id))
+        conn.execute("UPDATE reference_images SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (ref_id,))
+    conn.commit()
+    return {"kept": keep_id, "merged": removals}

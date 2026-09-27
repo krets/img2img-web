@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 import dupes
 import hash_worker
 import manage_db
-from models import DupDecisionsIn, DuplicatesIn, ManageFilterIn, MergeReferencesIn
+from models import DupDecisionsIn, DuplicatesIn, ManageFilterIn, MergeReferencesIn, ReportIn, ReportUpdateIn
 
 router = APIRouter(prefix="/api/manage", tags=["manage"])
 
@@ -69,3 +69,67 @@ def merge_references(body: MergeReferencesIn):
         return dupes.merge_references(body.keep_id, body.remove_ids)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Saved reports
+# ---------------------------------------------------------------------------
+
+
+def _run_report(report, offset, limit):
+    f = manage_db.effective_report_filter(report, ManageFilterIn)
+    if f is None:
+        return {"total": 0, "items": []}
+    return manage_db.list_filtered_results(f, offset=offset, limit=limit)
+
+
+def _report_or_404(report_id):
+    report = manage_db.get_report(report_id)
+    if not report:
+        raise HTTPException(404, "Report not found")
+    return report
+
+
+@router.get("/reports")
+def list_reports(with_counts: bool = True):
+    """Saved reports, most recently updated first; result_count is the current
+    size of each (the filter re-run now), unless with_counts=false."""
+    reports = manage_db.list_reports()
+    if with_counts:
+        for r in reports:
+            r["result_count"] = _run_report(r, 0, 1)["total"]
+    return reports
+
+
+@router.post("/reports")
+def create_report(body: ReportIn):
+    return manage_db.create_report(body.name, body.filter.model_dump(), body.display)
+
+
+@router.get("/reports/{report_id}")
+def get_report(report_id: str):
+    return _report_or_404(report_id)
+
+
+@router.put("/reports/{report_id}")
+def update_report(report_id: str, body: ReportUpdateIn):
+    _report_or_404(report_id)
+    return manage_db.update_report(
+        report_id,
+        name=body.name,
+        filter_dict=body.filter.model_dump() if body.filter else None,
+        display=body.display,
+    )
+
+
+@router.delete("/reports/{report_id}")
+def delete_report(report_id: str):
+    _report_or_404(report_id)
+    manage_db.delete_report(report_id)
+    return {"ok": True}
+
+
+@router.get("/reports/{report_id}/results")
+def report_results(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+    """Runs the stored filter against the library as it is now."""
+    return _run_report(_report_or_404(report_id), offset, limit)

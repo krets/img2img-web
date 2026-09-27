@@ -6,6 +6,8 @@ The view treats archived projects as live, so queries here filter is_archived
 themselves.
 """
 
+import json
+
 import db
 import prompt_utils
 
@@ -305,3 +307,91 @@ def revised_prompts(prompt_hash, f):
             [*params, prompt_hash],
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# Saved reports: a named ManageFilterIn (filter_json) plus view options
+# (display_json). Running one re-applies the filter to the current library;
+# nothing about the results is stored.
+# ---------------------------------------------------------------------------
+
+
+def _live_project_ids(conn, ids):
+    if not ids:
+        return set()
+    rows = conn.execute(
+        f"SELECT id FROM projects WHERE is_deleted = 0 AND id IN ({','.join('?' * len(ids))})", list(ids)
+    ).fetchall()
+    return {r["id"] for r in rows}
+
+
+def _report_row(conn, row):
+    r = dict(row)
+    r["filter"] = json.loads(r.pop("filter_json"))
+    r["display"] = json.loads(r.pop("display_json") or "{}")
+    listed = r["filter"].get("project_ids") or []
+    live = _live_project_ids(conn, listed)
+    r["missing_project_ids"] = [p for p in listed if p not in live]
+    return r
+
+
+def list_reports():
+    conn = db.get_connection()
+    rows = conn.execute("SELECT * FROM reports ORDER BY date_updated DESC").fetchall()
+    return [_report_row(conn, r) for r in rows]
+
+
+def get_report(report_id):
+    conn = db.get_connection()
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    return _report_row(conn, row) if row else None
+
+
+def create_report(name, filter_dict, display):
+    conn = db.get_connection()
+    report_id = db.new_id()
+    conn.execute(
+        "INSERT INTO reports (id, name, filter_json, display_json) VALUES (?, ?, ?, ?)",
+        (report_id, name, json.dumps(filter_dict), json.dumps(display or {})),
+    )
+    conn.commit()
+    return get_report(report_id)
+
+
+def update_report(report_id, name=None, filter_dict=None, display=None):
+    conn = db.get_connection()
+    sets, params = [], []
+    if name is not None:
+        sets.append("name = ?")
+        params.append(name)
+    if filter_dict is not None:
+        sets.append("filter_json = ?")
+        params.append(json.dumps(filter_dict))
+    if display is not None:
+        sets.append("display_json = ?")
+        params.append(json.dumps(display))
+    if sets:
+        conn.execute(
+            f"UPDATE reports SET {', '.join(sets)}, date_updated = CURRENT_TIMESTAMP WHERE id = ?", [*params, report_id]
+        )
+        conn.commit()
+    return get_report(report_id)
+
+
+def delete_report(report_id):
+    conn = db.get_connection()
+    conn.execute("DELETE FROM reports WHERE id = ?", (report_id,))
+    conn.commit()
+
+
+def effective_report_filter(report, filter_model):
+    """The report's filter with deleted projects dropped, or None when it named
+    projects and none are left (an empty list would widen it to everything).
+    """
+    f = filter_model(**report["filter"])
+    if f.project_ids:
+        live = [p for p in f.project_ids if p not in report["missing_project_ids"]]
+        if not live:
+            return None
+        f.project_ids = live
+    return f

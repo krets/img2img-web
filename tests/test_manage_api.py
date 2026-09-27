@@ -296,3 +296,58 @@ def test_merge_references(client, lib):
     uses = lambda r: [x[0] for x in db.get_connection().execute(
         "SELECT reference_image_id FROM result_references WHERE result_id = ?", (r,))]
     assert uses(r1) == [keep] and uses(r2) == [keep] and uses(both) == [keep]
+
+
+# ---------------------------------------------------------------------------
+# Saved reports
+# ---------------------------------------------------------------------------
+
+
+def test_report_crud_and_rerun(client, lib, two_projects):
+    t = two_projects
+    body = {"name": "Yes in A+B", "filter": {"project_ids": [t["A"], t["B"]], "evaluations": ["YES"], "dedupe_copies": False},
+            "display": {"compare": "reveal", "size": "M"}}
+    rep = client.post("/api/manage/reports", json=body).json()
+    assert rep["name"] == "Yes in A+B" and rep["display"] == {"compare": "reveal", "size": "M"}
+    assert rep["filter"]["evaluations"] == ["YES"] and rep["filter"]["sort"] == "date_desc"   # defaults filled in
+    assert rep["missing_project_ids"] == []
+
+    run = lambda: client.get(f"/api/manage/reports/{rep['id']}/results").json()
+    assert run() == results(client, **body["filter"])
+    assert ids(run()) == [t["b2"], t["a1"]]
+
+    # Not a snapshot: a new matching result shows up on the next run.
+    img = db.get_image(db.get_result(t["a1"])["image_id"])
+    new = lib.result(img["id"], "YES", when="2026-09-10 10:00:00")
+    assert ids(run())[0] == new
+
+    listed = client.get("/api/manage/reports").json()
+    assert [(r["id"], r["result_count"]) for r in listed] == [(rep["id"], 3)]
+
+    upd = client.put(f"/api/manage/reports/{rep['id']}", json={"name": "Renamed", "filter": {**body["filter"], "evaluations": ["NO"]}}).json()
+    assert upd["name"] == "Renamed" and upd["display"] == body["display"]                     # untouched fields kept
+    assert ids(run()) == [t["a2"]]
+
+    assert client.delete(f"/api/manage/reports/{rep['id']}").status_code == 200
+    assert client.get(f"/api/manage/reports/{rep['id']}").status_code == 404
+    assert client.get(f"/api/manage/reports/{rep['id']}/results").status_code == 404
+
+
+def test_report_validation(client):
+    assert client.post("/api/manage/reports", json={"name": "", "filter": {}}).status_code == 422
+    assert client.post("/api/manage/reports", json={"name": "x", "filter": {"sort": "bogus"}}).status_code == 422
+    assert client.put("/api/manage/reports/nope", json={"name": "x"}).status_code == 404
+
+
+def test_report_with_deleted_projects(client, lib, two_projects):
+    t = two_projects
+    rep = client.post("/api/manage/reports", json={"name": "r", "filter": {"project_ids": [t["A"], t["B"]], "dedupe_copies": False}}).json()
+    lib.soft_delete("projects", t["B"])
+    got = client.get(f"/api/manage/reports/{rep['id']}").json()
+    assert got["missing_project_ids"] == [t["B"]]
+    run = client.get(f"/api/manage/reports/{rep['id']}/results").json()
+    assert run == results(client, project_ids=[t["A"]], dedupe_copies=False)
+    lib.soft_delete("projects", t["A"])
+    # Every listed project gone: nothing, not "all projects".
+    assert client.get(f"/api/manage/reports/{rep['id']}/results").json() == {"total": 0, "items": []}
+    assert client.get("/api/manage/reports").json()[0]["result_count"] == 0

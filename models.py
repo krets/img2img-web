@@ -153,6 +153,20 @@ class DuplicatesIn(BaseModel):
     include_resolved: bool = False
 
 
+class ReportIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    filter: ManageFilterIn
+    # View options the report reopens with (gallery mode, tile size, prompt
+    # label, ...); opaque to the server.
+    display: dict = {}
+
+
+class ReportUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    filter: Optional[ManageFilterIn] = None
+    display: Optional[dict] = None
+
+
 class DupDecisionItem(BaseModel):
     kind: Literal["source", "reference"]
     id: str

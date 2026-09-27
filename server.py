@@ -17,6 +17,7 @@ import webbrowser
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import config as cfg
@@ -60,6 +61,13 @@ class NoCacheStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+
+@app.get("/manage", include_in_schema=False)
+def manage_page():
+    """The cross-library management page. The static mount below only maps a
+    bare directory to its index.html, so /manage needs its own route."""
+    return FileResponse("static/manage.html", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/", NoCacheStaticFiles(directory="static", html=True), name="static")

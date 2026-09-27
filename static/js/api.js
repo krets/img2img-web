@@ -135,6 +135,13 @@ export const api = {
   getFalModels: () => request("GET", "/config/fal-models"),
   getBalances: () => request("GET", "/config/balances"),
 
+  // Management (cross-library)
+  manage: {
+    summary: (includeArchived = false) =>
+      request("GET", `/manage/summary?include_archived=${includeArchived}`),
+    indexStatus: () => request("GET", "/manage/index/status"),
+  },
+
   // Export
   previewExport: (projectId, statusFilter) =>
     request("GET", `/projects/${projectId}/export/preview?status_filter=${statusFilter}`),

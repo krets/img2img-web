@@ -65,6 +65,7 @@ a.btn-ghost, a.btn-primary { display: inline-flex; align-items: center; text-dec
   background: transparent; border: none; border-radius: 5px;
   color: #e6e6eb; font-size: 13px; padding: 7px 10px;
 }
+a.topbar-menu-item { text-decoration: none; cursor: pointer; }
 .topbar-menu-item:hover { background: rgba(139,92,246,0.2); }
 .topbar-menu-item.active { color: #c4b5fd; }
 .topbar-menu-item.active .topbar-menu-label::after { content: " ✓"; }

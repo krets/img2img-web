@@ -1,0 +1,58 @@
+/* Management page (/manage). Builds on app.css; only layout specific to this page lives here. */
+
+body.manage-page { display: flex; flex-direction: column; }
+
+#manageLayout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+#manageSidebar {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: #17181e;
+  border-right: 1px solid #2a2c35;
+  min-height: 0;
+}
+.manage-select-actions { display: flex; gap: 4px; text-transform: none; letter-spacing: 0; }
+.manage-hint { margin: 0 0 8px; font-size: 12px; color: #6b6f7d; }
+
+.manage-project-list { flex: 1; overflow-y: auto; min-height: 0; }
+.manage-project-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: 5px; font-size: 13px; cursor: pointer;
+}
+.manage-project-row:hover { background: rgba(139,92,246,0.12); }
+.manage-project-row input { margin: 0; padding: 0; }
+.manage-project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manage-project-row.archived .manage-project-name { color: #6b6f7d; font-style: italic; }
+.manage-project-counts { flex-shrink: 0; font-size: 11px; color: #6b6f7d; }
+
+.manage-archived-toggle {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2c35;
+  font-size: 12px; color: #9ea2b0; cursor: pointer;
+}
+.manage-archived-toggle input { margin: 0; padding: 0; }
+
+#manageMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 12px 16px;
+}
+.manage-tabs { max-width: 520px; }
+.manage-tab-panel { flex: 1; overflow-y: auto; min-height: 0; }
+
+.manage-index-status { font-size: 12px; color: #9ea2b0; }
+.manage-index-status.busy { color: #c4b5fd; }
+
+@media (max-width: 700px) {
+  #manageLayout { flex-direction: column; }
+  #manageSidebar { width: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid #2a2c35; }
+}

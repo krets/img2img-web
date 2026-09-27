@@ -6,9 +6,10 @@ project and a reference in another) and paired when their perceptual hashes
 content hashes match exactly. Pairs are joined into clusters with union-find.
 
 Only images of similar aspect ratio are compared: items are bucketed by
-round(log(aspect), 2) and checked against their own and neighbouring buckets,
-which absorbs the rounding a resize introduces. That keeps the pairwise pass
-cheap for libraries in the low tens of thousands.
+round(log(aspect), 2) and checked against buckets up to two away, which
+absorbs resize rounding and a crop of about 2% off one edge (tests/
+hash_fixtures.py measures both). That keeps the pairwise pass cheap for
+libraries in the low tens of thousands.
 
 Clusters are cached in memory per (selection, thresholds, data version);
 dup_decisions are applied on top of the cached clusters on every call, so
@@ -22,7 +23,15 @@ from collections import defaultdict
 import db
 
 MASK64 = (1 << 64) - 1
+# Max phash bit distance still treated as the same picture. From
+# tests/hash_fixtures.py: JPEG q30, 25% resize, 1% crops and +10% brightness
+# always stay within 8; 2% crops and a 10 degree hue shift do ~97% of the time
+# (all within 14). Unrelated images start at 16 and a 90 degree rotation at 26.
+# On the live library (5.2k images) 6 and 8 give the same 427 clusters, while
+# 10 already merges two of them into one of 26, so 8 it is; the UI slider goes
+# to 16. (imagehash's phash distances only come out even.)
 DEFAULT_THRESHOLD = 8
+BUCKET_REACH = 2  # compare against buckets this many 0.01 log-aspect steps away
 _CACHE_SIZE = 8
 
 _cache = {}
@@ -126,9 +135,11 @@ def cluster_items(items, threshold=DEFAULT_THRESHOLD, dhash_threshold=None, excl
     phash = [None if it["phash"] is None else it["phash"] & MASK64 for it in items]
     dhash = [None if it["dhash"] is None else it["dhash"] & MASK64 for it in items]
     for key, members in buckets.items():
-        # Compare against this bucket and the next one up; the one below
-        # compares against this one on its own turn.
-        neighbours = members + buckets.get(round(key + 0.01, 2), [])
+        # Compare against this bucket and the ones above it; the ones below
+        # compare against this one on their own turn.
+        neighbours = list(members)
+        for step in range(1, BUCKET_REACH + 1):
+            neighbours += buckets.get(round(key + step / 100, 2), [])
         for i, a in enumerate(members):
             for b in neighbours[i + 1:]:
                 if (phash[a] ^ phash[b]).bit_count() > threshold:

@@ -138,6 +138,21 @@ class ManageFilterIn(BaseModel):
     sort: Literal["date_desc", "date_asc", "project", "evaluation"] = "date_desc"
 
 
+class DuplicatesIn(BaseModel):
+    """Near-duplicate search over sources and references (dupes.find_duplicates)."""
+    project_ids: list[str] = []
+    include_archived: bool = False
+    kinds: list[Literal["source", "reference"]] = ["source", "reference"]
+    # Max phash bit distance (of 64). Unrelated photos start around 16, where
+    # clusters begin to chain, so the range stops there.
+    threshold: int = Field(8, ge=0, le=16)
+    # Optional second test on dhash to cut false positives at high thresholds.
+    dhash_threshold: Optional[int] = Field(None, ge=0, le=32)
+    # Don't pair a source with the image it was promoted from.
+    exclude_lineage: bool = True
+    include_resolved: bool = False
+
+
 class ExportRequestIn(BaseModel):
     status_filter: Literal["YES", "NO", "MAYBE", "UNRATED", "ALL"] = "YES"
     mode: Literal["clean", "side_by_side"] = "clean"

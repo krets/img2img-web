@@ -2,9 +2,10 @@
 
 from fastapi import APIRouter, Query
 
+import dupes
 import hash_worker
 import manage_db
-from models import ManageFilterIn
+from models import DuplicatesIn, ManageFilterIn
 
 router = APIRouter(prefix="/api/manage", tags=["manage"])
 
@@ -38,3 +39,17 @@ def prompt_report(f: ManageFilterIn):
 def revised_prompts(prompt_hash: str, f: ManageFilterIn):
     """Distinct engine-revised versions of one prompt, with counts, within the filter."""
     return manage_db.revised_prompts(prompt_hash, f)
+
+
+@router.post("/duplicates")
+def find_duplicates(body: DuplicatesIn):
+    """Clusters of near-duplicate sources/references across the selected projects."""
+    return dupes.find_duplicates(
+        project_ids=body.project_ids,
+        include_archived=body.include_archived,
+        kinds=body.kinds,
+        threshold=body.threshold,
+        dhash_threshold=body.dhash_threshold,
+        exclude_lineage=body.exclude_lineage,
+        include_resolved=body.include_resolved,
+    )

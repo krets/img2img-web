@@ -4,6 +4,7 @@
 
 import { api } from "./api.js";
 import { escapeHtml, formatRelativeTime, parseDbTime, plural, openModal, closeModal, openConfirmModal } from "./ui.js";
+import { openExportModal } from "./manage_export.js";
 
 const EVALUATIONS = ["YES", "MAYBE", "NO", "UNRATED"];
 const SORT_LABELS = { date_desc: "newest first", date_asc: "oldest first", project: "by library", evaluation: "by rating" };
@@ -84,6 +85,7 @@ function render() {
         <td class="num">${r.result_count ?? ""}</td>
         <td class="nowrap" title="${escapeHtml(r.date_updated)} UTC">${formatRelativeTime(parseDbTime(r.date_updated))}</td>
         <td class="prompt-actions">
+          <button type="button" class="btn-ghost small" data-act="export">Export</button>
           <button type="button" class="btn-ghost small" data-act="rename">Rename</button>
           <button type="button" class="btn-ghost small" data-act="duplicate">Duplicate</button>
           <button type="button" class="btn-ghost small" data-act="delete">Delete</button>
@@ -101,6 +103,13 @@ async function onClick(e) {
   const r = view.reports[Number(tr.dataset.idx)];
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "rename") return rename(r);
+  if (act === "export") {
+    return openExportModal({
+      source: { report_id: r.id },
+      name: r.name,
+      summary: `Report “${r.name}”: ${describeFilter(r, view.projectNames)} (${plural(r.result_count ?? 0, "result")} now).`,
+    });
+  }
   if (act === "delete") return remove(r);
   if (act === "duplicate") {
     await api.manage.createReport({ name: `${r.name} (copy)`.slice(0, 200), filter: r.filter, display: r.display });

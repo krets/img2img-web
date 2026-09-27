@@ -214,3 +214,13 @@ body.manage-page { display: flex; flex-direction: column; }
 .report-list .report-filter { color: #9ea2b0; font-size: 12px; }
 .report-list .empty-row { cursor: default; }
 .report-list .empty-row:hover { background: none; }
+
+/* Export dialog */
+.modal:has(.export-choices) { width: 520px; }
+.export-choices { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.export-choice { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; font-size: 13px; cursor: pointer; }
+.export-choice input { margin: 0; padding: 0; }
+.export-choice-hint { grid-column: 2; font-size: 11px; color: #6b6f7d; }
+.export-choice.disabled { opacity: 0.45; cursor: default; }
+.export-progress { height: 6px; border-radius: 3px; background: #22242c; overflow: hidden; margin-bottom: 8px; }
+.export-progress-bar { height: 100%; width: 0; background: #8B5CF6; transition: width 0.3s; }

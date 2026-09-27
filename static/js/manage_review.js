@@ -4,6 +4,7 @@
 import { api } from "./api.js";
 import { escapeHtml, formatRelativeTime, parseDbTime, openModal, closeModal, isModalOpen } from "./ui.js";
 import { initABViewer } from "./viewer.js";
+import { openExportModal } from "./manage_export.js";
 
 const FILTER_KEY = "grok_img2img.manage.reviewFilter";
 const PAGE_SIZE = 120;
@@ -206,6 +207,7 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
           : ""
       }
       <button type="button" id="reviewReportNew" class="btn-ghost small" title="Save the current view as a named report">${view.report ? "Save as new…" : "Save as report…"}</button>
+      <button type="button" id="reviewExport" class="btn-ghost small" title="Download the results in this view as a zip">Export…</button>
       ${
         view.prompt
           ? `<span class="review-prompt-chip" title="${escapeHtml(view.prompt.label)}">Prompt: <span class="review-prompt-chip-text">${escapeHtml(view.prompt.label)}</span><button type="button" id="reviewPromptClear" aria-label="Clear prompt filter" title="Show all prompts">×</button></span>`
@@ -279,6 +281,13 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
   });
   host.querySelector("#reviewReportSave")?.addEventListener("click", (e) => saveReportChanges(e.currentTarget));
   host.querySelector("#reviewReportNew").addEventListener("click", saveReportModal);
+  host.querySelector("#reviewExport").addEventListener("click", () =>
+    openExportModal({
+      source: { filter: requestBody() },
+      name: view.report?.name || view.prompt?.label?.slice(0, 60) || "export",
+      summary: view.total ? `The ${view.total} results in this view, across ${view.projectIds.length === 1 ? "1 library" : `${view.projectIds.length} libraries`}.` : "The results in this view.",
+    })
+  );
   view.root = host.querySelector("#reviewGrid");
   bindGrid(host.querySelector("#reviewGrid"));
   applyGridDisplay();

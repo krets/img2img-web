@@ -147,6 +147,8 @@ export const api = {
     createReport: (body) => request("POST", "/manage/reports", { json: body }),
     updateReport: (id, body) => request("PUT", `/manage/reports/${id}`, { json: body }),
     deleteReport: (id) => request("DELETE", `/manage/reports/${id}`),
+    startExport: (body) => request("POST", "/manage/export", { json: body }),
+    exportStatus: (jobId) => request("GET", `/manage/export/${jobId}`),
     dupDecisions: (items, clusterAnchorId = null) =>
       request("POST", "/manage/duplicates/decisions", { json: { items, cluster_anchor_id: clusterAnchorId } }),
     mergeReferences: (keepId, removeIds) =>

@@ -44,11 +44,14 @@ class Lib:
             self.c.commit()
         return pid
 
-    def source(self, project, name, img=None, content=None, when="2026-09-01 10:00:00", parent_result=None):
+    def source(self, project, name, img=None, content=None, when="2026-09-01 10:00:00", parent_result=None,
+               write=False):
         ph = dh = aspect = None
         if img is not None:
             ph, dh = storage.compute_perceptual(img)
             aspect = img.width / img.height
+            if write:
+                img.save(storage.source_image_path(project, f"{name}.png"))
         i = db.create_image(project, f"{name}.png", name, getattr(img, "width", None), getattr(img, "height", None),
                             content_hash=content or f"c-{name}", phash=ph, dhash=dh, aspect=aspect,
                             derived_from_result_id=parent_result)
@@ -57,11 +60,13 @@ class Lib:
         self.c.commit()
         return iid
 
-    def reference(self, project, name, img=None, content=None, when="2026-09-01 10:00:00"):
+    def reference(self, project, name, img=None, content=None, when="2026-09-01 10:00:00", write=False):
         ph = dh = aspect = None
         if img is not None:
             ph, dh = storage.compute_perceptual(img)
             aspect = img.width / img.height
+            if write:
+                img.save(storage.reference_image_path(project, "f.png"))
         rid = db.new_id()
         self.c.execute(
             """INSERT INTO reference_images (id, project_id, display_name, original_file_name, file_name,
@@ -74,15 +79,23 @@ class Lib:
         return rid
 
     def result(self, image, evaluation="UNRATED", prompt=None, content=None, when="2026-09-01 10:00:00",
-               active=0, engine="grok", revised=None):
+               active=0, engine="grok", revised=None, img=None, source_preprocess=None):
+        """img, if given, is written as the result's file (named after its id)."""
+        import json
+
         import prompt_utils
 
         rid = db.new_id()
+        file_path = f"{rid}.png" if img is not None else "r.png"
+        if img is not None:
+            project = db.get_image(image)["project_id"]
+            img.save(storage.result_image_path(project, file_path))
         self.c.execute(
             """INSERT INTO results (id, image_id, file_path, adhoc_prompt_text, prompt_hash, content_hash,
-                   evaluation, is_active_result, date_generated, engine, revised_prompt)
-               VALUES (?, ?, 'r.png', ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (rid, image, prompt, prompt_utils.prompt_hash(prompt), content, evaluation, active, when, engine, revised),
+                   evaluation, is_active_result, date_generated, engine, revised_prompt, source_preprocess)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (rid, image, file_path, prompt, prompt_utils.prompt_hash(prompt), content, evaluation, active, when,
+             engine, revised, json.dumps(source_preprocess) if source_preprocess else None),
         )
         self.c.commit()
         return rid

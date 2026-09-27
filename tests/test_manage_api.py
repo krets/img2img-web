@@ -1,9 +1,15 @@
 """Management API: /api/manage/* plus the cross-project merge guard, through
 the HTTP layer against an isolated workspace (see conftest.py)."""
 
+import csv
+import io
+import json
 import random
+import time
+import zipfile
 
 import pytest
+from PIL import Image
 
 import db
 from tests.hash_fixtures import jpeg, scene
@@ -351,3 +357,111 @@ def test_report_with_deleted_projects(client, lib, two_projects):
     # Every listed project gone: nothing, not "all projects".
     assert client.get(f"/api/manage/reports/{rep['id']}/results").json() == {"total": 0, "items": []}
     assert client.get("/api/manage/reports").json()[0]["result_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+CROP = {"rotation": 0, "crop": {"x": 8, "y": 8, "w": 48, "h": 48}, "fill": {"mode": "color", "color": "#000000"}}
+
+
+def _png(colour, size=(64, 64)):
+    return Image.new("RGB", size, colour)
+
+
+@pytest.fixture
+def export_lib(lib):
+    a, b = lib.project("Alpha"), lib.project("Beta")
+    # Same display name in both libraries: the per-project folders must keep them apart.
+    ia = lib.source(a, "cat", _png("red"), write=True)
+    ib = lib.source(b, "cat", _png("blue"), write=True)
+    ref = lib.reference(a, "style", _png("green"), write=True)
+    d = {"A": a, "B": b, "ia": ia, "ib": ib, "ref": ref}
+    d["ra"] = lib.result(ia, "YES", "make it fancy", img=_png("yellow"), when="2026-09-02 10:00:00", source_preprocess=CROP)
+    d["rb"] = lib.result(ib, "YES", "make it fancy", img=_png("purple"), when="2026-09-01 10:00:00", revised="rewritten")
+    d["rno"] = lib.result(ia, "NO", "other", img=_png("black"), when="2026-09-03 10:00:00")
+    lib.use_reference(d["ra"], ref)
+    return d
+
+
+def run_export(client, **body):
+    job = client.post("/api/manage/export", json=body)
+    assert job.status_code == 200, job.text
+    job_id = job.json()["id"]
+    for _ in range(200):
+        status = client.get(f"/api/manage/export/{job_id}").json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert status["status"] == "done", status
+    resp = client.get(f"/api/manage/export/{job_id}/download")
+    assert resp.status_code == 200
+    return status, zipfile.ZipFile(io.BytesIO(resp.content))
+
+
+def test_export_all_options_multi_project(client, export_lib):
+    d = export_lib
+    flt = {"project_ids": [d["A"], d["B"]], "evaluations": ["YES"]}
+    opts = {"images": True, "side_by_side": True, "include_sources": True, "include_originals": True,
+            "include_references": True, "sidecar": True, "html_report": True}
+    status, zf = run_export(client, filter=flt, name="Fancy cats", options=opts)
+    assert status["total"] == status["done"] == 2 and "path" not in status
+    names = set(zf.namelist())
+    root = "fancy-cats"
+    manifest = json.loads(zf.read(f"{root}/manifest.json"))["results"]
+
+    # Manifest rows are the gallery's rows, in its order.
+    assert [r["result_id"] for r in manifest] == ids(results(client, **flt))
+    by_id = {r["result_id"]: r for r in manifest}
+    ra, rb = by_id[d["ra"]], by_id[d["rb"]]
+    assert ra["project_name"] == "Alpha" and rb["revised_prompt"] == "rewritten"
+    assert ra["result_file"].startswith("results/alpha/cat_") and rb["result_file"].startswith("results/beta/cat_")
+    assert ra["result_file"] != rb["result_file"]
+    for row in manifest:
+        for key in ("result_file", "side_by_side_file", "source_file"):
+            assert f"{root}/{row[key]}" in names, (key, row[key])
+    # Cropped result: the processed render is the source, the original rides along.
+    assert ra["source_file"] != ra["source_original_file"] and f"{root}/{ra['source_original_file']}" in names
+    assert Image.open(zf.open(f"{root}/{ra['source_file']}")).size == (48, 48)
+    assert rb["source_original_file"] == ""
+    assert ra["reference_files"] and f"{root}/{ra['reference_files'][0]}" in names and rb["reference_files"] == []
+    assert not any("black" in n for n in names) and d["rno"] not in by_id          # NO excluded by the filter
+
+    rows = list(csv.DictReader(io.StringIO(zf.read(f"{root}/manifest.csv").decode())))
+    assert [r["result_id"] for r in rows] == [r["result_id"] for r in manifest]
+    report = zf.read(f"{root}/report.html").decode()
+    assert "make it fancy" in report and ra["result_file"] in report and rb["result_file"] in report
+
+
+def test_export_options_are_honoured(client, export_lib):
+    d = export_lib
+    _, zf = run_export(client, filter={"project_ids": [d["A"]]}, options={"images": False, "sidecar": True})
+    names = zf.namelist()
+    assert all(n.endswith(("manifest.json", "manifest.csv")) for n in names)
+    manifest = json.loads(zf.read([n for n in names if n.endswith("manifest.json")][0]))["results"]
+    assert {r["result_id"] for r in manifest} == {d["ra"], d["rno"]}
+    assert all(r["result_file"] == "" for r in manifest)
+
+
+def test_export_from_report_and_validation(client, export_lib):
+    d = export_lib
+    rep = client.post("/api/manage/reports", json={"name": "Beta only", "filter": {"project_ids": [d["B"]]}}).json()
+    _, zf = run_export(client, report_id=rep["id"])
+    assert all(n.startswith("beta-only/") for n in zf.namelist())
+    manifest = json.loads(zf.read("beta-only/manifest.json"))["results"]
+    assert [r["result_id"] for r in manifest] == [d["rb"]]
+
+    assert client.post("/api/manage/export", json={}).status_code == 422                          # neither
+    assert client.post("/api/manage/export", json={"filter": {}, "report_id": rep["id"]}).status_code == 422
+    nothing = {k: False for k in ("images", "side_by_side", "include_sources", "include_references", "sidecar", "html_report")}
+    assert client.post("/api/manage/export", json={"filter": {}, "options": nothing}).status_code == 422
+    assert client.post("/api/manage/export", json={"report_id": "nope"}).status_code == 404
+    job = client.post("/api/manage/export", json={"filter": {"evaluations": ["MAYBE"]}}).json()
+    for _ in range(100):
+        status = client.get(f"/api/manage/export/{job['id']}").json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert status["status"] == "error" and "No results" in status["error"]
+    assert client.get(f"/api/manage/export/{job['id']}/download").status_code == 404

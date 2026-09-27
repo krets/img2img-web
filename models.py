@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProjectIn(BaseModel):
@@ -165,6 +165,39 @@ class ReportUpdateIn(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     filter: Optional[ManageFilterIn] = None
     display: Optional[dict] = None
+
+
+class ExportOptions(BaseModel):
+    """What goes into a cross-library export zip (see export.py)."""
+    images: bool = True             # result PNGs
+    side_by_side: bool = False      # source | result composites
+    include_sources: bool = False   # the engine's input (processed if cropped)
+    include_originals: bool = False # plus the untouched source when it was processed
+    include_references: bool = False
+    sidecar: bool = True            # manifest.json + manifest.csv
+    html_report: bool = False       # self-contained report.html
+    group_by: Literal["prompt", "project"] = "prompt"
+
+    @model_validator(mode="after")
+    def _something_to_export(self):
+        if not (self.images or self.side_by_side or self.include_sources or self.include_references
+                or self.sidecar or self.html_report):
+            raise ValueError("Pick at least one thing to export")
+        return self
+
+
+class ManageExportIn(BaseModel):
+    """Export the current filter, or a saved report's (exactly one of them)."""
+    filter: Optional[ManageFilterIn] = None
+    report_id: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=120)
+    options: ExportOptions = ExportOptions()
+
+    @model_validator(mode="after")
+    def _one_source(self):
+        if (self.filter is None) == (self.report_id is None):
+            raise ValueError("Give either filter or report_id")
+        return self
 
 
 class DupDecisionItem(BaseModel):

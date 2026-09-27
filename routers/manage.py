@@ -1,11 +1,14 @@
 """Cross-library management endpoints (see manage_db.py for the queries)."""
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 import dupes
+import export
 import hash_worker
 import manage_db
-from models import DupDecisionsIn, DuplicatesIn, ManageFilterIn, MergeReferencesIn, ReportIn, ReportUpdateIn
+from models import (DupDecisionsIn, DuplicatesIn, ManageExportIn, ManageFilterIn, MergeReferencesIn, ReportIn,
+                    ReportUpdateIn)
 
 router = APIRouter(prefix="/api/manage", tags=["manage"])
 
@@ -133,3 +136,44 @@ def delete_report(report_id: str):
 def report_results(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
     """Runs the stored filter against the library as it is now."""
     return _run_report(_report_or_404(report_id), offset, limit)
+
+
+# ---------------------------------------------------------------------------
+# Export (built in the background; see export.py)
+# ---------------------------------------------------------------------------
+
+
+def _public(job):
+    return {k: v for k, v in job.items() if k != "path"}
+
+
+@router.post("/export")
+def start_export(body: ManageExportIn):
+    """Starts a zip of the results matching body.filter or the saved report's
+    filter. Poll GET /export/{job_id}, then fetch /export/{job_id}/download."""
+    if body.report_id:
+        report = _report_or_404(body.report_id)
+        f = manage_db.effective_report_filter(report, ManageFilterIn)
+        if f is None:
+            raise HTTPException(400, "None of this report's libraries exist any more")
+        name = body.name or report["name"]
+    else:
+        f = body.filter
+        name = body.name or "export"
+    return export.start_export(name, f, body.options)
+
+
+@router.get("/export/{job_id}")
+def export_status(job_id: str):
+    job = export.job_status(job_id)
+    if not job:
+        raise HTTPException(404, "Export not found (they're kept for an hour)")
+    return _public(job)
+
+
+@router.get("/export/{job_id}/download")
+def export_download(job_id: str):
+    path = export.job_file(job_id)
+    if not path or not path.exists():
+        raise HTTPException(404, "Export not ready or no longer available")
+    return FileResponse(path, media_type="application/zip", filename=path.name)

@@ -371,42 +371,6 @@ def delete_project_dirs(project_id):
     shutil.rmtree(cfg.WORKSPACE_ROOT / "thumbnails" / project_id, ignore_errors=True)
 
 
-def build_export_zip(project_slug, status_filter, mode, results, source_paths):
-    """Builds a zip file containing either clean result images or side-by-side
-    composites for the given list of result dicts (each augmented with
-    image_display_name / image_file_name / project_id), and returns its path.
-
-    source_paths: dict mapping result_id -> Path to the corresponding source image file.
-    """
-    cfg.EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_name = f"{timestamp}_{project_slug}_{status_filter.lower()}_{mode}.zip"
-    zip_path = cfg.EXPORTS_DIR / zip_name
-
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for result in results:
-            result_path = result_image_path(result["project_id"], result["file_path"])
-            if not result_path.exists():
-                continue
-            display = slugify(result.get("image_display_name") or "result")
-
-            if mode == "clean":
-                arcname = f"{display}_{result['id'][:8]}.png"
-                zf.write(result_path, arcname)
-            else:  # side_by_side
-                source_path = source_paths.get(result["id"])
-                composite = _make_side_by_side(source_path, result_path)
-                if composite is None:
-                    continue
-                arcname = f"{display}_{result['id'][:8]}_ab.png"
-                buf = io.BytesIO()
-                composite.save(buf, format="PNG")
-                zf.writestr(arcname, buf.getvalue())
-
-    return zip_path
-
-
 def get_or_create_side_by_side(project_id, result_id, source_path, result_path):
     """Returns a cached preview of the source+result composite that export's
     side_by_side mode would produce for this result, generating it on first

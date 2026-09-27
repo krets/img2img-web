@@ -332,9 +332,8 @@ def get_result_preview(result_id: str):
 
 @router.get("/api/results/{result_id}/side-by-side")
 def get_result_side_by_side(result_id: str):
-    """Preview of the source+result composite that export's side_by_side mode
-    produces for this result -- used by the export report so users can see
-    what that mode will actually export before running it.
+    """Cached preview of the source+result composite, as shown by the
+    management page's side-by-side gallery mode.
     """
     result = db.get_result(result_id)
     if not result:

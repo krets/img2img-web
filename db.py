@@ -1165,21 +1165,3 @@ def trash_no_results(project_id):
         )
         conn.commit()
     return ids
-
-
-def list_results_by_status(project_id, status="ALL"):
-    """Active results for a project, optionally filtered by evaluation status. Used by export."""
-    conn = get_connection()
-    query = """
-        SELECT results.*, images.display_name AS image_display_name, images.file_name AS image_file_name
-        FROM results
-        JOIN images ON images.id = results.image_id
-        WHERE images.project_id = ? AND results.is_active_result = 1
-              AND results.is_deleted = 0 AND images.is_deleted = 0
-    """
-    params = [project_id]
-    if status != "ALL":
-        query += " AND results.evaluation = ?"
-        params.append(status)
-    rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]

@@ -465,3 +465,21 @@ def test_export_from_report_and_validation(client, export_lib):
         time.sleep(0.05)
     assert status["status"] == "error" and "No results" in status["error"]
     assert client.get(f"/api/manage/export/{job['id']}/download").status_code == 404
+
+
+def test_legacy_project_export_wrapper(client, export_lib):
+    d = export_lib
+    post = lambda body, project=d["A"]: client.post(f"/api/projects/{project}/export", json=body)
+    names = lambda resp: zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+    # Like the old export, only each image's active result counts.
+    assert post({"status_filter": "ALL"}).status_code == 400
+    db.set_active_result(d["ra"])
+    resp = post({"status_filter": "ALL", "mode": "clean"})
+    assert resp.status_code == 200
+    assert [n.split("/", 1)[1] for n in names(resp)] == [f"results/alpha/cat_{d['ra'][:8]}.png"]
+    assert post({"status_filter": "NO"}).status_code == 400
+    db.set_active_result(d["rno"])
+    sbs = names(post({"status_filter": "NO", "mode": "side_by_side"}))
+    assert len(sbs) == 1 and f"/side_by_side/alpha/cat_{d['rno'][:8]}_ab.png" in sbs[0]
+    assert post({}, project="nope").status_code == 404
+    assert client.get(f"/api/projects/{d['A']}/export/preview").status_code in (404, 405)       # preview route is gone

@@ -11,10 +11,7 @@ import {
   formatRelativeTime,
   openModal,
   closeModal,
-  modalBack,
   setModalOnClose,
-  pushModalBack,
-  clearModalBackStack,
   openConfirmModal,
   openImageLightbox,
   openItemMenu,
@@ -79,7 +76,7 @@ const els = {
   topbarMenuPanel: document.getElementById("topbarMenuPanel"),
   hotkeysBtn: document.getElementById("hotkeysBtn"),
   trashBtn: document.getElementById("trashBtn"),
-  exportBtn: document.getElementById("exportBtn"),
+  exportLink: document.getElementById("exportLink"),
   settingsBtn: document.getElementById("settingsBtn"),
   searchInput: document.getElementById("searchInput"),
   sortSelect: document.getElementById("sortSelect"),
@@ -4003,151 +4000,15 @@ async function renderTrashModal(statusMessage = "") {
 }
 
 // ---------------------------------------------------------------------------
-// Export
+// Export lives on the management page; the menu item opens it on the Review
+// tab with this project selected.
 // ---------------------------------------------------------------------------
 
-const STATUS_FILTER_LABELS = { YES: "Approved (YES)", ALL: "All evaluated", MAYBE: "Maybe", NO: "Rejected" };
-const EXPORT_MODE_LABELS = { clean: "Clean (result images only)", side_by_side: "Side-by-Side (A/B pairs)" };
-
-els.exportBtn.addEventListener("click", () => {
-  clearModalBackStack(); // fresh flow -- Escape/backdrop from the filter step should fully close
-  showExportFilter();
+els.exportLink.addEventListener("click", () => {
+  els.exportLink.href = state.currentProjectId
+    ? `/manage?project=${encodeURIComponent(state.currentProjectId)}&tab=review`
+    : "/manage";
 });
-
-function showExportFilter(statusFilter = "YES", mode = "clean") {
-  const modal = openModal(`
-    <h3>Export Results</h3>
-    <div class="field">
-      <label>Status Filter</label>
-      <select id="mStatus">
-        ${Object.entries(STATUS_FILTER_LABELS)
-          .map(([v, label]) => `<option value="${v}" ${v === statusFilter ? "selected" : ""}>${label}</option>`)
-          .join("")}
-      </select>
-    </div>
-    <div class="field">
-      <label>Format</label>
-      <select id="mMode">
-        ${Object.entries(EXPORT_MODE_LABELS)
-          .map(([v, label]) => `<option value="${v}" ${v === mode ? "selected" : ""}>${label}</option>`)
-          .join("")}
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button id="mCancel" class="btn-ghost">Cancel</button>
-      <button id="mGo" class="btn-primary">Generate Report</button>
-    </div>
-  `);
-  modal.querySelector("#mCancel").addEventListener("click", modalBack);
-  modal.querySelector("#mGo").addEventListener("click", () => {
-    const sf = modal.querySelector("#mStatus").value;
-    const md = modal.querySelector("#mMode").value;
-    pushModalBack(() => showExportFilter(sf, md));
-    showExportReport(sf, md);
-  });
-}
-
-// Scrollable preview of exactly what the chosen filters will export, with the
-// actual zip download available right from the report -- so the user can
-// eyeball the result set before committing to (potentially large) export. In
-// side_by_side mode, both the grid thumbnails and the per-item lightbox show
-// the actual source+result composite the zip will contain, not just the bare
-// result -- otherwise "preview" wouldn't show what side-by-side mode does.
-async function showExportReport(statusFilter, mode) {
-  const modal = openModal(`<h3>Export Report</h3><p class="dup-section-hint">Loading…</p>`);
-  let results = [];
-  try {
-    results = await api.previewExport(state.currentProjectId, statusFilter);
-  } catch (e) {
-    modal.innerHTML = `<h3>Export Report</h3><p class="dup-section-hint">Error: ${escapeHtml(e.message)}</p>`;
-    return;
-  }
-  renderExportReportBody(statusFilter, mode, results);
-}
-
-// Opens the lightbox on results[index], wired with wraparound prev/next so
-// arrow keys/chevrons page through the whole filtered set (see the report's
-// data-view-result click handler and openImageLightbox's onPrev/onNext).
-function showResultLightbox(statusFilter, mode, results, index) {
-  const r = results[index];
-  const isSbs = mode === "side_by_side";
-  const url = isSbs ? `/api/results/${r.id}/side-by-side` : `/api/results/${r.id}/file`;
-  const wrap = (i) => (i + results.length) % results.length;
-  openImageLightbox(url, r.image_display_name, {
-    onPrev: results.length > 1 ? () => showResultLightbox(statusFilter, mode, results, wrap(index - 1)) : undefined,
-    onNext: results.length > 1 ? () => showResultLightbox(statusFilter, mode, results, wrap(index + 1)) : undefined,
-    position: results.length > 1 ? `${index + 1} / ${results.length}` : undefined,
-  });
-}
-
-// (Re)draws the report's body -- grid + actions -- into the modal container.
-// Split out from showExportReport so that backing out of the per-result
-// lightbox (which takes over the whole modal body) can redraw the
-// already-fetched result set instead of refetching it.
-function renderExportReportBody(statusFilter, mode, results) {
-  const modal = els.modalContent;
-  const isSbs = mode === "side_by_side";
-  const previewUrl = (id) => (isSbs ? `/api/results/${id}/side-by-side` : `/api/results/${id}/thumbnail`);
-  const itemsHtml = results.length
-    ? results
-        .map((r) => {
-          const label = `${escapeHtml(r.image_display_name)} — ${r.evaluation} — ${new Date(r.date_generated).toLocaleString()}`;
-          return `
-            <div class="report-item ${r.evaluation}" data-view-result="${r.id}" title="${label}">
-              <img src="${previewUrl(r.id)}" loading="lazy" />
-              <div class="report-item-name">${escapeHtml(r.image_display_name)}</div>
-            </div>
-          `;
-        })
-        .join("")
-    : `<p class="dup-section-hint">No results match this filter.</p>`;
-
-  modal.innerHTML = `
-    <h3>Export Report</h3>
-    <div class="report-header">
-      <span class="report-count">${results.length} result${results.length === 1 ? "" : "s"} — ${STATUS_FILTER_LABELS[statusFilter]} — ${EXPORT_MODE_LABELS[mode]}</span>
-    </div>
-    <div class="report-grid ${isSbs ? "sbs" : ""}">${itemsHtml}</div>
-    <div id="mExportStatus" class="status-line"></div>
-    <div class="modal-actions">
-      <button id="mBack" class="btn-ghost">← Back</button>
-      <button id="mGo" class="btn-primary" ${results.length ? "" : "disabled"}>${results.length ? `Export ZIP (${results.length})` : "Export ZIP"}</button>
-    </div>
-  `;
-
-  modal.querySelector("#mBack").addEventListener("click", modalBack);
-  modal.querySelectorAll("[data-view-result]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const index = results.findIndex((x) => x.id === el.dataset.viewResult);
-      pushModalBack(() => renderExportReportBody(statusFilter, mode, results));
-      showResultLightbox(statusFilter, mode, results, index);
-    });
-  });
-  modal.querySelector("#mGo").addEventListener("click", async () => {
-    modal.querySelector("#mExportStatus").textContent = "Building export...";
-    try {
-      const res = await fetch(`/api/projects/${state.currentProjectId}/export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status_filter: statusFilter, mode }),
-      });
-      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-      const blob = await res.blob();
-      const disposition = res.headers.get("content-disposition") || "";
-      const match = disposition.match(/filename="?([^"]+)"?/);
-      const filename = match ? match[1] : "export.zip";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      modal.querySelector("#mExportStatus").textContent = "Export downloaded.";
-    } catch (e) {
-      modal.querySelector("#mExportStatus").textContent = `Error: ${e.message}`;
-    }
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Hotkeys & utils
@@ -4155,8 +4016,7 @@ function renderExportReportBody(statusFilter, mode, results) {
 
 // Gallery hotkeys act on the currently selected image, which sits behind
 // any open modal -- without this guard, arrow keys meant for a lightbox
-// (e.g. paging through the export report) would also step the background
-// image selection underneath it.
+// would also step the background image selection underneath it.
 function whenNoModal(fn) {
   return () => {
     if (els.modalOverlay.style.display === "none") fn();

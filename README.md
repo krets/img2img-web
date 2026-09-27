@@ -12,7 +12,8 @@ A local desktop-style app for managing, generating, and reviewing bulk image-to-
 - **Review Workflow:** Three-tier evaluation (YES / MAYBE / NO) with hotkeys (`y` / `m` / `n`, arrow keys to move between images), and a draggable **A/B comparison slider** (source vs. result).
 - **Crop / Pre-process Source:** The crop button in the viewer's mode bar opens an editor to rotate the source in 90° steps and crop it to a region that can extend past the image edges (padded with a solid color or a blurred copy of the image). Works with every engine. Only the settings are stored — the original source file is never modified — and the processed image (cached) is what gets sent to the service.
 - **Multiple Results per Image:** Generate several variants per source image and toggle which one is "active" for review/export.
-- **Batch Export:** Export approved (or any status) results as a zip — either clean result images, or side-by-side A/B composites.
+- **Management page (`/manage`):** Work across libraries: a review gallery with comparison modes and rating, a prompt report, near-duplicate detection for sources and references, saved reports, and export.
+- **Export:** Zip the results in any review view or saved report: result images, side-by-side composites, the sources and references they were made from, a manifest (JSON/CSV) and a printable HTML report.
 - **Local & Persistent:** Everything lives in a single `workspace/` folder (SQLite DB + image files + config), portable and gitignored.
 
 ---
@@ -65,7 +66,7 @@ This starts a local FastAPI server on `http://127.0.0.1:8765`. Set `OPEN_BROWSER
 3. Select an image, pick or write a prompt, and click **Generate**.
 4. Use the A/B slider to compare source vs. result; mark it YES / MAYBE / NO with buttons or hotkeys.
 5. Generate additional variants for the same image if needed — switch the active one from the Results dropdown.
-6. When ready, use **Export** to pull out approved results (clean or side-by-side) as a zip.
+6. When ready, open **Export…** from the menu. It takes you to the management page's Review tab with the project selected: filter to what you want (e.g. YES only), then **Export…** there.
 
 ### Tests
 

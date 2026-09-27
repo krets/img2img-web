@@ -223,6 +223,29 @@ async function pollIndexStatus() {
   const before = state.selectedIds.size;
   state.selectedIds = new Set([...state.selectedIds].filter((id) => live.has(id)));
   if (state.selectedIds.size !== before) persistSelection();
+  // Deep link from the library page (/manage?project=<id>&tab=<tab>): select
+  // just that project and open the tab, then drop the query so a reload
+  // keeps whatever was picked since.
+  const params = new URLSearchParams(location.search);
+  const linked = state.projects.find((p) => p.id === params.get("project"));
+  if (linked) {
+    state.selectedIds = new Set([linked.id]);
+    if (linked.is_archived) {
+      state.showArchived = true;
+      els.showArchivedInput.checked = true;
+      saveJson(ARCHIVED_KEY, true);
+    }
+    persistSelection();
+  }
+  if (TABS.includes(params.get("tab"))) {
+    state.tab = params.get("tab");
+    try {
+      localStorage.setItem(TAB_KEY, state.tab);
+    } catch {
+      // ignore
+    }
+  }
+  if (params.has("project") || params.has("tab")) history.replaceState(null, "", location.pathname);
   renderProjectList();
   renderTab();
   pollIndexStatus();

@@ -158,8 +158,4 @@ export const api = {
     results: (filter, offset = 0, limit = 100) =>
       request("POST", `/manage/results?offset=${offset}&limit=${limit}`, { json: filter }),
   },
-
-  // Export
-  previewExport: (projectId, statusFilter) =>
-    request("GET", `/projects/${projectId}/export/preview?status_filter=${statusFilter}`),
 };

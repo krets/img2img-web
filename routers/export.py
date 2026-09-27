@@ -1,19 +1,16 @@
+"""Per-project export, kept for scripts that call it. The app exports from the
+management page (/api/manage/export, see export.py); this builds the same
+kind of zip, synchronously, for one project's active results.
+"""
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 import db
-import storage
-from models import ExportRequestIn
+import export
+from models import ExportOptions, ExportRequestIn, ManageFilterIn
 
 router = APIRouter(tags=["export"])
-
-
-@router.get("/api/projects/{project_id}/export/preview")
-def export_preview(project_id: str, status_filter: str = "YES"):
-    project = db.get_project(project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-    return db.list_results_by_status(project_id, status=status_filter)
 
 
 @router.post("/api/projects/{project_id}/export")
@@ -22,24 +19,18 @@ def export_project(project_id: str, body: ExportRequestIn):
     if not project:
         raise HTTPException(404, "Project not found")
 
-    results = db.list_results_by_status(project_id, status=body.status_filter)
+    f = ManageFilterIn(
+        project_ids=[project_id],
+        evaluations=[] if body.status_filter == "ALL" else [body.status_filter],
+        active_only=True,
+        dedupe_copies=False,
+    )
+    results = export.all_filtered_results(f)
     if not results:
         raise HTTPException(400, "No results match the selected filter")
 
-    for r in results:
-        r["project_id"] = project_id
-
-    source_paths = {}
-    if body.mode == "side_by_side":
-        for r in results:
-            image = db.get_image(r["image_id"])
-            source_paths[r["id"]] = storage.source_image_path(project_id, image["file_name"])
-
-    zip_path = storage.build_export_zip(
-        project_slug=project["slug"],
-        status_filter=body.status_filter,
-        mode=body.mode,
-        results=results,
-        source_paths=source_paths,
-    )
+    options = ExportOptions(images=body.mode == "clean", side_by_side=body.mode == "side_by_side",
+                            sidecar=False, html_report=False)
+    name = f"{project['slug']}_{body.status_filter.lower()}_{body.mode}"
+    zip_path = export.build_export(name, results, options)
     return FileResponse(zip_path, media_type="application/zip", filename=zip_path.name)

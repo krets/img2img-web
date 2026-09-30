@@ -30,7 +30,14 @@ class GenerationCancelled(Exception):
     terminal state instead of treating it as a generic failure."""
 
 
-def create_job(image_id, project_id, image_name, engine, prompt_text=""):
+def create_job(image_id, project_id, image_name, engine, prompt_text="", kind="generate"):
+    """kind distinguishes a normal generation (which produces a `results` row,
+    result_id) from a lighter-weight ComfyUI task that doesn't -- currently
+    just "sam3_cutout" (see set_cutout_result/get_cutout_result). Both show up
+    in the same queue and are cancelled the same way; the frontend uses kind
+    to keep the cutout ones out of per-image "pending result" UI, since they
+    never turn into a result.
+    """
     job_id = uuid.uuid4().hex
     job = {
         "id": job_id,
@@ -38,6 +45,7 @@ def create_job(image_id, project_id, image_name, engine, prompt_text=""):
         "project_id": project_id,
         "image_name": image_name,
         "engine": engine,
+        "kind": kind,
         "prompt_text": prompt_text,
         "status": "queued",  # queued -> running -> done | error | cancelled
         "phase": None,  # engine-specific sub-stage, e.g. comfyui's uploading/running/saving

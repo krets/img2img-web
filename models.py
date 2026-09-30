@@ -60,6 +60,10 @@ class ReferenceImageCropIn(BaseModel):
     crop_h: int
 
 
+class Sam3CutoutIn(BaseModel):
+    sam3_prompt: str
+
+
 class MoveImagesIn(BaseModel):
     image_ids: list[str]
     target_project_id: str
@@ -94,6 +98,19 @@ class GenerateRequestIn(BaseModel):
     # so framing for them is done up front via the source's pre-process settings.
     aspect_ratio: Optional[str] = None
     max_dim: Optional[int] = None
+    # ComfyUI only -- picks which bundled workflow graph to run. "sam3" and
+    # "sam3_xy" both run an upstream SAM3 detect/rescale pass and require
+    # sam3_prompt; "sam3" scales the detected object uniformly (scale_by),
+    # "sam3_xy" scales its width/height independently (scale_x/scale_y).
+    # All numeric fields are optional and fall back to the workflow's own
+    # defaults.
+    comfyui_workflow: Optional[Literal["default", "sam3", "sam3_xy"]] = None
+    sam3_prompt: Optional[str] = None
+    sam3_scale_by: Optional[float] = None
+    sam3_scale_x: Optional[float] = None
+    sam3_scale_y: Optional[float] = None
+    sam3_lr_pin: Optional[float] = None
+    sam3_tb_pin: Optional[float] = None
     # Ids into this project's reference-image library (see routers/references.py),
     # passed as extra reference inputs. Supported by all engines, though not
     # every fal.ai model accepts more than one input image.
@@ -111,6 +128,9 @@ class ConfigIn(BaseModel):
     default_engine: Optional[Literal["grok", "comfyui", "fal"]] = None
     comfyui_url: Optional[str] = None
     comfyui_workflow_path: Optional[str] = None
+    comfyui_sam3_workflow_path: Optional[str] = None
+    comfyui_sam3xy_workflow_path: Optional[str] = None
+    comfyui_sam3_cutout_workflow_path: Optional[str] = None
     fal_api_key: Optional[str] = None
     fal_model: Optional[str] = None
     xai_management_key: Optional[str] = None

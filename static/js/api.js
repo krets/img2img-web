@@ -103,6 +103,24 @@ export const api = {
   restoreReferenceImage: (refId) => request("POST", `/reference-images/${refId}/restore`),
   permanentlyDeleteReferenceImage: (refId) => request("DELETE", `/reference-images/${refId}/permanent`),
 
+  // SAM3 interactive object-placement tool: detects an object (returned as a
+  // transparent cutout for the frontend to drag/resize), then saves the
+  // client-composited result as a reference image scoped to that one image.
+  // Detection is queued like a generation (see jobs.py's kind="sam3_cutout")
+  // rather than run inline, since ComfyUI only runs one prompt at a time and
+  // this can end up waiting behind a real generation -- startSam3Cutout just
+  // returns the queued job; poll getQueue() for it, then fetch the image at
+  // `/queue/{job_id}/sam3-cutout` (a plain URL, not wrapped here) once done.
+  startSam3Cutout: (imageId, sam3Prompt) =>
+    request("POST", `/images/${imageId}/sam3-cutout`, { json: { sam3_prompt: sam3Prompt } }),
+  setSam3Reference: (imageId, { file, sam3Prompt }) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (sam3Prompt) form.append("sam3_prompt", sam3Prompt);
+    return request("POST", `/images/${imageId}/sam3-reference`, { form });
+  },
+  clearSam3Reference: (imageId) => request("DELETE", `/images/${imageId}/sam3-reference`),
+
   // Prompts
   listPrompts: () => request("GET", "/prompts"),
   createPrompt: (title, prompt_text) =>

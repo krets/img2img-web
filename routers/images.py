@@ -2,11 +2,14 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import requests
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
 
+import comfyui_client
+import config as cfg
 import db
+import jobs
 import preprocess
 import storage
 from models import (
@@ -17,6 +20,7 @@ from models import (
     MergeImagesIn,
     MoveImagesIn,
     PreprocessIn,
+    Sam3CutoutIn,
 )
 
 router = APIRouter(tags=["images"])
@@ -316,6 +320,7 @@ def _resolve_ancestors(image, max_depth=50):
 def _image_detail(image):
     image["results"] = db.list_results_for_image(image["id"])
     image["derived_from"] = _resolve_provenance(image)
+    image["sam3_reference"] = db.get_scoped_reference_image(image["id"])
     return image
 
 
@@ -454,6 +459,158 @@ def clear_image_preprocess(image_id: str):
         raise HTTPException(404, "Image not found")
     storage.clear_processed(image["project_id"], image_id)
     return _image_detail(db.set_image_preprocess(image_id, None))
+
+
+def _effective_source_path(image):
+    """The file an engine actually sees: the cached pre-processed (rotate/
+    crop/pad) render if the image has one, else the raw source. Mirrors
+    _run_generation's resolution in routers/results.py.
+    """
+    path = storage.source_image_path(image["project_id"], image["file_name"])
+    if not path.exists():
+        raise HTTPException(404, "Image file missing on disk")
+    if not image["preprocess"]:
+        return path
+    try:
+        return storage.get_or_create_processed(image["project_id"], image["id"], path, image["preprocess"])
+    except Exception as e:
+        raise HTTPException(400, f"Failed to pre-process source image: {e}")
+
+
+def _replace_scoped_reference(image):
+    """Removes this image's existing scoped SAM3 reference (if any) -- see
+    get_scoped_reference_image. There's only ever one slot: a fresh
+    detection and a finished positioning both replace it rather than piling
+    up multiple.
+    """
+    existing = db.get_scoped_reference_image(image["id"])
+    if existing:
+        storage.delete_reference_image_files(image["project_id"], existing["original_file_name"], existing["file_name"])
+        db.delete_reference_image(existing["id"])
+
+
+@router.post("/api/images/{image_id}/sam3-cutout")
+def sam3_cutout(image_id: str, body: Sam3CutoutIn, background_tasks: BackgroundTasks):
+    """Queues just the SAM3 detect/crop pass (no Flux.2 generation, no
+    interactive placement) as a normal background job -- ComfyUI only runs
+    one prompt at a time, so this can end up waiting behind an actual
+    generation, and queuing it (rather than blocking this request) keeps the
+    UI responsive and shows the wait in the same queue overlay, with the
+    same cancel affordance. Unlike a generation job, this one finishes by
+    saving the raw cutout straight into the reference library (needs_composite
+    -- see db's reference_images table), rather than by handing bytes back
+    through the job itself: detection can complete unattended, in the
+    background, and just sit there "needing attention" (a chit in the image
+    list, a banner in the reference panel) until the user gets around to
+    positioning it -- see set_sam3_reference below.
+    """
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    if not body.sam3_prompt.strip():
+        raise HTTPException(400, "SAM3 prompt text is required")
+
+    config = cfg.load_config()
+    job = jobs.create_job(
+        image_id=image_id,
+        project_id=image["project_id"],
+        image_name=image["display_name"],
+        engine="comfyui",
+        prompt_text=body.sam3_prompt,
+        kind="sam3_cutout",
+    )
+    background_tasks.add_task(_run_sam3_cutout, job["id"], image, body.sam3_prompt, config)
+    return job
+
+
+def _run_sam3_cutout(job_id, image, sam3_prompt, config):
+    try:
+        jobs.update_job(job_id, status="running")
+        source_path = _effective_source_path(image)
+        cutout_bytes = comfyui_client.detect_sam3_object(
+            base_url=config["comfyui_url"],
+            workflow_path=cfg.comfyui_workflow_path(config, "cutout"),
+            source_path=source_path,
+            sam3_prompt=sam3_prompt,
+            job_id=job_id,
+            max_dim=config["default_max_dim"],
+        )
+        _replace_scoped_reference(image)
+        name = f"SAM3: {sam3_prompt.strip()}"
+        ref_id = db.new_id()
+        file_name, width, height = storage.save_reference_cutout(image["project_id"], ref_id, name, cutout_bytes)
+        db.create_reference_image(
+            ref_id=ref_id,
+            project_id=image["project_id"],
+            display_name=name,
+            original_file_name=file_name,
+            file_name=file_name,
+            crop_x=None, crop_y=None, crop_w=None, crop_h=None,
+            orig_width=width, orig_height=height,
+            width=width, height=height,
+            source_image_id=image["id"],
+            needs_composite=True,
+        )
+        jobs.finish_job(job_id)
+    except jobs.GenerationCancelled:
+        jobs.cancel_job(job_id)
+    except HTTPException as e:
+        jobs.finish_job(job_id, error=str(e.detail))
+    except Exception as e:
+        jobs.finish_job(job_id, error=str(e))
+
+
+@router.post("/api/images/{image_id}/sam3-reference")
+async def set_sam3_reference(image_id: str, file: UploadFile = File(...), sam3_prompt: str = Form(None)):
+    """Saves the frontend's client-composited placement (source image + the
+    repositioned/rescaled SAM3 cutout, flattened to opaque RGB) as this
+    image's one scoped reference -- see get_scoped_reference_image. Replaces
+    any previous one for this image (typically the needs_composite=1 raw
+    cutout this was positioned from) rather than accumulating.
+    """
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+
+    _replace_scoped_reference(image)
+
+    file_bytes = await file.read()
+    name = f"SAM3: {sam3_prompt.strip()}" if sam3_prompt and sam3_prompt.strip() else "SAM3 placement"
+    ref_id = db.new_id()
+    try:
+        original = storage.save_reference_image_original(image["project_id"], ref_id, name, file_bytes)
+    except Exception as e:
+        raise HTTPException(400, f"Could not process placement image: {e}")
+    try:
+        active_file_name, width, height = storage.apply_reference_crop(
+            image["project_id"], ref_id, name, original.file_name, None
+        )
+    except Exception as e:
+        storage.delete_reference_image_files(image["project_id"], original.file_name, original.file_name)
+        raise HTTPException(400, f"Could not save placement image: {e}")
+
+    return db.create_reference_image(
+        ref_id=ref_id,
+        project_id=image["project_id"],
+        display_name=name,
+        original_file_name=original.file_name,
+        file_name=active_file_name,
+        crop_x=None, crop_y=None, crop_w=None, crop_h=None,
+        orig_width=original.width, orig_height=original.height,
+        width=width, height=height,
+        source_image_id=image_id,
+        needs_composite=False,
+        **original.hash_fields(),
+    )
+
+
+@router.delete("/api/images/{image_id}/sam3-reference")
+def clear_sam3_reference(image_id: str):
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    _replace_scoped_reference(image)
+    return {"ok": True}
 
 
 @router.get("/api/images/{image_id}/processed")

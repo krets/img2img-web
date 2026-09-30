@@ -39,6 +39,9 @@ DEFAULT_CONFIG = {
     "default_engine": "grok",
     "comfyui_url": "http://127.0.0.1:8188",
     "comfyui_workflow_path": "comfyui_flux2_imageedit.json",
+    "comfyui_sam3_workflow_path": "comfyui_flux_and_SAM3.json",
+    "comfyui_sam3xy_workflow_path": "comfyui_flux_and_SAM3_xy.json",
+    "comfyui_sam3_cutout_workflow_path": "comfyui_sam3_cutout.json",
     "fal_api_key": "",
     "fal_model": "fal-ai/flux-pro/kontext",
     # Only used to read the account balance for the Settings panel -- xAI's
@@ -93,9 +96,14 @@ def get_xai_management_key():
     return os.getenv("XAI_MANAGEMENT_KEY", "")
 
 
-def comfyui_workflow_path(config=None):
+def comfyui_workflow_path(config=None, workflow="default"):
     config = config or load_config()
-    path = Path(config["comfyui_workflow_path"])
+    key = {
+        "sam3": "comfyui_sam3_workflow_path",
+        "sam3_xy": "comfyui_sam3xy_workflow_path",
+        "cutout": "comfyui_sam3_cutout_workflow_path",
+    }.get(workflow, "comfyui_workflow_path")
+    path = Path(config[key])
     return path if path.is_absolute() else APP_ROOT / path
 
 

@@ -188,6 +188,25 @@ def apply_reference_crop(project_id, ref_id, display_name, original_file_name, c
     return file_name, img.width, img.height
 
 
+def save_reference_cutout(project_id, ref_id, display_name, image_bytes):
+    """Saves a SAM3 cutout (RGBA, transparent background) as a reference
+    image without flattening it onto white like save_reference_image_original
+    -- the alpha is kept so it can still be composited later once the user
+    positions it. There's no separate original/crop to preserve here (no
+    crop tool applies to it), so the same file serves as both; positioning
+    replaces it outright rather than re-deriving from an original. Returns
+    (file_name, width, height), matching apply_reference_crop's shape.
+    """
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    slug = slugify(display_name)
+    file_name = f"{ref_id}_{slug}.png"
+    dest = cfg.project_reference_dir(project_id) / file_name
+    img.save(dest, format="PNG")
+    return file_name, img.width, img.height
+
+
 def reference_image_path(project_id, file_name):
     return cfg.project_reference_dir(project_id) / file_name
 

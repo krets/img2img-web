@@ -64,7 +64,23 @@ CREATE TABLE IF NOT EXISTS reference_images (
     date_added          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted          INTEGER DEFAULT 0,
     deleted_at          TIMESTAMP,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    -- Set only for a reference auto-generated for one specific source image
+    -- (e.g. the SAM3 object-placement tool) -- NULL for an ordinary
+    -- project-wide library entry. Scoped rows are excluded from
+    -- list_reference_images and don't show in the References tab; they're
+    -- cascade-deleted with the image they belong to, since they're not
+    -- meant to outlive it.
+    source_image_id     TEXT,
+    -- True for a scoped reference that's just the raw SAM3 cutout (alpha
+    -- background, not yet positioned/composited onto the source image) --
+    -- saved directly so detection can run in the background without
+    -- blocking on the interactive placement step; it "needs attention"
+    -- (a sidebar chit + a banner in the reference panel) until the user
+    -- positions it, which replaces it with a finished (needs_composite=0)
+    -- one. Always 0 for an ordinary (non-scoped) library entry.
+    needs_composite     INTEGER DEFAULT 0,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_image_id) REFERENCES images(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS prompts (
@@ -167,6 +183,7 @@ CREATE INDEX IF NOT EXISTS idx_reference_images_project ON reference_images(proj
 CREATE INDEX IF NOT EXISTS idx_reference_images_deleted_at ON reference_images(is_deleted, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_images_aspect        ON images(aspect);
 CREATE INDEX IF NOT EXISTS idx_reference_images_aspect ON reference_images(aspect);
+CREATE INDEX IF NOT EXISTS idx_reference_images_source_image ON reference_images(source_image_id);
 """
 
 # Cross-library index for the management views (manage_db.py): every live source
@@ -272,6 +289,10 @@ def _migrate(conn):
                          ("dhash", "INTEGER"), ("aspect", "REAL")):
         if column not in reference_columns:
             conn.execute(f"ALTER TABLE reference_images ADD COLUMN {column} {decl}")
+    if "source_image_id" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN source_image_id TEXT REFERENCES images(id) ON DELETE CASCADE")
+    if "needs_composite" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN needs_composite INTEGER DEFAULT 0")
 
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()}
     if "engine" not in result_columns:
@@ -661,7 +682,10 @@ def list_images(project_id, sort="recent_result", filter="all", search=None):
                 FROM (SELECT id, evaluation FROM results
                       WHERE results.image_id = images.id AND results.is_deleted = 0
                       ORDER BY date_generated ASC) re
-               ) AS result_evaluations_json
+               ) AS result_evaluations_json,
+               (SELECT ri.id FROM reference_images ri
+                WHERE ri.source_image_id = images.id AND ri.is_deleted = 0 AND ri.needs_composite = 1
+                LIMIT 1) AS unfinished_sam3_reference_id
         FROM images
         LEFT JOIN results active
             ON active.image_id = images.id AND active.is_active_result = 1 AND active.is_deleted = 0
@@ -789,26 +813,31 @@ def merge_images(keep_id, remove_id):
 
 def create_reference_image(project_id, display_name, original_file_name, file_name,
                             crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height, ref_id=None,
-                            content_hash=None, phash=None, dhash=None, aspect=None):
+                            content_hash=None, phash=None, dhash=None, aspect=None, source_image_id=None,
+                            needs_composite=False):
     conn = get_connection()
     ref_id = ref_id or new_id()
     conn.execute(
         """INSERT INTO reference_images (id, project_id, display_name, original_file_name, file_name,
                                           crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
-                                          content_hash, phash, dhash, aspect)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          content_hash, phash, dhash, aspect, source_image_id, needs_composite)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (ref_id, project_id, display_name, original_file_name, file_name,
          crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
-         content_hash, phash, dhash, aspect),
+         content_hash, phash, dhash, aspect, source_image_id, int(bool(needs_composite))),
     )
     conn.commit()
     return get_reference_image(ref_id)
 
 
 def list_reference_images(project_id):
+    """Project-wide library entries only -- excludes reference images scoped
+    to one source image (source_image_id set), which don't belong in the
+    shared library/References tab. See get_scoped_reference_image.
+    """
     conn = get_connection()
     rows = conn.execute(
-        "SELECT * FROM reference_images WHERE project_id = ? AND is_deleted = 0 ORDER BY date_added DESC",
+        "SELECT * FROM reference_images WHERE project_id = ? AND is_deleted = 0 AND source_image_id IS NULL ORDER BY date_added DESC",
         (project_id,),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -835,6 +864,18 @@ def list_expired_reference_images(retention_days):
 def get_reference_image(ref_id):
     conn = get_connection()
     row = conn.execute("SELECT * FROM reference_images WHERE id = ?", (ref_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_scoped_reference_image(source_image_id):
+    """The one reference image (if any) auto-generated for this specific
+    source image, e.g. by the SAM3 object-placement tool. There's at most
+    one live row per image -- callers replace rather than accumulate.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM reference_images WHERE source_image_id = ? AND is_deleted = 0", (source_image_id,)
+    ).fetchone()
     return dict(row) if row else None
 
 

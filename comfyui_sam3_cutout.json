@@ -1,0 +1,229 @@
+{
+  "669": {
+    "inputs": {
+      "image": "teta23a.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "699": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 1,
+      "resolution_steps": 1,
+      "image": [
+        "669",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale Image to Total Pixels"
+    }
+  },
+  "643:641": {
+    "inputs": {
+      "ckpt_name": "sam3.1_multiplex_fp16.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "643:640": {
+    "inputs": {
+      "text": "elephants",
+      "clip": [
+        "643:641",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "SAM3 Prompt"
+    }
+  },
+  "643:75": {
+    "inputs": {
+      "threshold": 0.5,
+      "refine_iterations": 2,
+      "individual_masks": false,
+      "model": [
+        "643:641",
+        0
+      ],
+      "image": [
+        "699",
+        0
+      ],
+      "conditioning": [
+        "643:640",
+        0
+      ]
+    },
+    "class_type": "SAM3_Detect",
+    "_meta": {
+      "title": "SAM3 Detect"
+    }
+  },
+  "697:644": {
+    "inputs": {
+      "mask": [
+        "643:75",
+        0
+      ]
+    },
+    "class_type": "MaskPreview",
+    "_meta": {
+      "title": "Preview Mask"
+    }
+  },
+  "697:653": {
+    "inputs": {
+      "padding": 24,
+      "region_type": "dominant",
+      "mask": [
+        "697:644",
+        0
+      ]
+    },
+    "class_type": "Mask Crop Region",
+    "_meta": {
+      "title": "Mask Crop Region"
+    }
+  },
+  "697:656": {
+    "inputs": {
+      "x": [
+        "697:653",
+        3
+      ],
+      "y": [
+        "697:653",
+        2
+      ],
+      "width": [
+        "697:653",
+        6
+      ],
+      "height": [
+        "697:653",
+        7
+      ]
+    },
+    "class_type": "PrimitiveBoundingBox",
+    "_meta": {
+      "title": "Bounding Box"
+    }
+  },
+  "697:662": {
+    "inputs": {
+      "mask": [
+        "697:644",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Convert Mask to Image"
+    }
+  },
+  "697:663": {
+    "inputs": {
+      "images.image0": [
+        "697:662",
+        0
+      ],
+      "images.image1": [
+        "699",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "Batch Images"
+    }
+  },
+  "697:655": {
+    "inputs": {
+      "output_width": [
+        "697:653",
+        6
+      ],
+      "output_height": [
+        "697:653",
+        7
+      ],
+      "padding": 0,
+      "keep_aspect": "pad",
+      "image": [
+        "697:663",
+        0
+      ],
+      "bboxes": [
+        "697:656",
+        0
+      ]
+    },
+    "class_type": "CropByBBoxes",
+    "_meta": {
+      "title": "Crop By Bounding Boxes"
+    }
+  },
+  "900": {
+    "inputs": {
+      "batch_index": 1,
+      "length": 1,
+      "image": [
+        "697:655",
+        0
+      ]
+    },
+    "class_type": "ImageFromBatch",
+    "_meta": {
+      "title": "Get Cropped Image"
+    }
+  },
+  "901": {
+    "inputs": {
+      "batch_index": 0,
+      "length": 1,
+      "image": [
+        "697:655",
+        0
+      ]
+    },
+    "class_type": "ImageFromBatch",
+    "_meta": {
+      "title": "Get Cropped Mask (as image)"
+    }
+  },
+  "902": {
+    "inputs": {
+      "filename_prefix": "sam3_cutout/image",
+      "images": [
+        "900",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Cutout Image"
+    }
+  },
+  "903": {
+    "inputs": {
+      "filename_prefix": "sam3_cutout/mask",
+      "images": [
+        "901",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Cutout Mask"
+    }
+  }
+}

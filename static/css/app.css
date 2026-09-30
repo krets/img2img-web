@@ -477,6 +477,18 @@ kbd {
 }
 .chit.pending.cancelling { background: #7c2d12; border: 1px solid #f97316; }
 .chit.error { background: #450a0a; border: 1px solid #ef4444; }
+/* Durable (DB-backed, not tied to the in-memory job queue) -- a SAM3
+   detection finished in the background and is sitting unpositioned in the
+   reference library. Dashed amber border plus a slow pulse says "needs your
+   attention" without being as urgent-looking as the red error chit. */
+.chit.sam3-pending {
+  background: #451a03; border: 1px dashed #f59e0b;
+  animation: chit-sam3-pulse 2.4s ease-in-out infinite;
+}
+@keyframes chit-sam3-pulse {
+  0%, 100% { border-color: #92400e; }
+  50% { border-color: #fbbf24; }
+}
 @keyframes chit-pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
@@ -793,6 +805,19 @@ kbd {
 }
 .reference-image-thumb-remove:hover { background: #7f1d1d; }
 
+/* The "special icon" for an unfinished SAM3 placement (needs_composite) --
+   a full-width banner rather than a thumbnail, since there's nothing to
+   preview yet (it's not selected/composited) and it needs to read as an
+   action, not a picked reference. */
+.reference-pending-banner {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: #451a03; border: 1px dashed #f59e0b; border-radius: 6px;
+  padding: 8px 10px; color: #fbbf24; font-size: 12px; text-align: left;
+  cursor: pointer; font-family: inherit;
+}
+.reference-pending-banner:hover { background: #5a2205; }
+.reference-pending-icon { font-size: 14px; }
+
 .picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; max-height: 50vh; overflow-y: auto; }
 .picker-item { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; cursor: pointer; border: 2px solid transparent; }
 .picker-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -1072,6 +1097,10 @@ kbd {
 .lightbox-position { font-size: 12px; color: #9ea2b0; margin-right: auto; }
 
 .modal:has(.crop-stage-wrap) { width: 600px; }
+/* The SAM3 placement tool needs more room than the crop tool to drag/resize
+   precisely, and its box is allowed to extend past the stage's edges (see
+   .placement-box), unlike the crop box which never leaves the image. */
+.modal:has(.sam3-stage-wrap) { width: 900px; }
 .crop-stage-wrap { display: flex; justify-content: center; }
 .crop-stage { position: relative; touch-action: none; }
 .crop-stage img { display: block; -webkit-user-drag: none; user-select: none; }
@@ -1079,6 +1108,14 @@ kbd {
   position: absolute; box-sizing: border-box; cursor: move;
   border: 2px solid #8B5CF6; box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
 }
+/* Same drag/resize box as .crop-box, minus the dim-everything-outside mask --
+   used for the SAM3 placement tool, where the whole base image stays visible
+   and only the dragged object sits inside the box. */
+.placement-box {
+  position: absolute; box-sizing: border-box; cursor: move;
+  border: 2px solid #8B5CF6;
+}
+.placement-box img { width: 100%; height: 100%; display: block; pointer-events: none; }
 .crop-handle {
   position: absolute; width: 12px; height: 12px;
   background: #8B5CF6; border: 2px solid #fff; border-radius: 50%;

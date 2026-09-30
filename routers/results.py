@@ -133,7 +133,7 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
     reference_paths = []
     if body.reference_image_ids:
         if engine == "comfyui":
-            max_refs = len(comfyui_client.EXTRA_IMAGE_NODES)
+            max_refs = comfyui_client.max_extra_images(body.comfyui_workflow or "default")
         elif engine == "grok":
             max_refs = grok_client.MAX_TOTAL_IMAGES - 1
         else:
@@ -156,6 +156,8 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
         raise HTTPException(400, "No xAI API key configured. Set one in Settings first.")
     if engine == "fal" and not cfg.get_fal_api_key():
         raise HTTPException(400, "No fal.ai API key configured. Set one in Settings first.")
+    if engine == "comfyui" and body.comfyui_workflow in ("sam3", "sam3_xy") and not (body.sam3_prompt and body.sam3_prompt.strip()):
+        raise HTTPException(400, "SAM3 prompt text is required for the SAM3 workflow.")
 
     job = jobs.create_job(
         image_id=image_id,
@@ -191,15 +193,24 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
                 raise RuntimeError(f"Failed to pre-process source image: {e}") from e
 
         if engine == "comfyui":
+            comfyui_workflow = body.comfyui_workflow or "default"
+            model = comfyui_workflow if comfyui_workflow != "default" else None
             try:
                 image_bytes, revised_prompt, comfyui_processing_seconds = comfyui_client.generate_image_edit(
                     base_url=config["comfyui_url"],
-                    workflow_path=cfg.comfyui_workflow_path(config),
+                    workflow_path=cfg.comfyui_workflow_path(config, comfyui_workflow),
                     source_path=effective_source_path,
                     prompt=body.adhoc_prompt_text,
                     job_id=job_id,
                     max_dim=max_dim,
                     extra_source_paths=reference_paths,
+                    workflow=comfyui_workflow,
+                    sam3_prompt=body.sam3_prompt,
+                    scale_by=body.sam3_scale_by,
+                    scale_x=body.sam3_scale_x,
+                    scale_y=body.sam3_scale_y,
+                    lr_pin=body.sam3_lr_pin,
+                    tb_pin=body.sam3_tb_pin,
                 )
             except jobs.GenerationCancelled:
                 raise  # not a failure -- let it propagate to the cancelled-specific handler below

@@ -118,12 +118,26 @@ const els = {
   promptTextarea: document.getElementById("promptTextarea"),
   engineSelect: document.getElementById("engineSelect"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
+  comfyWorkflowRow: document.getElementById("comfyWorkflowRow"),
+  comfyWorkflowSelect: document.getElementById("comfyWorkflowSelect"),
+  sam3Fields: document.getElementById("sam3Fields"),
+  sam3PromptInput: document.getElementById("sam3PromptInput"),
+  sam3ScaleByField: document.getElementById("sam3ScaleByField"),
+  sam3ScaleByInput: document.getElementById("sam3ScaleByInput"),
+  sam3ScaleXField: document.getElementById("sam3ScaleXField"),
+  sam3ScaleXInput: document.getElementById("sam3ScaleXInput"),
+  sam3ScaleYField: document.getElementById("sam3ScaleYField"),
+  sam3ScaleYInput: document.getElementById("sam3ScaleYInput"),
+  sam3LrPinInput: document.getElementById("sam3LrPinInput"),
+  sam3TbPinInput: document.getElementById("sam3TbPinInput"),
   preprocessNote: document.getElementById("preprocessNote"),
   preprocessNoteText: document.getElementById("preprocessNoteText"),
   preprocessClearBtn: document.getElementById("preprocessClearBtn"),
   referenceImagesField: document.getElementById("referenceImagesField"),
+  referenceImagesHint: document.getElementById("referenceImagesHint"),
   referenceImageList: document.getElementById("referenceImageList"),
   addReferenceImageBtn: document.getElementById("addReferenceImageBtn"),
+  sam3PlaceBtn: document.getElementById("sam3PlaceBtn"),
   generateBtn: document.getElementById("generateBtn"),
   uploadResultInput: document.getElementById("uploadResultInput"),
   generateStatus: document.getElementById("generateStatus"),
@@ -1337,19 +1351,26 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
 // per-image progress readout. Error chits stay until the failed tile is
 // dismissed in the results panel. A cancelled job gets no chit of its own: once
 // the server confirms it's actually gone, it should just disappear rather
-// than linger as a separate "cancelled" indicator.
+// than linger as a separate "cancelled" indicator. A dashed amber chit flags
+// a SAM3 detection that finished in the background and is sitting in the
+// reference library unpositioned (needs_composite) -- durable (from the DB,
+// via list_images' unfinished_sam3_reference_id), unlike the others here,
+// which all come from the in-memory job queue and disappear once resolved.
 function renderChits(img) {
   const completedChits = (img.result_evaluations || []).map(
     (r) => `<span class="chit ${r.evaluation}" data-result-id="${r.id}" title="${r.evaluation}"></span>`
   );
-  const jobsForImage = state.queue.filter((j) => j.image_id === img.id);
+  const jobsForImage = state.queue.filter((j) => j.image_id === img.id && j.kind !== "sam3_cutout");
   const pendingChits = jobsForImage
     .filter((j) => j.status === "queued" || j.status === "running")
     .map((j) => `<span class="chit pending ${jobDisplayState(j)}" title="${escapeHtml(formatJobStatus(j))}"></span>`);
   const errorChits = failedJobsFor(img.id)
     .map((j) => `<span class="chit error" title="${escapeHtml(j.error || "Generation failed")}"></span>`);
+  const sam3PendingChits = img.unfinished_sam3_reference_id
+    ? [`<span class="chit sam3-pending" title="SAM3 placement ready -- needs positioning"></span>`]
+    : [];
 
-  const chits = [...completedChits, ...pendingChits, ...errorChits];
+  const chits = [...completedChits, ...pendingChits, ...errorChits, ...sam3PendingChits];
   if (!chits.length) return `<span class="badge NONE">NEW</span>`;
   return `<div class="chit-grid">${chits.join("")}</div>`;
 }
@@ -1618,6 +1639,7 @@ function renderDetails() {
   els.detailsEmpty.style.display = "none";
   els.detailsContent.style.display = "block";
   renderPreprocessNote();
+  reconcileSam3ReferenceSelection(img);
 
   els.displayNameInput.value = img.display_name;
   els.commentInput.value = img.comment || "";
@@ -1800,8 +1822,15 @@ function renderProvenanceLine(derivedFrom) {
 // Pending jobs for `imageId`, keyed the same way both the full render and
 // the lightweight poll-tick patch (below) build their markup and decide
 // whether anything actually changed.
+// A "sam3_cutout" job (the object-placement tool's detection step) never
+// turns into a result -- it's excluded here and from failedJobsFor/renderChits
+// so it doesn't show as a misleading "pending/failed result" for the image.
+// It's still visible (and cancellable) in the main queue overlay, same as
+// any other ComfyUI job -- see renderQueueOverlay/formatJobStatus.
 function pendingJobsFor(imageId) {
-  return state.queue.filter((j) => j.image_id === imageId && (j.status === "queued" || j.status === "running"));
+  return state.queue.filter(
+    (j) => j.image_id === imageId && j.kind !== "sam3_cutout" && (j.status === "queued" || j.status === "running")
+  );
 }
 
 function failedJobsFor(imageId) {
@@ -2143,16 +2172,59 @@ function useResultPromptAsCurrent(promptText) {
 // image switches, same as the engine/aspect-ratio selects, and is remembered
 // per project across project switches (see referencePicksByProject).
 // ---------------------------------------------------------------------------
-const MAX_REFERENCE_IMAGES = 2;
+// Both SAM3 ComfyUI workflows only have one free manual reference-image slot
+// (the other is occupied by the auto-generated SAM3 crop), vs. 2 for every
+// other engine/workflow.
+function isSam3Workflow() {
+  return els.engineSelect.value === "comfyui" && els.comfyWorkflowSelect.value.startsWith("sam3");
+}
+function maxReferenceImages() {
+  return isSam3Workflow() ? 1 : 2;
+}
 
 function updateReferenceImagesVisibility() {
   els.referenceImagesField.style.display = "flex";
+  const max = maxReferenceImages();
+  els.referenceImagesHint.textContent = `(up to ${max}; not all fal.ai models support these)`;
+  if (state.referenceImageIds.length > max) {
+    state.referenceImageIds = state.referenceImageIds.slice(0, max);
+    renderReferenceImages();
+  }
+}
+
+// A SAM3 placement's reference image is scoped to one image (see db's
+// source_image_id) and deliberately excluded from state.referenceImages
+// (the project-wide library) -- resolve it from the current image detail
+// instead when it shows up in the selected ids.
+function resolveReferenceForDisplay(id) {
+  const ref = state.referenceImages.find((r) => r.id === id);
+  if (ref) return ref;
+  const sam3Ref = state.currentImage?.sam3_reference;
+  return sam3Ref && sam3Ref.id === id ? sam3Ref : null;
+}
+
+// A finished SAM3 detection sits in the reference library "needing
+// attention" (needs_composite) until it's positioned -- surfaced here as a
+// dedicated banner (the "special icon" next to the ordinary reference
+// chips), separate from and in addition to the sidebar's smaller chit on
+// the image list (see renderChits), since this is the place to actually act
+// on it. It's never in referenceImageIds (see reconcileSam3ReferenceSelection),
+// so it wouldn't otherwise appear in this row at all.
+function renderSam3PendingBannerHtml() {
+  const ref = state.currentImage?.sam3_reference;
+  if (!ref || !ref.needs_composite) return "";
+  return `
+    <button type="button" class="reference-pending-banner" id="sam3PendingBanner" title="Click to position this object on the image">
+      <span class="reference-pending-icon">✨</span>
+      <span>SAM3 placement ready — click to position</span>
+    </button>
+  `;
 }
 
 function renderReferenceImages() {
-  els.referenceImageList.innerHTML = state.referenceImageIds
+  const chipsHtml = state.referenceImageIds
     .map((id) => {
-      const ref = state.referenceImages.find((r) => r.id === id);
+      const ref = resolveReferenceForDisplay(id);
       const label = escapeHtml(ref ? ref.display_name : "");
       return `
         <div class="reference-image-thumb" title="${label}">
@@ -2162,6 +2234,7 @@ function renderReferenceImages() {
       `;
     })
     .join("");
+  els.referenceImageList.innerHTML = renderSam3PendingBannerHtml() + chipsHtml;
   els.referenceImageList.querySelectorAll("[data-remove-ref]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.referenceImageIds = state.referenceImageIds.filter((id) => id !== btn.dataset.removeRef);
@@ -2171,10 +2244,35 @@ function renderReferenceImages() {
   els.referenceImageList.querySelectorAll("[data-view-ref]").forEach((img) => {
     img.addEventListener("click", () => {
       const id = img.dataset.viewRef;
-      const ref = state.referenceImages.find((r) => r.id === id);
+      const ref = resolveReferenceForDisplay(id);
       openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
     });
   });
+  const banner = els.referenceImageList.querySelector("#sam3PendingBanner");
+  if (banner) banner.addEventListener("click", openSam3PlacementModal);
+}
+
+// A SAM3 placement reference belongs to exactly one image, but
+// referenceImageIds otherwise persists across image switches within a
+// project (see referencePicksByProject) -- so a stale one from whatever
+// image was open before needs dropping, and this image's own placement (if
+// it already prepared one earlier) is selected by default, as if it were
+// still where the user left it.
+function reconcileSam3ReferenceSelection(img) {
+  // An unfinished placement (needs_composite -- still just the raw SAM3
+  // cutout, transparent background) isn't something to feed a generation
+  // with; it's not selectable at all until positioned. See the "needs
+  // positioning" banner in renderReferenceImages for how it's surfaced
+  // instead.
+  const ref = img.sam3_reference;
+  const ownSam3RefId = ref && !ref.needs_composite ? ref.id : null;
+  state.referenceImageIds = state.referenceImageIds.filter(
+    (id) => id === ownSam3RefId || state.referenceImages.some((r) => r.id === id)
+  );
+  if (ownSam3RefId && !state.referenceImageIds.includes(ownSam3RefId) && state.referenceImageIds.length < maxReferenceImages()) {
+    state.referenceImageIds.push(ownSam3RefId);
+  }
+  renderReferenceImages();
 }
 
 function openReferenceImagePicker() {
@@ -2187,9 +2285,10 @@ function openReferenceImagePicker() {
     modal.querySelector("#mCancel").addEventListener("click", closeModal);
     return;
   }
+  const max = maxReferenceImages();
   const modal = openModal(`
     <h3>Add reference image</h3>
-    <p class="dup-section-hint">Select up to ${MAX_REFERENCE_IMAGES} images from this project's reference library.</p>
+    <p class="dup-section-hint">Select up to ${max} images from this project's reference library.</p>
     <div class="picker-grid" id="refPickerGrid"></div>
     <div class="modal-actions"><button id="mCancel" class="btn-ghost">Close</button></div>
   `);
@@ -2198,7 +2297,7 @@ function openReferenceImagePicker() {
   grid.innerHTML = state.referenceImages
     .map((ref) => {
       const selected = state.referenceImageIds.includes(ref.id);
-      const disabled = !selected && state.referenceImageIds.length >= MAX_REFERENCE_IMAGES;
+      const disabled = !selected && state.referenceImageIds.length >= max;
       return `
         <div class="picker-item ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}" data-picker-id="${ref.id}" title="${escapeHtml(ref.display_name)}">
           <img src="${refThumbUrl(ref)}" loading="lazy" />
@@ -2215,7 +2314,7 @@ function openReferenceImagePicker() {
       const idx = state.referenceImageIds.indexOf(id);
       if (idx !== -1) {
         state.referenceImageIds.splice(idx, 1);
-      } else if (state.referenceImageIds.length < MAX_REFERENCE_IMAGES) {
+      } else if (state.referenceImageIds.length < max) {
         state.referenceImageIds.push(id);
       } else {
         return;
@@ -2349,6 +2448,275 @@ function openCropModal({ title, imageUrl, naturalWidth, naturalHeight, initialBo
   });
 }
 
+// ---------------------------------------------------------------------------
+// SAM3 interactive object placement: detects the named object with SAM3 as a
+// transparent cutout, then lets the user drag/resize it directly onto the
+// source image (reusing the crop tool's drag/resize interaction, minus its
+// crop-mask styling) instead of tuning scale/pin numbers and re-running a
+// full ComfyUI generation to see the result. The final composite is saved
+// as a reference image scoped to this one image (db's source_image_id /
+// get_scoped_reference_image) -- excluded from the project's general
+// reference library, and auto-selected for the next generation.
+// ---------------------------------------------------------------------------
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not load image"));
+    img.src = url;
+  });
+}
+
+function existingSam3Prompt(image) {
+  const name = image.sam3_reference?.display_name || "";
+  return name.startsWith("SAM3: ") ? name.slice(6) : "";
+}
+
+// Detection is fire-and-forget (see api.startSam3Cutout): it's just queued
+// here and the modal closes right away, so a long wait behind other work in
+// ComfyUI's queue -- or just wanting to go do something else in the
+// meantime -- never leaves anything blocked. Its result shows up later as a
+// "needs positioning" chit in the sidebar (renderChits) and a banner here in
+// the details panel (renderSam3PendingBannerHtml) once list_images/getImage
+// next report it, via the normal queue poll's anyNewlyFinished handling --
+// no separate polling loop needed for this modal at all.
+function openSam3PlacementModal() {
+  const imageId = state.currentImageId;
+  const image = state.currentImage;
+  if (!imageId || !image) return;
+  const ref = image.sam3_reference;
+  if (ref && ref.needs_composite) {
+    openSam3PositioningModal(imageId, image, ref);
+  } else {
+    renderSam3PromptStep(imageId, image);
+  }
+}
+
+// Loads an already-detected (but unpositioned) cutout straight into the
+// interactive stage -- entered from the "needs positioning" banner/chit,
+// skipping the prompt/detect step since detection already ran in the
+// background.
+async function openSam3PositioningModal(imageId, image, ref) {
+  const modal = openModal(`<h3>Position object (SAM3)</h3><div id="sam3ModalStatus" class="status-line"><span class="spinner"></span><span>Loading...</span></div>`);
+  try {
+    const baseUrl = sourceUrlFor(image).url;
+    const cutoutUrl = `/api/reference-images/${ref.id}/original?v=${ref.id}`;
+    const [baseImg, cutoutImg] = await Promise.all([loadImage(baseUrl), loadImage(cutoutUrl)]);
+    renderSam3StageStep(imageId, image, existingSam3Prompt(image), baseImg, cutoutImg);
+  } catch (e) {
+    modal.querySelector("#sam3ModalStatus").textContent = `Error: ${e.message}`;
+  }
+}
+
+function renderSam3PromptStep(imageId, image) {
+  const existing = image.sam3_reference;
+  const modal = openModal(`
+    <h3>Position object (SAM3)</h3>
+    <p class="dup-section-hint">Detects an object with SAM3 in the background -- once it's ready (watch for the amber chit on this image), come back here to drag and resize it onto the image before saving it as a reference.</p>
+    <div class="field">
+      <label>SAM3 Prompt <span class="hint">(object to detect, e.g. "elephants")</span></label>
+      <input id="sam3ModalPromptInput" type="text" placeholder="Object to detect..." value="${escapeAttr(existingSam3Prompt(image))}" />
+    </div>
+    <div id="sam3ModalStatus" class="status-line"></div>
+    <div class="modal-actions">
+      ${existing ? '<button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Remove placement</button>' : ""}
+      <button id="sam3ModalCancelBtn" class="btn-ghost" type="button">Cancel</button>
+      <button id="sam3ModalDetectBtn" class="btn-primary" type="button">Detect</button>
+    </div>
+  `);
+  const promptInput = modal.querySelector("#sam3ModalPromptInput");
+  const statusEl = modal.querySelector("#sam3ModalStatus");
+  const removeBtn = modal.querySelector("#sam3ModalRemoveBtn");
+  const detectBtn = modal.querySelector("#sam3ModalDetectBtn");
+  modal.querySelector("#sam3ModalCancelBtn").addEventListener("click", closeModal);
+
+  if (removeBtn) {
+    removeBtn.addEventListener("click", async () => {
+      removeBtn.disabled = true;
+      statusEl.textContent = "Removing...";
+      try {
+        await api.clearSam3Reference(imageId);
+        state.referenceImageIds = state.referenceImageIds.filter((id) => id !== existing.id);
+        if (state.currentImageId === imageId) {
+          state.currentImage.sam3_reference = null;
+          renderReferenceImages();
+        }
+        closeModal();
+        loadImages(); // clears the sidebar's "needs positioning" chit if this was an unfinished one
+      } catch (e) {
+        statusEl.textContent = `Error: ${e.message}`;
+        removeBtn.disabled = false;
+      }
+    });
+  }
+  detectBtn.addEventListener("click", async () => {
+    const prompt = promptInput.value.trim();
+    if (!prompt) {
+      statusEl.textContent = "Enter a SAM3 prompt first.";
+      return;
+    }
+    detectBtn.disabled = true;
+    promptInput.disabled = true;
+    statusEl.innerHTML = `<span class="spinner"></span><span>Queuing...</span>`;
+    try {
+      const job = await api.startSam3Cutout(imageId, prompt);
+      mergeQueueJob(job);
+      applyQueueOrdering();
+      renderQueueOverlay();
+      closeModal();
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+      detectBtn.disabled = false;
+      promptInput.disabled = false;
+    }
+  });
+}
+
+function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
+  // Bigger than the crop tool's stage: this tool benefits from more precision
+  // room, and (unlike a crop box) the placement box is allowed to run past
+  // the edges -- see setBox below -- so there's more to see at once.
+  const maxW = 820;
+  const maxH = Math.max(420, Math.round(window.innerHeight * 0.65));
+  const naturalWidth = baseImg.naturalWidth;
+  const naturalHeight = baseImg.naturalHeight;
+  const scale = Math.min(maxW / naturalWidth, maxH / naturalHeight, 1);
+  const dispW = Math.round(naturalWidth * scale);
+  const dispH = Math.round(naturalHeight * scale);
+  const minSize = 12;
+
+  // Default placement: the cutout at its own detected size (capped to fit
+  // the stage), centered -- a much more useful starting point than filling
+  // the whole canvas, since the user is about to drag/resize it anyway.
+  const fitScale = Math.min(dispW / cutoutImg.naturalWidth, dispH / cutoutImg.naturalHeight, 1);
+  const initW = cutoutImg.naturalWidth * fitScale;
+  const initH = cutoutImg.naturalHeight * fitScale;
+
+  const modal = openModal(`
+    <h3>Position object (SAM3)</h3>
+    <div class="crop-stage-wrap sam3-stage-wrap">
+      <div class="crop-stage" id="sam3Stage" style="width:${dispW}px;height:${dispH}px">
+        <img id="sam3BaseImg" src="${baseImg.src}" draggable="false" style="width:${dispW}px;height:${dispH}px" />
+        <div class="placement-box" id="sam3Box">
+          <img src="${cutoutImg.src}" draggable="false" />
+          <div class="crop-handle crop-handle-nw" data-handle="nw"></div>
+          <div class="crop-handle crop-handle-ne" data-handle="ne"></div>
+          <div class="crop-handle crop-handle-sw" data-handle="sw"></div>
+          <div class="crop-handle crop-handle-se" data-handle="se"></div>
+        </div>
+      </div>
+    </div>
+    <p class="dup-section-hint">Drag to move, drag a corner to resize.</p>
+    <div id="sam3ModalStatus" class="status-line"></div>
+    <div class="modal-actions">
+      <button id="sam3ModalBackBtn" class="btn-ghost" type="button">Try a different prompt</button>
+      <button id="sam3ModalCancelBtn" class="btn-ghost" type="button">Cancel</button>
+      <button id="sam3ModalSaveBtn" class="btn-primary" type="button">Save as reference</button>
+    </div>
+  `);
+
+  const stage = modal.querySelector("#sam3Stage");
+  const boxEl = modal.querySelector("#sam3Box");
+  const statusEl = modal.querySelector("#sam3ModalStatus");
+  let box; // current placement in DISPLAY pixel coords, relative to the stage
+
+  // Unlike the crop box, this one is allowed to run past the stage's edges
+  // in either direction -- the final composite (see the Save handler below)
+  // draws it onto a canvas sized to the base image, which silently clips
+  // whatever falls outside, the same way the old ComfyUI-side pin/scale
+  // graph cropped an over-large placement to the canvas before compositing.
+  // Only a generous ceiling (not the stage bounds) keeps it from growing
+  // large enough to lose its own handles off-screen.
+  function setBox(next) {
+    let { x, y, w, h } = next;
+    w = Math.max(minSize, Math.min(w, dispW * 4));
+    h = Math.max(minSize, Math.min(h, dispH * 4));
+    box = { x, y, w, h };
+    boxEl.style.left = `${x}px`;
+    boxEl.style.top = `${y}px`;
+    boxEl.style.width = `${w}px`;
+    boxEl.style.height = `${h}px`;
+  }
+  setBox({ x: (dispW - initW) / 2, y: (dispH - initH) / 2, w: initW, h: initH });
+
+  function pointerPos(evt) {
+    const rect = stage.getBoundingClientRect();
+    return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+  }
+
+  let drag = null; // { mode: "move" | "resize", handle, start: {x,y}, startBox }
+  boxEl.addEventListener("pointerdown", (evt) => {
+    const handle = evt.target.dataset.handle;
+    drag = { mode: handle ? "resize" : "move", handle, start: pointerPos(evt), startBox: { ...box } };
+    boxEl.setPointerCapture(evt.pointerId);
+    evt.preventDefault();
+  });
+  boxEl.addEventListener("pointermove", (evt) => {
+    if (!drag) return;
+    const p = pointerPos(evt);
+    const dx = p.x - drag.start.x;
+    const dy = p.y - drag.start.y;
+    if (drag.mode === "move") {
+      setBox({ x: drag.startBox.x + dx, y: drag.startBox.y + dy, w: drag.startBox.w, h: drag.startBox.h });
+      return;
+    }
+    let { x, y, w, h } = drag.startBox;
+    if (drag.handle.includes("n")) {
+      y = drag.startBox.y + dy;
+      h = drag.startBox.h - dy;
+    }
+    if (drag.handle.includes("s")) h = drag.startBox.h + dy;
+    if (drag.handle.includes("w")) {
+      x = drag.startBox.x + dx;
+      w = drag.startBox.w - dx;
+    }
+    if (drag.handle.includes("e")) w = drag.startBox.w + dx;
+    setBox({ x, y, w, h });
+  });
+  boxEl.addEventListener("pointerup", () => {
+    drag = null;
+  });
+  boxEl.addEventListener("pointercancel", () => {
+    drag = null;
+  });
+
+  modal.querySelector("#sam3ModalCancelBtn").addEventListener("click", closeModal);
+  modal.querySelector("#sam3ModalBackBtn").addEventListener("click", () => renderSam3PromptStep(imageId, image));
+  modal.querySelector("#sam3ModalSaveBtn").addEventListener("click", async (evt) => {
+    const saveBtn = evt.currentTarget;
+    saveBtn.disabled = true;
+    statusEl.innerHTML = `<span class="spinner"></span><span>Saving...</span>`;
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = naturalWidth;
+      canvas.height = naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(baseImg, 0, 0, naturalWidth, naturalHeight);
+      ctx.drawImage(cutoutImg, box.x / scale, box.y / scale, box.w / scale, box.h / scale);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: prompt });
+      if (state.currentImageId === imageId) {
+        state.currentImage.sam3_reference = savedRef;
+        const max = maxReferenceImages();
+        state.referenceImageIds = state.referenceImageIds.filter((id) => id !== savedRef.id);
+        if (state.referenceImageIds.length >= max) state.referenceImageIds.length = max - 1;
+        state.referenceImageIds.push(savedRef.id);
+        renderReferenceImages();
+      }
+      closeModal();
+      // The sidebar's "needs positioning" chit (renderChits) is driven by
+      // list_images' unfinished_sam3_reference_id, not by anything patched
+      // into state above -- refresh it so the chit clears right away instead
+      // of on whatever next incidental reload happens to occur.
+      loadImages();
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+      saveBtn.disabled = false;
+    }
+  });
+}
+
+els.sam3PlaceBtn.addEventListener("click", openSam3PlacementModal);
 els.addReferenceImageBtn.addEventListener("click", openReferenceImagePicker);
 els.engineSelect.addEventListener("change", updateReferenceImagesVisibility);
 // The dropdown remembers the last engine picked; Settings' "Default Engine"
@@ -2371,6 +2739,38 @@ function updateAspectRatioVisibility() {
 }
 els.engineSelect.addEventListener("change", updateAspectRatioVisibility);
 updateAspectRatioVisibility();
+
+// ---------------------------------------------------------------------------
+// ComfyUI workflow picker. The default Flux.2 edit workflow covers most
+// generations; the two SAM3 workflows are advanced alternatives that run an
+// upstream object-detection/rescale pass (useful for shrinking or growing a
+// specific object) and need their own prompt plus a few numeric settings --
+// "sam3" scales it uniformly (scale by), "sam3_xy" scales width/height
+// independently (scale X / scale Y), e.g. to stretch or squash it.
+// Only shown for the comfyui engine, and only remembered per-engine like it.
+// ---------------------------------------------------------------------------
+const COMFY_WORKFLOW_STORAGE_KEY = "grok_img2img.comfyWorkflow";
+function updateComfyWorkflowVisibility() {
+  const isComfy = els.engineSelect.value === "comfyui";
+  const workflow = els.comfyWorkflowSelect.value;
+  els.comfyWorkflowRow.style.display = isComfy ? "flex" : "none";
+  els.sam3Fields.style.display = isSam3Workflow() ? "flex" : "none";
+  els.sam3ScaleByField.style.display = workflow === "sam3" ? "flex" : "none";
+  els.sam3ScaleXField.style.display = workflow === "sam3_xy" ? "flex" : "none";
+  els.sam3ScaleYField.style.display = workflow === "sam3_xy" ? "flex" : "none";
+}
+els.engineSelect.addEventListener("change", updateComfyWorkflowVisibility);
+els.comfyWorkflowSelect.addEventListener("change", () => {
+  localStorage.setItem(COMFY_WORKFLOW_STORAGE_KEY, els.comfyWorkflowSelect.value);
+  updateComfyWorkflowVisibility();
+  updateReferenceImagesVisibility();
+});
+const savedComfyWorkflow = localStorage.getItem(COMFY_WORKFLOW_STORAGE_KEY);
+if (savedComfyWorkflow && [...els.comfyWorkflowSelect.options].some((o) => o.value === savedComfyWorkflow)) {
+  els.comfyWorkflowSelect.value = savedComfyWorkflow;
+}
+updateComfyWorkflowVisibility();
+updateReferenceImagesVisibility();
 
 // ---------------------------------------------------------------------------
 // Source pre-processing (rotate / crop / pad). Only the settings are stored on
@@ -2684,6 +3084,10 @@ async function generate() {
     els.generateStatus.textContent = "Enter a prompt first.";
     return;
   }
+  if (isSam3Workflow() && !els.sam3PromptInput.value.trim()) {
+    els.generateStatus.textContent = "Enter a SAM3 prompt first.";
+    return;
+  }
 
   // The button only disables for the round-trip that enqueues the job — the
   // actual generation runs in the background, so it's fine to queue several
@@ -2720,12 +3124,23 @@ async function enqueueGeneration(imageId) {
   const promptId = state.selectedPromptId;
   const engine = els.engineSelect.value;
   const aspectRatio = engine === "grok" ? els.aspectRatioSelect.value || null : null;
+  const comfyWorkflow = engine === "comfyui" ? els.comfyWorkflowSelect.value : null;
+  const isSam3 = comfyWorkflow === "sam3";
+  const isSam3Xy = comfyWorkflow === "sam3_xy";
+  const numOrUndefined = (input) => (input.value !== "" ? parseFloat(input.value) : undefined);
   const job = await api.generateResult(imageId, {
     prompt_id: promptId,
     adhoc_prompt_text: promptText,
     engine,
     aspect_ratio: aspectRatio,
     reference_image_ids: state.referenceImageIds.length ? state.referenceImageIds : undefined,
+    comfyui_workflow: comfyWorkflow || undefined,
+    sam3_prompt: isSam3 || isSam3Xy ? els.sam3PromptInput.value.trim() : undefined,
+    sam3_scale_by: isSam3 ? numOrUndefined(els.sam3ScaleByInput) : undefined,
+    sam3_scale_x: isSam3Xy ? numOrUndefined(els.sam3ScaleXInput) : undefined,
+    sam3_scale_y: isSam3Xy ? numOrUndefined(els.sam3ScaleYInput) : undefined,
+    sam3_lr_pin: isSam3 || isSam3Xy ? numOrUndefined(els.sam3LrPinInput) : undefined,
+    sam3_tb_pin: isSam3 || isSam3Xy ? numOrUndefined(els.sam3TbPinInput) : undefined,
   });
   mergeQueueJob(job);
   return job;
@@ -2751,7 +3166,7 @@ async function pollQueue() {
   const previousQueue = state.queue;
   state.queue = jobs;
   for (const job of jobs) {
-    if (job.status === "error" && !state.failedJobs.has(job.id)) state.failedJobs.set(job.id, job);
+    if (job.status === "error" && job.kind !== "sam3_cutout" && !state.failedJobs.has(job.id)) state.failedJobs.set(job.id, job);
   }
 
   const currentIds = new Set(jobs.map((j) => j.id));
@@ -2893,6 +3308,18 @@ function formatJobStatus(job) {
   const elapsed = ` (${formatElapsed(jobElapsedSeconds(job))})`;
   if (job.cancel_requested) return `Cancelling...${elapsed}`;
   if (job.status === "queued") return `Queued...${elapsed}`;
+  if (job.kind === "sam3_cutout") {
+    switch (job.phase) {
+      case "uploading":
+        return `Uploading image to ComfyUI...${elapsed}`;
+      case "queued":
+        return `Queued on ComfyUI...${elapsed}`;
+      case "saving":
+        return `Finishing up...${elapsed}`;
+      default:
+        return `Detecting "${job.prompt_text}" with SAM3...${elapsed}`;
+    }
+  }
   if (job.engine === "comfyui") {
     switch (job.phase) {
       case "uploading":
@@ -3520,6 +3947,7 @@ initHotkeys({
   els.engineSelect.value = engineKnown(savedEngine) ? savedEngine : config.default_engine;
   updateReferenceImagesVisibility();
   updateAspectRatioVisibility();
+  updateComfyWorkflowVisibility();
   pollQueue();
   setInterval(pollQueue, 1200);
 })();

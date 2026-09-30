@@ -147,14 +147,50 @@
             <option value="3:4">3:4</option>
           </select>
         </div>
+        <div class="field-row" id="comfyWorkflowRow" style="display:none">
+          <select id="comfyWorkflowSelect" title="ComfyUI workflow to run">
+            <option value="default">Default (Flux.2 edit)</option>
+            <option value="sam3">SAM3 object scaling (advanced)</option>
+            <option value="sam3_xy">SAM3 object scaling — X/Y (advanced)</option>
+          </select>
+        </div>
+        <div class="field" id="sam3Fields" style="display:none">
+          <label>SAM3 Prompt <span class="hint">(object to detect, e.g. "elephants")</span></label>
+          <input id="sam3PromptInput" type="text" placeholder="Object to detect..." />
+          <div class="field-row" style="margin-top:6px">
+            <div class="field" id="sam3ScaleByField" style="margin-bottom:0">
+              <label>Scale by</label>
+              <input id="sam3ScaleByInput" type="number" step="0.05" min="0.1" max="5" value="1.3" />
+            </div>
+            <div class="field" id="sam3ScaleXField" style="margin-bottom:0">
+              <label>Scale X</label>
+              <input id="sam3ScaleXInput" type="number" step="0.05" min="0.1" max="5" value="1.3" />
+            </div>
+            <div class="field" id="sam3ScaleYField" style="margin-bottom:0">
+              <label>Scale Y</label>
+              <input id="sam3ScaleYInput" type="number" step="0.05" min="0.1" max="5" value="1.3" />
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label>LR Pin</label>
+              <input id="sam3LrPinInput" type="number" step="0.05" min="0" max="1" value="0.5" />
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label>TB Pin</label>
+              <input id="sam3TbPinInput" type="number" step="0.05" min="0" max="1" value="0.5" />
+            </div>
+          </div>
+        </div>
         <div class="preprocess-note" id="preprocessNote" style="display:none">
           <span id="preprocessNoteText"></span>
           <button type="button" class="btn-ghost small" id="preprocessClearBtn" title="Send the original, unmodified source instead">Remove</button>
         </div>
         <div class="field" id="referenceImagesField" style="display:none">
-          <label>Reference images <span class="hint">(up to 2; not all fal.ai models support these)</span></label>
+          <label>Reference images <span class="hint" id="referenceImagesHint">(up to 2; not all fal.ai models support these)</span></label>
           <div id="referenceImageList" class="reference-image-list"></div>
-          <button id="addReferenceImageBtn" class="btn-ghost small" type="button">+ Add reference image</button>
+          <div class="field-row" style="margin-bottom:0">
+            <button id="addReferenceImageBtn" class="btn-ghost small" type="button">+ Add reference image</button>
+            <button id="sam3PlaceBtn" class="btn-ghost small" type="button" title="Detect an object with SAM3 and drag/resize it onto this image as a reference">✨ Position object (SAM3)</button>
+          </div>
         </div>
         <div class="field-row">
           <button id="generateBtn" class="btn-primary">✨ Generate</button>

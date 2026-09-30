@@ -25,15 +25,50 @@ try:
 except ImportError:
     _ws_connect = None
 
-LOAD_IMAGE_NODE = "637"
 POSITIVE_PROMPT_NODE = "515:74"
 SEED_NODE = "515:73"
 SAVE_IMAGE_NODE = "516"
-# Optional extra reference images, in slot order. The workflow's index node
-# (INDEX_NODE) tells a chain of switch nodes how many of these are "real" --
-# anything beyond that count stays wired to a blank placeholder internally.
-EXTRA_IMAGE_NODES = ["605", "638"]
+# The workflow's index node tells a chain of switch nodes how many of the
+# extra-image slots below are "real" -- anything beyond that count stays
+# wired to a blank placeholder internally. Shared by both bundled workflows.
 INDEX_NODE = "515:604"
+
+# The bundled workflows share the same Flux.2 edit pipeline (the node ids
+# above) but wire the source image differently. The default workflow loads it
+# straight into a single LoadImage node with two free extra-reference slots.
+# The SAM3 workflows (comfyui_flux_and_SAM3*.json) insert an upstream
+# object-detection/rescale pass and feed its output in as the first "extra"
+# reference image, leaving one manual reference slot free. "sam3" scales the
+# detected object uniformly (one scale_by factor); "sam3_xy" scales its width
+# and height independently (two scale factors, e.g. to stretch/squash it).
+WORKFLOW_NODES = {
+    "default": {
+        "load_image_node": "637",
+        "extra_image_nodes": ["605", "638"],
+    },
+    "sam3": {
+        "load_image_node": "669",
+        "extra_image_nodes": ["605"],
+        "sam3_prompt_node": "643:640",
+        "scale_by_node": "697:658",
+        "lr_pin_node": "697:703",
+        "tb_pin_node": "697:702",
+    },
+    "sam3_xy": {
+        "load_image_node": "669",
+        "extra_image_nodes": ["605"],
+        "sam3_prompt_node": "643:640",
+        "scale_x_node": "697:710",
+        "scale_y_node": "697:711",
+        "lr_pin_node": "697:703",
+        "tb_pin_node": "697:702",
+    },
+}
+
+
+def max_extra_images(workflow="default"):
+    return len(WORKFLOW_NODES.get(workflow, WORKFLOW_NODES["default"])["extra_image_nodes"])
+
 
 POLL_INTERVAL_SECONDS = 1.0
 POLL_TIMEOUT_SECONDS = 300
@@ -96,65 +131,86 @@ def _upload_image(base_url, image_path, max_dim=None):
     return response.json()["name"]
 
 
-def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, max_dim=None, extra_source_paths=None):
-    """Runs the Flux.2 ComfyUI workflow against a source image on disk, plus up
-    to len(EXTRA_IMAGE_NODES) additional reference images. Returns
-    (image_bytes, revised_prompt, processing_seconds) — revised_prompt is
-    always None since ComfyUI doesn't rewrite prompts the way the Grok API
-    does. processing_seconds covers only actual GPU execution (from the
-    moment ComfyUI starts running our prompt to completion), excluding time
-    spent waiting behind other jobs in ComfyUI's own queue; it's None if
-    that moment was never observed (e.g. HTTP-polling fallback that missed
-    a very short run).
+def generate_image_edit(
+    base_url,
+    workflow_path,
+    source_path,
+    prompt,
+    job_id,
+    max_dim=None,
+    extra_source_paths=None,
+    workflow="default",
+    sam3_prompt=None,
+    scale_by=None,
+    scale_x=None,
+    scale_y=None,
+    lr_pin=None,
+    tb_pin=None,
+):
+    """Runs a Flux.2 ComfyUI workflow against a source image on disk, plus up
+    to max_extra_images(workflow) additional reference images. `workflow`
+    selects which bundled workflow's node ids apply (see WORKFLOW_NODES);
+    `workflow_path` is the actual graph JSON to load, and should match.
+    sam3_prompt/lr_pin/tb_pin apply to both SAM3 workflows; scale_by only to
+    "sam3" (uniform scale) and scale_x/scale_y only to "sam3_xy" (independent
+    width/height scale). Values for a node the selected workflow doesn't have
+    are ignored. Returns (image_bytes, revised_prompt,
+    processing_seconds) — revised_prompt is always None since ComfyUI doesn't
+    rewrite prompts the way the Grok API does. processing_seconds covers only
+    actual GPU execution (from the moment ComfyUI starts running our prompt
+    to completion), excluding time spent waiting behind other jobs in
+    ComfyUI's own queue; it's None if that moment was never observed (e.g.
+    HTTP-polling fallback that missed a very short run).
     """
     base_url = base_url.rstrip("/")
     extra_source_paths = list(extra_source_paths or [])
-    if len(extra_source_paths) > len(EXTRA_IMAGE_NODES):
-        raise ValueError(f"ComfyUI workflow supports at most {len(EXTRA_IMAGE_NODES)} extra reference images")
+    nodes = WORKFLOW_NODES.get(workflow, WORKFLOW_NODES["default"])
+    extra_image_nodes = nodes["extra_image_nodes"]
+    if len(extra_source_paths) > len(extra_image_nodes):
+        raise ValueError(f"ComfyUI workflow supports at most {len(extra_image_nodes)} extra reference images")
 
     if jobs.is_cancelled(job_id):
         raise jobs.GenerationCancelled()
 
     jobs.update_job(job_id, phase="uploading", value=0, max=0)
-    workflow = _load_workflow(workflow_path)
-    _align_scale_nodes(workflow)
+    graph = _load_workflow(workflow_path)
+    _align_scale_nodes(graph)
     uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
 
     # Every LoadImage node gets pointed at the uploaded source image by default.
-    # The workflow has reference-image slots (EXTRA_IMAGE_NODES) that ComfyUI
+    # The workflow has reference-image slots (extra_image_nodes) that ComfyUI
     # still evaluates even when the index node below leaves them switched out,
     # so they need a valid file to read too -- falling back to the primary
     # image is harmless since their output is discarded downstream in that case.
-    for node in workflow.values():
+    for node in graph.values():
         if node.get("class_type") == "LoadImage":
             node["inputs"]["image"] = uploaded_name
 
-    for node_id, extra_path in zip(EXTRA_IMAGE_NODES, extra_source_paths):
-        workflow[node_id]["inputs"]["image"] = _upload_image(base_url, extra_path, max_dim=max_dim)
+    for node_id, extra_path in zip(extra_image_nodes, extra_source_paths):
+        graph[node_id]["inputs"]["image"] = _upload_image(base_url, extra_path, max_dim=max_dim)
 
-    if INDEX_NODE in workflow:
-        workflow[INDEX_NODE]["inputs"]["b"] = len(extra_source_paths)
+    if INDEX_NODE in graph:
+        graph[INDEX_NODE]["inputs"]["b"] = len(extra_source_paths)
 
-    if POSITIVE_PROMPT_NODE in workflow:
-        workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = prompt
-    if SEED_NODE in workflow:
-        workflow[SEED_NODE]["inputs"]["noise_seed"] = random.randint(0, 2**63 - 1)
+    if POSITIVE_PROMPT_NODE in graph:
+        graph[POSITIVE_PROMPT_NODE]["inputs"]["text"] = prompt
+    if SEED_NODE in graph:
+        graph[SEED_NODE]["inputs"]["noise_seed"] = random.randint(0, 2**63 - 1)
 
-    jobs.update_job(job_id, phase="queued")
-    response = requests.post(
-        f"{base_url}/prompt", json={"prompt": workflow, "client_id": job_id}, timeout=REQUEST_TIMEOUT_SECONDS
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"ComfyUI rejected the prompt: {response.status_code} {response.text}")
-    data = response.json()
-    if data.get("node_errors"):
-        raise RuntimeError(f"ComfyUI reported node errors: {data['node_errors']}")
-    prompt_id = data["prompt_id"]
-    jobs.update_job(job_id, prompt_id=prompt_id)
+    if sam3_prompt is not None and nodes.get("sam3_prompt_node"):
+        graph[nodes["sam3_prompt_node"]]["inputs"]["text"] = sam3_prompt
+    if scale_by is not None and nodes.get("scale_by_node"):
+        graph[nodes["scale_by_node"]]["inputs"]["scale_by"] = scale_by
+    if scale_x is not None and nodes.get("scale_x_node"):
+        graph[nodes["scale_x_node"]]["inputs"]["value"] = scale_x
+    if scale_y is not None and nodes.get("scale_y_node"):
+        graph[nodes["scale_y_node"]]["inputs"]["value"] = scale_y
+    if lr_pin is not None and nodes.get("lr_pin_node"):
+        graph[nodes["lr_pin_node"]]["inputs"]["value"] = lr_pin
+    if tb_pin is not None and nodes.get("tb_pin_node"):
+        graph[nodes["tb_pin_node"]]["inputs"]["value"] = tb_pin
 
-    if jobs.is_cancelled(job_id):
-        _cancel_on_comfyui(base_url, prompt_id)
-        raise jobs.GenerationCancelled()
+    prompt_id = _submit_prompt(base_url, graph, job_id)
 
     history_entry = _wait_for_result(base_url, job_id, prompt_id)
     finished_at = time.time()
@@ -171,6 +227,84 @@ def generate_image_edit(base_url, workflow_path, source_path, prompt, job_id, ma
     processing_started_at = job.get("processing_started_at") if job else None
     processing_seconds = (finished_at - processing_started_at) if processing_started_at else None
     return image_bytes, None, processing_seconds
+
+
+CUTOUT_PROMPT_NODE = "643:640"
+CUTOUT_IMAGE_NODE = "902"
+CUTOUT_MASK_NODE = "903"
+
+
+def detect_sam3_object(base_url, workflow_path, source_path, sam3_prompt, job_id, max_dim=None):
+    """Runs the lightweight SAM3 cutout workflow (comfyui_sam3_cutout.json):
+    detects the prompted object in source_path and returns just that object,
+    tightly cropped with its mask baked in as alpha (RGBA PNG bytes) -- no
+    Flux.2 generation involved. Meant for an interactive frontend tool where
+    the user drags/resizes the cutout onto the source image themselves,
+    rather than tuning scale/pin numbers and re-running a full generation
+    each time. job_id is a real queue job (see jobs.py, kind="sam3_cutout")
+    -- ComfyUI only runs one prompt at a time, so this can end up waiting
+    behind a real generation, and tracking it as a normal job keeps that
+    wait visible and cancellable instead of just blocking the caller.
+    """
+    base_url = base_url.rstrip("/")
+    if jobs.is_cancelled(job_id):
+        raise jobs.GenerationCancelled()
+    jobs.update_job(job_id, phase="uploading", value=0, max=0)
+    graph = _load_workflow(workflow_path)
+    _align_scale_nodes(graph)
+    uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
+
+    for node in graph.values():
+        if node.get("class_type") == "LoadImage":
+            node["inputs"]["image"] = uploaded_name
+    if CUTOUT_PROMPT_NODE in graph:
+        graph[CUTOUT_PROMPT_NODE]["inputs"]["text"] = sam3_prompt
+
+    prompt_id = _submit_prompt(base_url, graph, job_id)
+    history_entry = _wait_for_result(base_url, job_id, prompt_id)
+    jobs.update_job(job_id, phase="saving")
+    outputs = history_entry.get("outputs", {})
+    image_output = outputs.get(CUTOUT_IMAGE_NODE)
+    mask_output = outputs.get(CUTOUT_MASK_NODE)
+    if not image_output or not image_output.get("images") or not mask_output or not mask_output.get("images"):
+        raise RuntimeError(f"ComfyUI cutout run finished without the expected outputs. Outputs: {outputs}")
+
+    image_bytes = _download_image(base_url, image_output["images"][0])
+    mask_bytes = _download_image(base_url, mask_output["images"][0])
+    return _combine_cutout(image_bytes, mask_bytes)
+
+
+def _combine_cutout(image_bytes, mask_bytes):
+    """Joins a cropped RGB object image with its cropped mask (a black/white
+    image of the same size) into one RGBA PNG -- transparent background,
+    opaque object -- ready to drag around on a canvas client-side.
+    """
+    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    mask = Image.open(BytesIO(mask_bytes)).convert("L")
+    rgba = image.copy()
+    rgba.putalpha(mask)
+    buf = BytesIO()
+    rgba.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _submit_prompt(base_url, graph, job_id):
+    jobs.update_job(job_id, phase="queued")
+    response = requests.post(
+        f"{base_url}/prompt", json={"prompt": graph, "client_id": job_id}, timeout=REQUEST_TIMEOUT_SECONDS
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"ComfyUI rejected the prompt: {response.status_code} {response.text}")
+    data = response.json()
+    if data.get("node_errors"):
+        raise RuntimeError(f"ComfyUI reported node errors: {data['node_errors']}")
+    prompt_id = data["prompt_id"]
+    jobs.update_job(job_id, prompt_id=prompt_id)
+
+    if jobs.is_cancelled(job_id):
+        _cancel_on_comfyui(base_url, prompt_id)
+        raise jobs.GenerationCancelled()
+    return prompt_id
 
 
 def _wait_for_result(base_url, job_id, prompt_id):

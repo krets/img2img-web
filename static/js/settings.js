@@ -100,6 +100,9 @@ export async function openSettingsModal() {
       </div>
       <div class="field"><label>ComfyUI URL</label><input id="mComfyUrl" type="text" value="${config.comfyui_url}" /></div>
       <div class="field"><label>ComfyUI Workflow File</label><input id="mComfyWorkflow" type="text" value="${config.comfyui_workflow_path}" /></div>
+      <div class="field"><label>ComfyUI SAM3 Workflow File <span class="hint">(advanced object-scaling workflow)</span></label><input id="mComfySam3Workflow" type="text" value="${config.comfyui_sam3_workflow_path}" /></div>
+      <div class="field"><label>ComfyUI SAM3 X/Y Workflow File <span class="hint">(advanced, independent X/Y scaling)</span></label><input id="mComfySam3XyWorkflow" type="text" value="${config.comfyui_sam3xy_workflow_path}" /></div>
+      <div class="field"><label>ComfyUI SAM3 Cutout Workflow File <span class="hint">(used by the "Position object" tool)</span></label><input id="mComfySam3CutoutWorkflow" type="text" value="${config.comfyui_sam3_cutout_workflow_path}" /></div>
       <div class="settings-section-actions">
         <button id="mCheckComfy" class="btn-ghost small">Check Connection</button>
         <button id="mComfyFree" class="btn-warn small" title="Unload models and clear ComfyUI's execution cache">⏏ Unload Models</button>
@@ -246,6 +249,9 @@ export async function openSettingsModal() {
       default_engine: modal.querySelector("#mEngine").value,
       comfyui_url: modal.querySelector("#mComfyUrl").value,
       comfyui_workflow_path: modal.querySelector("#mComfyWorkflow").value,
+      comfyui_sam3_workflow_path: modal.querySelector("#mComfySam3Workflow").value,
+      comfyui_sam3xy_workflow_path: modal.querySelector("#mComfySam3XyWorkflow").value,
+      comfyui_sam3_cutout_workflow_path: modal.querySelector("#mComfySam3CutoutWorkflow").value,
       fal_api_key: modal.querySelector("#mFalKey").value || undefined,
       fal_model: falModel,
       xai_management_key: modal.querySelector("#mXaiMgmtKey").value || undefined,

@@ -2225,7 +2225,25 @@ function renderSam3PendingBannerHtml() {
   `;
 }
 
+// The button's wording reflects what clicking it will actually do, which
+// changed once detection became fire-and-forget (see openSam3PlacementModal):
+// most of the time it starts a fresh background detection, but once one has
+// finished and is sitting unpositioned (the banner above), clicking it jumps
+// straight to positioning instead, skipping the prompt step entirely -- so
+// "Position object" was misleading as the one label for both.
+function updateSam3PlaceBtn() {
+  const ref = state.currentImage?.sam3_reference;
+  if (ref && ref.needs_composite) {
+    els.sam3PlaceBtn.textContent = "📍 Position object (SAM3)";
+    els.sam3PlaceBtn.title = "Drag and resize the already-detected object onto this image";
+  } else {
+    els.sam3PlaceBtn.textContent = "✨ Detect object (SAM3)";
+    els.sam3PlaceBtn.title = "Detect an object with SAM3 in the background, then position it onto this image";
+  }
+}
+
 function renderReferenceImages() {
+  updateSam3PlaceBtn();
   const chipsHtml = state.referenceImageIds
     .map((id) => {
       const ref = resolveReferenceForDisplay(id);
@@ -2515,7 +2533,7 @@ async function openSam3PositioningModal(imageId, image, ref) {
 function renderSam3PromptStep(imageId, image) {
   const existing = image.sam3_reference;
   const modal = openModal(`
-    <h3>Position object (SAM3)</h3>
+    <h3>Detect object (SAM3)</h3>
     <p class="dup-section-hint">Detects an object with SAM3 in the background -- once it's ready (watch for the amber chit on this image), come back here to drag and resize it onto the image before saving it as a reference.</p>
     <div class="field">
       <label>SAM3 Prompt <span class="hint">(object to detect, e.g. "elephants")</span></label>

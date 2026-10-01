@@ -143,6 +143,7 @@ body.manage-page { display: flex; flex-direction: column; }
 }
 .prompt-report th.sortable { cursor: pointer; user-select: none; }
 .prompt-report th.sortable:hover, .prompt-report th.sorted { color: #e6e6eb; }
+.prompt-report th.num { text-align: right; }
 .prompt-report td { padding: 6px 8px; border-bottom: 1px solid #22242c; vertical-align: top; }
 .prompt-report tbody tr { cursor: pointer; }
 .prompt-report tbody tr:hover { background: rgba(139,92,246,0.08); }
@@ -242,7 +243,13 @@ body.manage-page { display: flex; flex-direction: column; }
 .review-ref-thumb:hover { border-color: #f9a8d4; }
 .review-ref-thumb.gone { font-size: 9px; color: #6b6f7d; border-style: dashed; }
 
+.storage-count { margin-left: 4px; font-size: 11px; color: #6b6f7d; }
 .storage-downscale { margin-top: 20px; padding-top: 12px; border-top: 1px solid #2a2c35; }
 .storage-downscale h3 { margin: 0 0 4px; font-size: 14px; }
 .prompt-report tfoot th { text-align: left; padding: 6px 8px; border-top: 1px solid #2a2c35; }
 .prompt-report tfoot th.num { text-align: right; }
+.storage-candidate-wrap { max-height: 420px; overflow-y: auto; }
+.storage-candidates tbody tr { cursor: default; }
+.storage-candidates td { vertical-align: middle; }
+.storage-candidates img { object-fit: cover; border-radius: 3px; display: block; }
+.storage-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: rgba(139,92,246,0.25); color: #c4b5fd; }

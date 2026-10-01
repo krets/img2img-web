@@ -101,14 +101,16 @@ def storage_usage_report(body: StorageScopeIn):
 
 @router.post("/storage/downscale/preview")
 def downscale_preview(body: DownscaleIn):
-    """Source images a downscale to max_dim would shrink, with the estimated saving."""
+    """Each source image a downscale to max_dim could shrink, with the estimated saving."""
     return storage_usage.downscale_preview(body.project_ids, body.include_archived, body.max_dim)
 
 
 @router.post("/storage/downscale")
 def start_downscale(body: DownscaleIn):
-    """Starts replacing oversized sources with downscaled copies. Poll GET /storage/downscale/{job_id}."""
-    return storage_usage.start_downscale(body.project_ids, body.include_archived, body.max_dim)
+    """Starts replacing the chosen oversized sources with downscaled copies. Poll GET /storage/downscale/{job_id}."""
+    if not body.image_ids:
+        raise HTTPException(400, "Choose the images to downscale")
+    return storage_usage.start_downscale(body.project_ids, body.include_archived, body.max_dim, body.image_ids)
 
 
 @router.get("/storage/downscale/{job_id}")

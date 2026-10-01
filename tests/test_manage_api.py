@@ -511,7 +511,11 @@ def test_storage_usage_splits_live_and_trash(client, lib):
     row = body["projects"][0]
     assert row["sources"] > 0 and row["results"] > 0 and row["trash"] > 0
     assert row["source_count"] == 1 and row["result_count"] == 1
+    assert row["reference_count"] == 0 and row["trash_count"] == 2  # dead source + deleted result
     assert row["total"] == sum(row[k] for k in ("sources", "references", "results", "thumbnails", "trash"))
+    assert row["total_count"] == sum(
+        row[k] for k in ("source_count", "reference_count", "result_count", "thumbnail_count", "trash_count")
+    )
     assert body["totals"]["total"] == row["total"]
     assert body["disk"]["free"] > 0
 
@@ -529,8 +533,11 @@ def test_downscale_replaces_source_and_scales_crop(client, lib):
     scope = {"project_ids": [p], "max_dim": 400}
     prev = client.post("/api/manage/storage/downscale/preview", json=scope).json()
     assert prev["count"] == 1 and prev["est_saved"] > 0
+    item = prev["items"][0]
+    assert item["image_id"] == iid and item["has_crop"] and (item["new_width"], item["new_height"]) == (400, 200)
+    assert client.post("/api/manage/storage/downscale", json=scope).status_code == 400  # nothing chosen
 
-    job = client.post("/api/manage/storage/downscale", json=scope).json()
+    job = client.post("/api/manage/storage/downscale", json={**scope, "image_ids": [iid]}).json()
     for _ in range(100):
         job = client.get(f"/api/manage/storage/downscale/{job['id']}").json()
         if job["status"] != "running":
@@ -545,3 +552,18 @@ def test_downscale_replaces_source_and_scales_crop(client, lib):
     assert row["preprocess"]["crop"] == {"x": 50, "y": 25, "w": 200, "h": 100}
     assert db.get_image(small)["width"] == 100
     assert client.post("/api/manage/storage/downscale/preview", json=scope).json()["count"] == 0
+
+
+def test_downscale_only_touches_chosen_images(client, lib):
+    p = lib.project("P")
+    keep = lib.source(p, "keep", img=scene(random.Random(1), 800, 400), write=True)
+    shrink = lib.source(p, "shrink", img=scene(random.Random(2), 800, 400), write=True)
+    job = client.post("/api/manage/storage/downscale",
+                      json={"project_ids": [p], "max_dim": 400, "image_ids": [shrink]}).json()
+    for _ in range(100):
+        job = client.get(f"/api/manage/storage/downscale/{job['id']}").json()
+        if job["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert job["total"] == 1
+    assert db.get_image(keep)["width"] == 800 and db.get_image(shrink)["width"] == 400

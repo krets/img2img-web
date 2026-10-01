@@ -171,8 +171,10 @@ class StorageScopeIn(BaseModel):
 
 
 class DownscaleIn(StorageScopeIn):
-    """Shrink source images whose long edge exceeds max_dim, in place."""
+    """Shrink source images whose long edge exceeds max_dim, in place. Running
+    one takes an explicit image_ids list; previews leave it out."""
     max_dim: int = Field(ge=256, le=16000)
+    image_ids: Optional[list[str]] = None
 
 
 class DuplicatesIn(BaseModel):

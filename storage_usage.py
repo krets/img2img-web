@@ -41,12 +41,15 @@ def _size(path):
         return 0
 
 
-def _dir_size(path):
+def _dir_stats(path):
+    """(total bytes, file count) for everything under path."""
     total = 0
+    count = 0
     for root, _dirs, files in os.walk(path):
         for name in files:
             total += _size(os.path.join(root, name))
-    return total
+            count += 1
+    return total, count
 
 
 def scope_projects(project_ids, include_archived):
@@ -73,17 +76,27 @@ def usage(project_ids, include_archived=False):
     projects = []
     for pid, name in scope_projects(project_ids, include_archived):
         row = {"project_id": pid, "project_name": name, "sources": 0, "references": 0, "results": 0,
-               "thumbnails": 0, "trash": 0, "source_count": 0, "result_count": 0}
+               "thumbnails": 0, "trash": 0, "source_count": 0, "reference_count": 0, "result_count": 0,
+               "thumbnail_count": 0, "trash_count": 0}
         for img in conn.execute("SELECT file_name, is_deleted FROM images WHERE project_id = ?", (pid,)):
             size = _size(storage.source_image_path(pid, img["file_name"]))
-            row["trash" if img["is_deleted"] else "sources"] += size
-            row["source_count"] += 0 if img["is_deleted"] else 1
+            if img["is_deleted"]:
+                row["trash"] += size
+                row["trash_count"] += 1
+            else:
+                row["sources"] += size
+                row["source_count"] += 1
         for ref in conn.execute(
             "SELECT original_file_name, file_name, is_deleted FROM reference_images WHERE project_id = ?", (pid,)
         ):
             names = {ref["original_file_name"], ref["file_name"]}
             size = sum(_size(storage.reference_image_path(pid, n)) for n in names)
-            row["trash" if ref["is_deleted"] else "references"] += size
+            if ref["is_deleted"]:
+                row["trash"] += size
+                row["trash_count"] += 1
+            else:
+                row["references"] += size
+                row["reference_count"] += 1
         for res in conn.execute(
             """SELECT r.file_path, r.is_deleted, i.is_deleted AS image_deleted
                FROM results r JOIN images i ON i.id = r.image_id WHERE i.project_id = ?""",
@@ -91,12 +104,20 @@ def usage(project_ids, include_archived=False):
         ):
             size = _size(storage.result_image_path(pid, res["file_path"]))
             dead = res["is_deleted"] or res["image_deleted"]
-            row["trash" if dead else "results"] += size
-            row["result_count"] += 0 if dead else 1
-        row["thumbnails"] = _dir_size(cfg.WORKSPACE_ROOT / "thumbnails" / pid)
+            if dead:
+                row["trash"] += size
+                row["trash_count"] += 1
+            else:
+                row["results"] += size
+                row["result_count"] += 1
+        row["thumbnails"], row["thumbnail_count"] = _dir_stats(cfg.WORKSPACE_ROOT / "thumbnails" / pid)
         row["total"] = sum(row[k] for k in ("sources", "references", "results", "thumbnails", "trash"))
+        row["total_count"] = sum(
+            row[k] for k in ("source_count", "reference_count", "result_count", "thumbnail_count", "trash_count")
+        )
         projects.append(row)
-    keys = ("sources", "references", "results", "thumbnails", "trash", "total", "source_count", "result_count")
+    keys = ("sources", "references", "results", "thumbnails", "trash", "total",
+            "source_count", "reference_count", "result_count", "thumbnail_count", "trash_count", "total_count")
     totals = {k: sum(p[k] for p in projects) for k in keys}
     disk = shutil.disk_usage(cfg.WORKSPACE_ROOT)
     return {"projects": projects, "totals": totals, "disk": {"free": disk.free, "total": disk.total}}
@@ -108,7 +129,9 @@ def _candidates(project_ids, include_archived, max_dim):
     out = []
     for pid, name in scope_projects(project_ids, include_archived):
         for img in conn.execute(
-            "SELECT id, file_name, width, height, preprocess FROM images WHERE project_id = ? AND is_deleted = 0",
+            """SELECT id, file_name, display_name, width, height, preprocess,
+                      (SELECT COUNT(*) FROM results r WHERE r.image_id = images.id AND r.is_deleted = 0) AS result_count
+               FROM images WHERE project_id = ? AND is_deleted = 0""",
             (pid,),
         ):
             w, h = img["width"], img["height"]
@@ -121,26 +144,32 @@ def _candidates(project_ids, include_archived, max_dim):
                     continue
             if max(w, h) > max_dim:
                 out.append({"project_id": pid, "project_name": name, "image_id": img["id"],
-                            "file_name": img["file_name"], "width": w, "height": h,
-                            "preprocess": img["preprocess"], "bytes": _size(path)})
+                            "file_name": img["file_name"], "display_name": img["display_name"],
+                            "width": w, "height": h, "preprocess": img["preprocess"],
+                            "result_count": img["result_count"], "bytes": _size(path)})
     return out
 
 
 def downscale_preview(project_ids, include_archived, max_dim):
-    """What a downscale to max_dim would touch. The saving is an estimate: PNG
-    size is taken to scale with pixel count."""
-    by_project = {}
+    """The source images a downscale to max_dim could shrink, one entry each,
+    biggest saving first. has_crop marks images with a stored crop/rotation
+    (likely meant to be cropped in on, so the caller should treat them with
+    care). The saving is an estimate: PNG size is taken to scale with pixel
+    count.
+    """
+    items = []
     for c in _candidates(project_ids, include_archived, max_dim):
         scale = max_dim / max(c["width"], c["height"])
-        p = by_project.setdefault(c["project_id"], {"project_id": c["project_id"], "project_name": c["project_name"],
-                                                    "count": 0, "bytes": 0, "est_saved": 0})
-        p["count"] += 1
-        p["bytes"] += c["bytes"]
-        p["est_saved"] += int(c["bytes"] * (1 - scale * scale))
-    projects = sorted(by_project.values(), key=lambda p: -p["est_saved"])
-    return {"max_dim": max_dim, "projects": projects,
-            "count": sum(p["count"] for p in projects), "bytes": sum(p["bytes"] for p in projects),
-            "est_saved": sum(p["est_saved"] for p in projects)}
+        items.append({
+            "image_id": c["image_id"], "project_id": c["project_id"], "project_name": c["project_name"],
+            "display_name": c["display_name"], "width": c["width"], "height": c["height"],
+            "new_width": max(1, round(c["width"] * scale)), "new_height": max(1, round(c["height"] * scale)),
+            "bytes": c["bytes"], "est_saved": int(c["bytes"] * (1 - scale * scale)),
+            "has_crop": bool(c["preprocess"]), "result_count": c["result_count"],
+        })
+    items.sort(key=lambda i: -i["est_saved"])
+    return {"max_dim": max_dim, "items": items, "count": len(items),
+            "bytes": sum(i["bytes"] for i in items), "est_saved": sum(i["est_saved"] for i in items)}
 
 
 def _scale_preprocess(raw, scale):
@@ -199,7 +228,8 @@ def _prune():
         del _jobs[job_id]
 
 
-def start_downscale(project_ids, include_archived, max_dim):
+def start_downscale(project_ids, include_archived, max_dim, image_ids):
+    """Downscales only the images in image_ids (and in scope, and over max_dim)."""
     job_id = uuid.uuid4().hex
     job = {"id": job_id, "status": "running", "done": 0, "total": 0, "failed": 0, "saved": 0,
            "error": None, "started_at": time.time(), "finished_at": None}
@@ -209,7 +239,8 @@ def start_downscale(project_ids, include_archived, max_dim):
 
     def run():
         try:
-            todo = _candidates(project_ids, include_archived, max_dim)
+            wanted = set(image_ids)
+            todo = [c for c in _candidates(project_ids, include_archived, max_dim) if c["image_id"] in wanted]
             _update(job_id, total=len(todo))
             for c in todo:
                 try:

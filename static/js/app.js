@@ -1345,22 +1345,26 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
 });
 
 // Chit grid: one chit per completed result (colored by evaluation), plus a
-// chit for each in-flight job -- dim/static while queued, pulsing while
-// running, a distinct color once cancellation's been requested -- and an
-// error chit for recently-failed ones, so the sidebar row doubles as a quick
-// per-image progress readout. Error chits stay until the failed tile is
-// dismissed in the results panel. A cancelled job gets no chit of its own: once
-// the server confirms it's actually gone, it should just disappear rather
-// than linger as a separate "cancelled" indicator. A dashed amber chit flags
-// a SAM3 detection that finished in the background and is sitting in the
-// reference library unpositioned (needs_composite) -- durable (from the DB,
-// via list_images' unfinished_sam3_reference_id), unlike the others here,
-// which all come from the in-memory job queue and disappear once resolved.
+// chit for each in-flight job (a SAM3 detection included, so it's visible
+// queued/running too, not just once it's done) -- dim/static while queued,
+// pulsing while running, a distinct color once cancellation's been requested
+// -- and an error chit for recently-failed *generation* jobs specifically
+// (failedJobsFor excludes SAM3 detections, same as the results panel's tiles
+// they're otherwise shown alongside -- a failed detection just disappears
+// for now rather than getting its own error indicator). A cancelled job gets
+// no chit of its own: once the server confirms it's actually gone, it should
+// just disappear rather than linger as a separate "cancelled" indicator.
+// A dashed amber chit flags a SAM3 detection that finished successfully in
+// the background and is sitting in the reference library unpositioned
+// (needs_composite) -- durable (from the DB, via list_images'
+// unfinished_sam3_reference_id), unlike the others here, which all come from
+// the in-memory job queue and disappear once resolved -- this is what the
+// in-flight pending chit above hands off to once the job completes.
 function renderChits(img) {
   const completedChits = (img.result_evaluations || []).map(
     (r) => `<span class="chit ${r.evaluation}" data-result-id="${r.id}" title="${r.evaluation}"></span>`
   );
-  const jobsForImage = state.queue.filter((j) => j.image_id === img.id && j.kind !== "sam3_cutout");
+  const jobsForImage = state.queue.filter((j) => j.image_id === img.id);
   const pendingChits = jobsForImage
     .filter((j) => j.status === "queued" || j.status === "running")
     .map((j) => `<span class="chit pending ${jobDisplayState(j)}" title="${escapeHtml(formatJobStatus(j))}"></span>`);
@@ -2609,6 +2613,7 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
     <p class="dup-section-hint">Drag to move, drag a corner to resize.</p>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
+      <button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Discard</button>
       <button id="sam3ModalBackBtn" class="btn-ghost" type="button">Try a different prompt</button>
       <button id="sam3ModalCancelBtn" class="btn-ghost" type="button">Cancel</button>
       <button id="sam3ModalSaveBtn" class="btn-primary" type="button">Save as reference</button>
@@ -2618,6 +2623,26 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
   const stage = modal.querySelector("#sam3Stage");
   const boxEl = modal.querySelector("#sam3Box");
   const statusEl = modal.querySelector("#sam3ModalStatus");
+  // Reachable right from the stage, not just by backing out to the prompt
+  // step first -- the usual reason to want this here is "wrong object, bad
+  // crop" becoming obvious only once you're looking at it positioned.
+  modal.querySelector("#sam3ModalRemoveBtn").addEventListener("click", async (evt) => {
+    evt.currentTarget.disabled = true;
+    statusEl.textContent = "Removing...";
+    try {
+      await api.clearSam3Reference(imageId);
+      state.referenceImageIds = state.referenceImageIds.filter((id) => id !== image.sam3_reference?.id);
+      if (state.currentImageId === imageId) {
+        state.currentImage.sam3_reference = null;
+        renderReferenceImages();
+      }
+      closeModal();
+      loadImages();
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+      evt.currentTarget.disabled = false;
+    }
+  });
   let box; // current placement in DISPLAY pixel coords, relative to the stage
 
   // Unlike the crop box, this one is allowed to run past the stage's edges
@@ -3119,6 +3144,24 @@ async function generate() {
 // Enqueues a generation job for `imageId` using the prompt/engine/aspect-ratio
 // currently set in the details panel. Shared by the Generate button and
 // upload-time auto-generation.
+// A SAM3 placement reference (source_image_id set) belongs to exactly one
+// image, but state.referenceImageIds is UI selection state that otherwise
+// persists across image switches within a project (see reconcileSam3ReferenceSelection
+// and referencePicksByProject) -- fine for an ordinary project-wide library
+// pick, but a scoped one must never be forwarded to a *different* image's
+// generation. That gap mattered specifically for enqueueGeneration calls
+// where imageId isn't the currently-loaded image -- e.g. autoGenerateForImages
+// firing for freshly uploaded images before any of them have been selected
+// (and so before reconciliation ever ran for them) -- which could otherwise
+// silently attach whatever image was open before to a brand new one.
+function referenceIdsForImage(imageId) {
+  return state.referenceImageIds.filter(
+    (id) =>
+      state.referenceImages.some((r) => r.id === id) ||
+      (imageId === state.currentImageId && id === state.currentImage?.sam3_reference?.id)
+  );
+}
+
 async function enqueueGeneration(imageId) {
   const promptText = els.promptTextarea.value.trim();
   const promptId = state.selectedPromptId;
@@ -3128,12 +3171,13 @@ async function enqueueGeneration(imageId) {
   const isSam3 = comfyWorkflow === "sam3";
   const isSam3Xy = comfyWorkflow === "sam3_xy";
   const numOrUndefined = (input) => (input.value !== "" ? parseFloat(input.value) : undefined);
+  const referenceIds = referenceIdsForImage(imageId);
   const job = await api.generateResult(imageId, {
     prompt_id: promptId,
     adhoc_prompt_text: promptText,
     engine,
     aspect_ratio: aspectRatio,
-    reference_image_ids: state.referenceImageIds.length ? state.referenceImageIds : undefined,
+    reference_image_ids: referenceIds.length ? referenceIds : undefined,
     comfyui_workflow: comfyWorkflow || undefined,
     sam3_prompt: isSam3 || isSam3Xy ? els.sam3PromptInput.value.trim() : undefined,
     sam3_scale_by: isSam3 ? numOrUndefined(els.sam3ScaleByInput) : undefined,
@@ -3263,8 +3307,27 @@ function updateGenerateStatusForCurrentImage() {
   const jobsForImage = state.queue.filter((j) => j.image_id === state.currentImageId);
   const activeJobs = jobsForImage.filter((j) => j.status === "queued" || j.status === "running");
   if (activeJobs.length) {
-    const label = formatJobStatus(activeJobs[0]);
-    els.generateStatus.textContent = activeJobs.length > 1 ? `${activeJobs.length} generating — ${label}` : label;
+    const job = activeJobs[0];
+    const label = formatJobStatus(job);
+    const text = activeJobs.length > 1 ? `${activeJobs.length} generating — ${label}` : label;
+    // A sam3_cutout job never gets a pending tile in the results panel (it
+    // never becomes a result -- see pendingJobsFor), so this status line is
+    // its only per-image cancel affordance; an ordinary generation already
+    // has one on its pending tile, so this stays plain text for those rather
+    // than offering a second, redundant cancel control.
+    if (job.kind === "sam3_cutout" && !job.cancel_requested) {
+      els.generateStatus.innerHTML = `<span>${escapeHtml(text)}</span> <button type="button" class="generate-status-cancel" id="sam3StatusCancelBtn">✕ Cancel</button>`;
+      document.getElementById("sam3StatusCancelBtn").addEventListener("click", async (e) => {
+        e.currentTarget.disabled = true;
+        try {
+          await api.cancelJob(job.id);
+        } catch {
+          e.currentTarget.disabled = false;
+        }
+      });
+    } else {
+      els.generateStatus.textContent = text;
+    }
     generateStatusShowsJobs = true;
   } else if (generateStatusShowsJobs) {
     // A failed job's error is shown on its tile in the results panel instead.

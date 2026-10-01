@@ -826,6 +826,12 @@ kbd {
 .picker-item .reference-library-item-actions { opacity: 0; }
 .picker-item:hover .reference-library-item-actions { opacity: 1; }
 .status-line { font-size: 12px; color: #9ea2b0; margin: -6px 0 12px; min-height: 16px; display: flex; align-items: center; gap: 6px; }
+.generate-status-cancel {
+  background: none; border: 1px solid #4a3b72; border-radius: 4px; color: #c4b5fd;
+  font-size: 11px; padding: 1px 6px; cursor: pointer; flex-shrink: 0;
+}
+.generate-status-cancel:hover { background: #2a2c35; }
+.generate-status-cancel:disabled { opacity: 0.5; cursor: default; }
 .spinner {
   width: 10px;
   height: 10px;

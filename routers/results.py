@@ -147,6 +147,16 @@ def generate_result(image_id: str, body: GenerateRequestIn, background_tasks: Ba
             ref_image = db.get_reference_image(ref_id)
             if not ref_image or ref_image["project_id"] != image["project_id"]:
                 raise HTTPException(404, f"Reference image {ref_id} not found in this project")
+            # A SAM3 placement (source_image_id set) belongs to exactly one
+            # image -- reject it outright for any other, rather than silently
+            # using (or silently dropping) a reference that doesn't actually
+            # apply here. The frontend shouldn't offer this combination (see
+            # referenceIdsForImage in app.js), so this is a backstop against
+            # stale client state, e.g. a reference left selected from whatever
+            # image was open before a batch upload's auto-generate fires for
+            # brand new ones.
+            if ref_image["source_image_id"] and ref_image["source_image_id"] != image_id:
+                raise HTTPException(400, f"Reference image {ref_id} belongs to a different image")
             ref_path = storage.reference_image_path(ref_image["project_id"], ref_image["file_name"])
             if not ref_path.exists():
                 raise HTTPException(404, f"Reference image file missing on disk: {ref_id}")

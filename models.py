@@ -164,6 +164,17 @@ class TrashResultsIn(BaseModel):
     ids: Optional[list[str]] = None
 
 
+class StorageScopeIn(BaseModel):
+    """Libraries a storage request covers (empty: every live one)."""
+    project_ids: list[str] = []
+    include_archived: bool = False
+
+
+class DownscaleIn(StorageScopeIn):
+    """Shrink source images whose long edge exceeds max_dim, in place."""
+    max_dim: int = Field(ge=256, le=16000)
+
+
 class DuplicatesIn(BaseModel):
     """Near-duplicate search over sources and references (dupes.find_duplicates)."""
     project_ids: list[str] = []

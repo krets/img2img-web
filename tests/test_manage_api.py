@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 import db
+import storage
 from tests.hash_fixtures import jpeg, scene
 
 ALL = {"dedupe_copies": False}
@@ -491,3 +492,56 @@ def test_engine_counts_ignore_engine_filter(client, two_projects):
     counts = client.post("/api/manage/engines", json=body).json()
     assert counts == [{"engine": "grok", "n": 2}, {"engine": "fal", "n": 1}]
     assert client.post("/api/manage/engines", json={"evaluations": ["NO"]}).json() == [{"engine": "fal", "n": 1}]
+
+
+# ---------------------------------------------------------------------------
+# Storage: usage report and in-place source downscale
+# ---------------------------------------------------------------------------
+
+
+def test_storage_usage_splits_live_and_trash(client, lib):
+    p = lib.project("P")
+    live = lib.source(p, "live", img=scene(random.Random(1), 400, 300), write=True)
+    dead = lib.source(p, "dead", img=scene(random.Random(1), 400, 300), write=True)
+    lib.soft_delete("images", dead)
+    lib.result(live, img=scene(random.Random(1), 200, 200))
+    lib.soft_delete("results", lib.result(live, img=scene(random.Random(1), 200, 200)))
+
+    body = client.post("/api/manage/storage", json={}).json()
+    row = body["projects"][0]
+    assert row["sources"] > 0 and row["results"] > 0 and row["trash"] > 0
+    assert row["source_count"] == 1 and row["result_count"] == 1
+    assert row["total"] == sum(row[k] for k in ("sources", "references", "results", "thumbnails", "trash"))
+    assert body["totals"]["total"] == row["total"]
+    assert body["disk"]["free"] > 0
+
+
+def test_downscale_replaces_source_and_scales_crop(client, lib):
+    p = lib.project("P")
+    iid = lib.source(p, "big", img=scene(random.Random(1), 800, 400), write=True)
+    c = db.get_connection()
+    c.execute("UPDATE images SET preprocess = ? WHERE id = ?",
+              (json.dumps({"rotation": 0, "crop": {"x": 100, "y": 50, "w": 400, "h": 200},
+                           "fill": {"mode": "blur", "color": "#000000"}}), iid))
+    c.commit()
+    small = lib.source(p, "small", img=scene(random.Random(1), 100, 100), write=True)
+
+    scope = {"project_ids": [p], "max_dim": 400}
+    prev = client.post("/api/manage/storage/downscale/preview", json=scope).json()
+    assert prev["count"] == 1 and prev["est_saved"] > 0
+
+    job = client.post("/api/manage/storage/downscale", json=scope).json()
+    for _ in range(100):
+        job = client.get(f"/api/manage/storage/downscale/{job['id']}").json()
+        if job["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "done" and job["done"] == 1 and job["failed"] == 0
+
+    row = db.get_image(iid)
+    assert (row["width"], row["height"]) == (400, 200)
+    with Image.open(storage.source_image_path(p, "big.png")) as im:
+        assert im.size == (400, 200)
+    assert row["preprocess"]["crop"] == {"x": 50, "y": 25, "w": 200, "h": 100}
+    assert db.get_image(small)["width"] == 100
+    assert client.post("/api/manage/storage/downscale/preview", json=scope).json()["count"] == 0

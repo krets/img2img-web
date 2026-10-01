@@ -11,11 +11,12 @@ import { renderReviewTab, setReviewPrompt, applyReport, reviewHashParams, applyR
 import { renderPromptsTab } from "./manage_prompts.js";
 import { renderDuplicatesTab } from "./manage_duplicates.js";
 import { renderReportsTab } from "./manage_reports.js";
+import { renderStorageTab } from "./manage_storage.js";
 
 const SELECTION_KEY = "grok_img2img.manage.projectIds";
 const TAB_KEY = "grok_img2img.manage.tab";
 const ARCHIVED_KEY = "grok_img2img.manage.showArchived";
-const TABS = ["prompts", "duplicates", "review", "reports"];
+const TABS = ["prompts", "duplicates", "review", "reports", "storage"];
 const INDEX_POLL_MS = 5000;
 
 function loadJson(key, fallback) {
@@ -177,6 +178,8 @@ function renderTab() {
         selectTab("review");
       },
     });
+  } else if (state.tab === "storage") {
+    renderStorageTab(els.tabPanel, effectiveProjectIds(), { includeArchived: state.showArchived });
   } else if (state.tab === "reports") {
     renderReportsTab(els.tabPanel, { projectNames: projectNames(), onOpen: openReport });
   }

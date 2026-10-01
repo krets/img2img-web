@@ -46,7 +46,7 @@ body.manage-page { display: flex; flex-direction: column; }
   min-width: 0;
   padding: 12px 16px;
 }
-.manage-tabs { max-width: 520px; }
+.manage-tabs { max-width: 640px; }
 .manage-tab-panel { flex: 1; overflow-y: auto; min-height: 0; }
 
 .manage-index-status { font-size: 12px; color: #9ea2b0; }
@@ -241,3 +241,8 @@ body.manage-page { display: flex; flex-direction: column; }
 .review-ref-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .review-ref-thumb:hover { border-color: #f9a8d4; }
 .review-ref-thumb.gone { font-size: 9px; color: #6b6f7d; border-style: dashed; }
+
+.storage-downscale { margin-top: 20px; padding-top: 12px; border-top: 1px solid #2a2c35; }
+.storage-downscale h3 { margin: 0 0 4px; font-size: 14px; }
+.prompt-report tfoot th { text-align: left; padding: 6px 8px; border-top: 1px solid #2a2c35; }
+.prompt-report tfoot th.num { text-align: right; }

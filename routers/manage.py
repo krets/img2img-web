@@ -7,7 +7,8 @@ import dupes
 import export
 import hash_worker
 import manage_db
-from models import (DupDecisionsIn, DuplicatesIn, ManageExportIn, ManageFilterIn, MergeReferencesIn, ReportIn,
+import storage_usage
+from models import (DownscaleIn, DupDecisionsIn, DuplicatesIn, StorageScopeIn, ManageExportIn, ManageFilterIn, MergeReferencesIn, ReportIn,
                     ReportUpdateIn, TrashResultsIn)
 
 router = APIRouter(prefix="/api/manage", tags=["manage"])
@@ -85,6 +86,37 @@ def merge_references(body: MergeReferencesIn):
         return dupes.merge_references(body.keep_id, body.remove_ids)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Storage (see storage_usage.py)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/storage")
+def storage_usage_report(body: StorageScopeIn):
+    """Disk bytes per library by kind, totals, and free space on the workspace drive."""
+    return storage_usage.usage(body.project_ids, body.include_archived)
+
+
+@router.post("/storage/downscale/preview")
+def downscale_preview(body: DownscaleIn):
+    """Source images a downscale to max_dim would shrink, with the estimated saving."""
+    return storage_usage.downscale_preview(body.project_ids, body.include_archived, body.max_dim)
+
+
+@router.post("/storage/downscale")
+def start_downscale(body: DownscaleIn):
+    """Starts replacing oversized sources with downscaled copies. Poll GET /storage/downscale/{job_id}."""
+    return storage_usage.start_downscale(body.project_ids, body.include_archived, body.max_dim)
+
+
+@router.get("/storage/downscale/{job_id}")
+def downscale_status(job_id: str):
+    job = storage_usage.job_status(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found (they're kept for an hour)")
+    return job
 
 
 # ---------------------------------------------------------------------------

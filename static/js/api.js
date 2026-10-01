@@ -174,6 +174,7 @@ export const api = {
       request("POST", "/manage/duplicates/merge-references", { json: { keep_id: keepId, remove_ids: removeIds } }),
     revisedPrompts: (hash, filter) =>
       request("POST", `/manage/prompts/${encodeURIComponent(hash)}/revised`, { json: filter }),
+    trashResults: (filter, ids = null) => request("POST", "/manage/results/trash", { json: { filter, ids } }),
     results: (filter, offset = 0, limit = 100) =>
       request("POST", `/manage/results?offset=${offset}&limit=${limit}`, { json: filter }),
   },

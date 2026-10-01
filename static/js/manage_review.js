@@ -2,7 +2,7 @@
 // selected projects, driven by POST /api/manage/results (ManageFilterIn).
 
 import { api } from "./api.js";
-import { escapeHtml, formatRelativeTime, parseDbTime, openModal, closeModal, isModalOpen } from "./ui.js";
+import { escapeHtml, formatRelativeTime, parseDbTime, openModal, closeModal, isModalOpen, openConfirmModal } from "./ui.js";
 import { initABViewer } from "./viewer.js";
 import { openExportModal } from "./manage_export.js";
 
@@ -278,6 +278,7 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
       }
       <button type="button" id="reviewReportNew" class="btn-ghost small" title="Save the current view as a named report">${view.report ? "Save as new…" : "Save as report…"}</button>
       <button type="button" id="reviewExport" class="btn-ghost small" title="Download the results in this view as a zip">Export…</button>
+      <button type="button" id="reviewTrashAll" class="btn-ghost small" title="Move the generated results matching these filters to the trash. Source images are not touched.">Trash results…</button>
       ${view.prompts
         .map(
           (p, i) => `<span class="review-prompt-chip" data-prompt-chip="${escapeHtml(p.hash ?? "")}" title="${escapeHtml(p.label)}">Prompt: <span class="review-prompt-chip-text">${escapeHtml(p.label)}</span><button type="button" data-prompt-remove="${i}" aria-label="Remove this prompt from the filter" title="Remove this prompt">×</button></span>`
@@ -372,6 +373,7 @@ export function renderReviewTab(host, projectIds, opts = view.opts) {
       summary: view.total ? `The ${view.total} results in this view, across ${view.projectIds.length === 1 ? "1 library" : `${view.projectIds.length} libraries`}.` : "The results in this view.",
     })
   );
+  host.querySelector("#reviewTrashAll").addEventListener("click", trashAll);
   view.root = host.querySelector("#reviewGrid");
   bindGrid(host.querySelector("#reviewGrid"));
   applyGridDisplay();
@@ -577,6 +579,7 @@ function renderStatus() {
   else if (view.loading && !view.items.length) count.textContent = "Loading…";
   else count.textContent = view.total ? `${view.items.length} of ${view.total} results` : "No results match.";
   view.error = null;
+  view.host.querySelector("#reviewTrashAll").disabled = !view.total;
   const hasMore = view.items.length < view.total;
   more.style.display = hasMore ? "" : "none";
   more.disabled = view.loading;
@@ -602,6 +605,62 @@ async function rate(idx, evaluation) {
     refreshTile(idx);
     if (view.lightboxIdx === idx) renderLightboxHeader(`Rating failed: ${err.message}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup: results go to the trash (restorable from the main page's Trash).
+// ---------------------------------------------------------------------------
+
+async function trashAll() {
+  if (!view.total) return;
+  const total = view.total;
+  const loaded = view.items.length;
+  const plural = (n) => `${n} result${n === 1 ? "" : "s"}`;
+  const partial = loaded < total;
+  const choice = await openConfirmModal({
+    title: "Trash results",
+    message:
+      `${plural(total)} match the current filters` +
+      (partial ? `, but only ${loaded} are loaded in the gallery so far.` : ".") +
+      " Only the generated results are moved to the trash (in side-by-side mode, the source images shown beside them are not touched)." +
+      " With “Collapse copies” on, each tile stands for all its copies in the selected libraries, and those are trashed too. Everything can be restored from the Trash.",
+    secondaryLabel: partial ? `Trash loaded view (${plural(loaded)})` : null,
+    confirmLabel: `Trash all matching (${plural(total)})`,
+    danger: true,
+  });
+  if (!choice) return;
+  try {
+    await api.manage.trashResults(requestBody(), choice === "secondary" ? view.items.map((r) => r.id) : null);
+  } catch (err) {
+    view.host.querySelector("#reviewCount").textContent = `Trash failed: ${err.message}`;
+    return;
+  }
+  notifyChange();
+  reset();
+}
+
+async function trashOne(idx) {
+  const r = view.items[idx];
+  if (!r) return;
+  try {
+    await api.deleteResult(r.id);
+  } catch (err) {
+    renderLightboxHeader(`Delete failed: ${err.message}`);
+    return;
+  }
+  view.items.splice(idx, 1);
+  view.total -= 1;
+  // Re-render the grid: tile indices shifted.
+  const grid = view.host.querySelector("#reviewGrid");
+  grid.innerHTML = "";
+  appendTiles(0);
+  renderStatus();
+  if (!view.items.length) {
+    view.lightboxIdx = null;
+    closeModal();
+    return;
+  }
+  openLightbox(Math.min(idx, view.items.length - 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -682,8 +741,10 @@ function renderLightboxHeader(message = "") {
     </span>
     ${referenceStrip(r)}
     <span class="review-lightbox-msg">${escapeHtml(message)}</span>
+    <button type="button" class="btn-ghost small review-trash" data-trash title="Move this result to the trash (Delete)">Trash</button>
     <a class="btn-ghost small" href="${editorUrl}" target="_blank" rel="noopener" title="Open this image in the library, in a new tab">Open in editor ↗</a>
   `;
+  bar.querySelector("[data-trash]").addEventListener("click", () => trashOne(idx));
   bar.querySelectorAll("[data-rate]").forEach((btn) => btn.addEventListener("click", () => rate(idx, btn.dataset.rate)));
   // A reference hard-deleted by the trash pruner leaves only its id behind.
   bar.querySelectorAll(".review-ref-thumb img").forEach((img) =>
@@ -715,6 +776,7 @@ document.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
   if (lightboxOpen()) {
     if (RATE_KEYS[key]) rate(view.lightboxIdx, RATE_KEYS[key]);
+    else if (e.key === "Delete") trashOne(view.lightboxIdx);
     else if (key === "arrowleft") stepLightbox(-1);
     else if (key === "arrowright") stepLightbox(1);
     else return;

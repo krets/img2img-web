@@ -86,13 +86,15 @@ document.addEventListener("keydown", (e) => {
 // Styled stand-in for window.confirm(), matching the app's own modal chrome
 // instead of the browser's native dialog. Resolves false for every dismissal
 // path (Cancel, backdrop click, Escape), true only for the confirm button.
-export function openConfirmModal({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
+// With secondaryLabel a third button sits before it and resolves "secondary".
+export function openConfirmModal({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false, secondaryLabel = null }) {
   return new Promise((resolve) => {
     const modal = openModal(`
       <h3>${escapeHtml(title)}</h3>
       <p class="dup-section-hint">${escapeHtml(message)}</p>
       <div class="modal-actions">
         <button id="mCancel" class="btn-ghost" type="button">${escapeHtml(cancelLabel)}</button>
+        ${secondaryLabel ? `<button id="mSecondary" class="${danger ? "btn-danger" : "btn-primary"}" type="button">${escapeHtml(secondaryLabel)}</button>` : ""}
         <button id="mConfirm" class="${danger ? "btn-danger" : "btn-primary"}" type="button">${escapeHtml(confirmLabel)}</button>
       </div>
     `);
@@ -103,6 +105,11 @@ export function openConfirmModal({ title, message, confirmLabel = "Confirm", can
       resolve(false);
     };
     modal.querySelector("#mCancel").addEventListener("click", closeModal); // triggers modalOnClose -> resolve(false)
+    modal.querySelector("#mSecondary")?.addEventListener("click", () => {
+      settled = true;
+      closeModal();
+      resolve("secondary");
+    });
     modal.querySelector("#mConfirm").addEventListener("click", () => {
       settled = true; // suppress the modalOnClose that closeModal() would otherwise fire
       closeModal();

@@ -158,6 +158,12 @@ class ManageFilterIn(BaseModel):
     sort: Literal["date_desc", "date_asc", "project", "evaluation"] = "date_desc"
 
 
+class TrashResultsIn(BaseModel):
+    """Results to trash: those matching filter, or just ids when given."""
+    filter: ManageFilterIn
+    ids: Optional[list[str]] = None
+
+
 class DuplicatesIn(BaseModel):
     """Near-duplicate search over sources and references (dupes.find_duplicates)."""
     project_ids: list[str] = []

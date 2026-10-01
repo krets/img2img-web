@@ -159,6 +159,32 @@ def list_filtered_results(f, offset=0, limit=100):
     return {"total": total, "items": db._attach_reference_ids(conn, items)}
 
 
+def trash_filtered_results(f, only_ids=None):
+    """Soft-deletes the results matching f, or just the tiles in only_ids. A
+    tile collapsed by dedupe_copies stands for all its copies within f, so
+    those go too -- otherwise a hidden copy would surface as soon as the
+    visible one was trashed. Returns the trashed ids.
+    """
+    conn = db.get_connection()
+    base_sql, params = _filtered_results_sql(f)
+    rows = conn.execute(f"SELECT id, content_hash FROM ({base_sql})", params).fetchall()
+    if only_ids is None:
+        ids = [r["id"] for r in rows]
+    else:
+        wanted = set(only_ids)
+        hashes = {r["content_hash"] for r in rows if r["id"] in wanted and r["content_hash"] and f.dedupe_copies}
+        ids = [r["id"] for r in rows if r["id"] in wanted or r["content_hash"] in hashes]
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        conn.execute(
+            f"UPDATE results SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP"
+            f" WHERE id IN ({','.join('?' * len(chunk))})",
+            chunk,
+        )
+    conn.commit()
+    return ids
+
+
 # ---------------------------------------------------------------------------
 # Hash maintenance, driven by hash_worker.py. Covers every row whose file might
 # still be on disk, trashed ones included, so restoring from the trash never

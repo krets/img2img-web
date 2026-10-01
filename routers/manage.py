@@ -8,7 +8,7 @@ import export
 import hash_worker
 import manage_db
 from models import (DupDecisionsIn, DuplicatesIn, ManageExportIn, ManageFilterIn, MergeReferencesIn, ReportIn,
-                    ReportUpdateIn)
+                    ReportUpdateIn, TrashResultsIn)
 
 router = APIRouter(prefix="/api/manage", tags=["manage"])
 
@@ -30,6 +30,13 @@ def list_results(f: ManageFilterIn, offset: int = Query(0, ge=0), limit: int = Q
     are built client-side from the result id (/api/results/{id}/thumbnail etc.).
     """
     return manage_db.list_filtered_results(f, offset=offset, limit=limit)
+
+
+@router.post("/results/trash")
+def trash_results(body: TrashResultsIn):
+    """Moves results to the trash (restorable there): body.ids if given, else
+    everything matching body.filter. Source images are never touched."""
+    return {"trashed": len(manage_db.trash_filtered_results(body.filter, body.ids))}
 
 
 @router.post("/engines")

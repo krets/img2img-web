@@ -617,20 +617,32 @@ async function trashAll() {
   const loaded = view.items.length;
   const plural = (n) => `${n} result${n === 1 ? "" : "s"}`;
   const partial = loaded < total;
+  // Spelled out so "current filters" can't be mistaken for something
+  // narrower than it is -- this is the one thing a confirm dialog for a
+  // bulk delete must not leave implicit.
+  const ratings = view.filter.evaluations.length === EVALUATIONS.length ? "EVERY rating" : view.filter.evaluations.join(", ");
+  const libraries = view.projectIds.length === 1 ? "1 library" : `${view.projectIds.length} libraries`;
+  // Frozen now, before the confirm dialog's await: the modal overlay doesn't
+  // block the rest of the page, so a hash change or report load while it's
+  // open can swap out view.filter from under us. Re-deriving the request
+  // body after the await would then delete a different, wider scope than
+  // what this dialog is showing and the user is approving.
+  const body = requestBody();
+  const idsToTrash = view.items.map((r) => r.id);
   const choice = await openConfirmModal({
     title: "Trash results",
     message:
-      `${plural(total)} match the current filters` +
+      `${plural(total)} rated ${ratings}, across ${libraries}, match the current filters` +
       (partial ? `, but only ${loaded} are loaded in the gallery so far.` : ".") +
       " Only the generated results are moved to the trash (in side-by-side mode, the source images shown beside them are not touched)." +
       " With “Collapse copies” on, each tile stands for all its copies in the selected libraries, and those are trashed too. Everything can be restored from the Trash.",
     secondaryLabel: partial ? `Trash loaded view (${plural(loaded)})` : null,
-    confirmLabel: `Trash all matching (${plural(total)})`,
+    confirmLabel: `Trash all ${ratings} matching (${plural(total)})`,
     danger: true,
   });
   if (!choice) return;
   try {
-    await api.manage.trashResults(requestBody(), choice === "secondary" ? view.items.map((r) => r.id) : null);
+    await api.manage.trashResults(body, choice === "secondary" ? idsToTrash : null);
   } catch (err) {
     view.host.querySelector("#reviewCount").textContent = `Trash failed: ${err.message}`;
     return;

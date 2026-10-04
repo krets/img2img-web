@@ -440,9 +440,17 @@ export function initABViewer(container) {
     if (refocus) modeBtn.focus();
   }
 
-  modeBtn.addEventListener("click", () => (modeMenu.hidden ? openModeMenu() : closeModeMenu()));
+  // While lineage/crop has taken over (button not "active" -- see
+  // syncModeMenu), the dropdown would just be in the way of what's almost
+  // always wanted instead: back out to the last comparison mode. So the
+  // button acts as a plain "return to compare" button then, and only opens
+  // the mode picker once compare mode is active again.
+  modeBtn.addEventListener("click", () => {
+    if (mode !== compareMode) return setMode(compareMode);
+    modeMenu.hidden ? openModeMenu() : closeModeMenu();
+  });
   modeBtn.addEventListener("keydown", (evt) => {
-    if (evt.key === "ArrowDown" || evt.key === "ArrowUp") {
+    if (mode === compareMode && (evt.key === "ArrowDown" || evt.key === "ArrowUp")) {
       evt.preventDefault();
       openModeMenu();
     }

@@ -2297,8 +2297,18 @@ function reconcileSam3ReferenceSelection(img) {
   renderReferenceImages();
 }
 
+// The open image's own SAM3 placement (when positioned) is offered ahead of
+// the project library -- it's excluded from state.referenceImages, so without
+// this a deselected one could never be re-picked.
+function referencePickerEntries() {
+  const ref = state.currentImage?.sam3_reference;
+  const own = ref && !ref.needs_composite ? [ref] : [];
+  return [...own, ...state.referenceImages];
+}
+
 function openReferenceImagePicker() {
-  if (!state.referenceImages.length) {
+  const entries = referencePickerEntries();
+  if (!entries.length) {
     const modal = openModal(`
       <h3>Add reference image</h3>
       <p class="dup-section-hint">This project has no reference images yet. Add some in the References tab first.</p>
@@ -2316,12 +2326,13 @@ function openReferenceImagePicker() {
   `);
   modal.querySelector("#mCancel").addEventListener("click", closeModal);
   const grid = modal.querySelector("#refPickerGrid");
-  grid.innerHTML = state.referenceImages
+  grid.innerHTML = entries
     .map((ref) => {
       const selected = state.referenceImageIds.includes(ref.id);
       const disabled = !selected && state.referenceImageIds.length >= max;
+      const title = escapeHtml(ref.source_image_id ? `${ref.display_name} (this image's SAM3 placement)` : ref.display_name);
       return `
-        <div class="picker-item ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}" data-picker-id="${ref.id}" title="${escapeHtml(ref.display_name)}">
+        <div class="picker-item ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}" data-picker-id="${ref.id}" title="${title}">
           <img src="${refThumbUrl(ref)}" loading="lazy" />
           <div class="reference-library-item-actions">
             <button class="reference-library-item-btn" data-view-picker-ref="${ref.id}" title="View full size">🔍</button>
@@ -2349,7 +2360,7 @@ function openReferenceImagePicker() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const id = btn.dataset.viewPickerRef;
-      const ref = state.referenceImages.find((r) => r.id === id);
+      const ref = resolveReferenceForDisplay(id);
       openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
     });
   });

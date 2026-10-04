@@ -49,6 +49,11 @@ const state = {
   groupByLineage: localStorage.getItem("grok_img2img.groupByLineage") !== "0",
   collapsedImageIds: loadCollapsedImageIds(), // parents whose children are hidden
   compareAgainstId: null, // ancestor image id shown as the viewer's base instead of the current image's own source
+  // The "Derived from a result of..." line and its lineage trail are useful
+  // detail but noisy to have open by default (the trail especially, since it
+  // grows one crumb per generation) -- collapsed behind a toggle until asked
+  // for, remembered across images/sessions like groupByLineage above.
+  provenanceExpanded: localStorage.getItem("grok_img2img.provenanceExpanded") === "1",
 };
 
 function loadCollapsedImageIds() {
@@ -1761,6 +1766,20 @@ function renderProvenanceLine(derivedFrom) {
     els.provenanceLine.innerHTML = "";
     return;
   }
+  const toggleHtml = `<a href="#" class="provenance-toggle" data-toggle-provenance>${
+    state.provenanceExpanded ? "▾" : "▸"
+  } Derived from a result</a>`;
+
+  if (!state.provenanceExpanded) {
+    els.provenanceLine.innerHTML = toggleHtml;
+    els.provenanceLine.style.display = "block";
+    els.provenanceLine.querySelector("[data-toggle-provenance]").addEventListener("click", (e) => {
+      e.preventDefault();
+      setProvenanceExpanded(true);
+    });
+    return;
+  }
+
   const promptText = derivedFrom.prompt_text ? ` — prompt: "${escapeHtml(derivedFrom.prompt_text)}"` : "";
   const sourceName = derivedFrom.source_image_display_name;
   const sourceLink = sourceName
@@ -1791,8 +1810,12 @@ function renderProvenanceLine(derivedFrom) {
 
   const editHtml = ` <a href="#" class="lineage-compare" data-change-parent>✎ change</a> <a href="#" class="lineage-compare" data-detach-parent>✕ detach</a>`;
 
-  els.provenanceLine.innerHTML = `↳ Derived from a result of ${sourceLink}${promptText}${compareHtml}${editHtml}${lineageHtml}`;
+  els.provenanceLine.innerHTML = `<a href="#" class="provenance-toggle" data-toggle-provenance>▾</a> ↳ Derived from a result of ${sourceLink}${promptText}${compareHtml}${editHtml}${lineageHtml}`;
   els.provenanceLine.style.display = "block";
+  els.provenanceLine.querySelector("[data-toggle-provenance]").addEventListener("click", (e) => {
+    e.preventDefault();
+    setProvenanceExpanded(false);
+  });
   els.provenanceLine.querySelector("[data-change-parent]").addEventListener("click", (e) => {
     e.preventDefault();
     if (state.currentImage) openSetParentModal(state.currentImage.id);
@@ -1814,6 +1837,12 @@ function renderProvenanceLine(derivedFrom) {
       setCompareAgainst(compareLink.dataset.compareParent);
     });
   }
+}
+
+function setProvenanceExpanded(expanded) {
+  state.provenanceExpanded = expanded;
+  localStorage.setItem("grok_img2img.provenanceExpanded", expanded ? "1" : "0");
+  renderProvenanceLine(state.currentImage?.derived_from);
 }
 
 // Renders the results grid, followed by a dashed upload-dropzone card pinned

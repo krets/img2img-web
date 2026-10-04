@@ -1463,7 +1463,7 @@ async function afterImagesIngested({ created, skipped }) {
   await loadImages();
 
   if (created.length) {
-    if (els.autoGenOnUploadToggle.checked && els.promptTextarea.value.trim()) {
+    if (els.autoGenOnUploadToggle.classList.contains("active") && els.promptTextarea.value.trim()) {
       await autoGenerateForImages(created);
     }
     // Accepted: jump to the newly added image.
@@ -1508,6 +1508,22 @@ async function autoGenerateForImages(images) {
   renderImageList();
   renderQueueOverlay();
 }
+
+// Small ⚡ icon toggle next to Generate (was a labeled checkbox in the
+// sidebar): when on, a freshly uploaded image immediately queues a
+// generation using the prompt currently in the details panel (see
+// afterImagesIngested above). Off by default each session, same as before.
+function setAutoGenOnUpload(active) {
+  els.autoGenOnUploadToggle.classList.toggle("active", active);
+  els.autoGenOnUploadToggle.setAttribute("aria-pressed", String(active));
+  els.autoGenOnUploadToggle.title = `Auto-generate on upload: ${active ? "ON" : "off"} — click to turn ${
+    active ? "off" : "on"
+  }. When on, a newly uploaded image immediately queues a generation using the prompt above.`;
+}
+els.autoGenOnUploadToggle.addEventListener("click", () => {
+  setAutoGenOnUpload(!els.autoGenOnUploadToggle.classList.contains("active"));
+});
+setAutoGenOnUpload(false);
 
 els.uploadInput.addEventListener("change", async () => {
   const files = els.uploadInput.files;

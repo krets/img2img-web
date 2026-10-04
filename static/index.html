@@ -70,10 +70,6 @@
             + Upload images (or paste)
             <input id="uploadInput" type="file" accept="image/*" multiple hidden />
           </label>
-          <label class="checkbox-row" title="After upload, immediately queue a generation using the prompt currently in the details panel">
-            <input id="autoGenOnUploadToggle" type="checkbox" />
-            Auto-generate with current prompt
-          </label>
           <div id="uploadStatus" class="status-line"></div>
           <div id="multiSelectBar" class="sidebar-controls-row multi-select-bar" style="display:none">
             <span id="multiSelectCount"></span>
@@ -195,6 +191,7 @@
         </div>
         <div class="field-row">
           <button id="generateBtn" class="btn-primary">✨ Generate</button>
+          <button id="autoGenOnUploadToggle" type="button" class="icon-toggle-btn" aria-pressed="false">⚡</button>
         </div>
         <input id="uploadResultInput" type="file" accept="image/*" hidden />
         <div id="generateStatus" class="status-line"></div>

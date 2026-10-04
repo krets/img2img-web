@@ -164,6 +164,20 @@ kbd {
 }
 .btn-primary:hover { filter: brightness(1.1); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+#generateBtn { flex: 1; }
+/* Small square icon toggle next to Generate (e.g. auto-generate on upload) --
+   off by default, highlighted like the viewer's other icon toggles when on. */
+.icon-toggle-btn {
+  flex: 0 0 auto;
+  width: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #9ea2b0;
+}
+.icon-toggle-btn.active { background: rgba(139,92,246,0.25); border-color: #8B5CF6; color: #e6e6eb; }
 .btn-danger {
   background: transparent;
   border: 1px solid #7f1d1d;

@@ -156,7 +156,8 @@
         </div>
         <div class="field" id="sam3Fields" style="display:none">
           <label>SAM3 Prompt <span class="hint">(object to detect, e.g. "elephants")</span></label>
-          <input id="sam3PromptInput" type="text" placeholder="Object to detect..." />
+          <input id="sam3PromptInput" type="text" placeholder="Object to detect..." list="sam3PromptHistoryList" />
+          <datalist id="sam3PromptHistoryList"></datalist>
           <div class="field-row" style="margin-top:6px">
             <div class="field" id="sam3ScaleByField" style="margin-bottom:0">
               <label>Scale by</label>

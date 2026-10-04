@@ -122,6 +122,7 @@ const els = {
   comfyWorkflowSelect: document.getElementById("comfyWorkflowSelect"),
   sam3Fields: document.getElementById("sam3Fields"),
   sam3PromptInput: document.getElementById("sam3PromptInput"),
+  sam3PromptHistoryList: document.getElementById("sam3PromptHistoryList"),
   sam3ScaleByField: document.getElementById("sam3ScaleByField"),
   sam3ScaleByInput: document.getElementById("sam3ScaleByInput"),
   sam3ScaleXField: document.getElementById("sam3ScaleXField"),
@@ -2505,6 +2506,90 @@ function existingSam3Prompt(image) {
   return name.startsWith("SAM3: ") ? name.slice(6) : "";
 }
 
+// ---------------------------------------------------------------------------
+// Quad warp math for the SAM3 placement tool's free-corner (ctrl+drag) mode.
+// The placement is a quadrilateral (nw/ne/sw/se corners, each {x,y}) rather
+// than a plain box -- a rectangle is just the common case where all four
+// corners still form a right angle. Canvas 2D has no built-in way to draw an
+// image into an arbitrary quad, so it's approximated the standard way: split
+// the quad into two triangles and draw each as an affine-warped (clipped)
+// copy of the whole source image. A true single-pass projective warp would
+// need per-pixel resampling; the triangle split is the cheap, GPU-free
+// alternative and the seam along the diagonal is not visible in practice.
+// ---------------------------------------------------------------------------
+const QUAD_CORNERS = ["nw", "ne", "sw", "se"];
+const QUAD_OPPOSITE = { nw: "se", ne: "sw", sw: "ne", se: "nw" };
+// The corner sharing this one's row (same y) vs. column (same x).
+const QUAD_ROW_NEIGHBOR = { nw: "ne", ne: "nw", sw: "se", se: "sw" };
+const QUAD_COL_NEIGHBOR = { nw: "sw", sw: "nw", ne: "se", se: "ne" };
+
+function cloneQuad(q) {
+  return { nw: { ...q.nw }, ne: { ...q.ne }, sw: { ...q.sw }, se: { ...q.se } };
+}
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(v, hi));
+}
+
+// Ray-casting point-in-polygon test, used to tell a click meant to move the
+// placement from a click on the empty stage around it (the hit area is no
+// longer a simple rectangle once a corner's been dragged free).
+function pointInQuad(p, q) {
+  const pts = [q.nw, q.ne, q.se, q.sw];
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i];
+    const b = pts[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+// The 2D affine transform [a b c d e f] (same order Canvas2D's ctx.transform
+// takes) mapping source triangle src[0..2] onto destination triangle
+// dst[0..2], solved via Cramer's rule from the three point correspondences.
+function triangleAffine(src, dst) {
+  const [s0, s1, s2] = src;
+  const [d0, d1, d2] = dst;
+  const denom = s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+  if (Math.abs(denom) < 1e-8) return null;
+  const a = (d0.x * (s1.y - s2.y) + d1.x * (s2.y - s0.y) + d2.x * (s0.y - s1.y)) / denom;
+  const b = (d0.y * (s1.y - s2.y) + d1.y * (s2.y - s0.y) + d2.y * (s0.y - s1.y)) / denom;
+  const c = (d0.x * (s2.x - s1.x) + d1.x * (s0.x - s2.x) + d2.x * (s1.x - s0.x)) / denom;
+  const d = (d0.y * (s2.x - s1.x) + d1.y * (s0.x - s2.x) + d2.y * (s1.x - s0.x)) / denom;
+  const e = (d0.x * (s1.x * s2.y - s2.x * s1.y) + d1.x * (s2.x * s0.y - s0.x * s2.y) + d2.x * (s0.x * s1.y - s1.x * s0.y)) / denom;
+  const f = (d0.y * (s1.x * s2.y - s2.x * s1.y) + d1.y * (s2.x * s0.y - s0.x * s2.y) + d2.y * (s0.x * s1.y - s1.x * s0.y)) / denom;
+  return [a, b, c, d, e, f];
+}
+
+function drawTexturedTriangle(ctx, img, src, dst) {
+  const m = triangleAffine(src, dst);
+  if (!m) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(dst[0].x, dst[0].y);
+  ctx.lineTo(dst[1].x, dst[1].y);
+  ctx.lineTo(dst[2].x, dst[2].y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(...m);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
+// Draws `img` warped so its four corners land on quad.nw/ne/sw/se, in
+// whatever coordinate space `quad` is expressed in (the ctx's own pixels).
+function drawWarpedQuad(ctx, img, quad) {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const srcNW = { x: 0, y: 0 };
+  const srcNE = { x: w, y: 0 };
+  const srcSW = { x: 0, y: h };
+  const srcSE = { x: w, y: h };
+  drawTexturedTriangle(ctx, img, [srcNW, srcNE, srcSE], [quad.nw, quad.ne, quad.se]);
+  drawTexturedTriangle(ctx, img, [srcNW, srcSE, srcSW], [quad.nw, quad.se, quad.sw]);
+}
+
 // Detection is fire-and-forget (see api.startSam3Cutout): it's just queued
 // here and the modal closes right away, so a long wait behind other work in
 // ComfyUI's queue -- or just wanting to go do something else in the
@@ -2548,7 +2633,7 @@ function renderSam3PromptStep(imageId, image) {
     <p class="dup-section-hint">Detects an object with SAM3 in the background -- once it's ready (watch for the amber chit on this image), come back here to drag and resize it onto the image before saving it as a reference.</p>
     <div class="field">
       <label>SAM3 Prompt <span class="hint">(object to detect, e.g. "elephants")</span></label>
-      <input id="sam3ModalPromptInput" type="text" placeholder="Object to detect..." value="${escapeAttr(existingSam3Prompt(image))}" />
+      <input id="sam3ModalPromptInput" type="text" placeholder="Object to detect..." list="sam3PromptHistoryList" value="${escapeAttr(existingSam3Prompt(image) || getSam3PromptHistory()[0] || "")}" />
     </div>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
@@ -2592,6 +2677,7 @@ function renderSam3PromptStep(imageId, image) {
     promptInput.disabled = true;
     statusEl.innerHTML = `<span class="spinner"></span><span>Queuing...</span>`;
     try {
+      rememberSam3Prompt(prompt);
       const job = await api.startSam3Cutout(imageId, prompt);
       mergeQueueJob(job);
       applyQueueOrdering();
@@ -2608,7 +2694,7 @@ function renderSam3PromptStep(imageId, image) {
 function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
   // Bigger than the crop tool's stage: this tool benefits from more precision
   // room, and (unlike a crop box) the placement box is allowed to run past
-  // the edges -- see setBox below -- so there's more to see at once.
+  // the edges -- see render/setQuad below -- so there's more to see at once.
   const maxW = 820;
   const maxH = Math.max(420, Math.round(window.innerHeight * 0.65));
   const naturalWidth = baseImg.naturalWidth;
@@ -2630,16 +2716,16 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
     <div class="crop-stage-wrap sam3-stage-wrap">
       <div class="crop-stage" id="sam3Stage" style="width:${dispW}px;height:${dispH}px">
         <img id="sam3BaseImg" src="${baseImg.src}" draggable="false" style="width:${dispW}px;height:${dispH}px" />
+        <canvas id="sam3Canvas" width="${dispW}" height="${dispH}" style="position:absolute;left:0;top:0;width:${dispW}px;height:${dispH}px;pointer-events:none"></canvas>
         <div class="placement-box" id="sam3Box">
-          <img src="${cutoutImg.src}" draggable="false" />
-          <div class="crop-handle crop-handle-nw" data-handle="nw"></div>
-          <div class="crop-handle crop-handle-ne" data-handle="ne"></div>
-          <div class="crop-handle crop-handle-sw" data-handle="sw"></div>
-          <div class="crop-handle crop-handle-se" data-handle="se"></div>
+          <div class="crop-handle crop-handle-quad" data-handle="nw"></div>
+          <div class="crop-handle crop-handle-quad" data-handle="ne"></div>
+          <div class="crop-handle crop-handle-quad" data-handle="sw"></div>
+          <div class="crop-handle crop-handle-quad" data-handle="se"></div>
         </div>
       </div>
     </div>
-    <p class="dup-section-hint">Drag to move, drag a corner to resize.</p>
+    <p class="dup-section-hint">Drag to move, drag a corner to resize. Ctrl+drag a corner to skew.</p>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Discard</button>
@@ -2672,60 +2758,125 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
       evt.currentTarget.disabled = false;
     }
   });
-  let box; // current placement in DISPLAY pixel coords, relative to the stage
+  // The placement is a quad (nw/ne/sw/se corners, in DISPLAY pixel coords
+  // relative to the stage) rather than a plain box: a rectangle is just the
+  // case where all four corners still form a right angle. Plain drag-resize
+  // keeps it that way (resizing anchored at the opposite corner, as before);
+  // ctrl+drag on a corner instead moves only that corner, leaving the other
+  // three exactly where they were -- turning the resize into a skew/distort.
+  let quad;
+  const canvas = modal.querySelector("#sam3Canvas");
+  const ctx2d = canvas.getContext("2d");
+  const handleEls = {};
+  for (const k of QUAD_CORNERS) handleEls[k] = boxEl.querySelector(`[data-handle="${k}"]`);
+  const HANDLE_CURSORS = { nw: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", se: "nwse-resize" };
 
-  // Unlike the crop box, this one is allowed to run past the stage's edges
-  // in either direction -- the final composite (see the Save handler below)
+  // Unlike the crop box, this is allowed to run past the stage's edges in
+  // either direction -- the final composite (see the Save handler below)
   // draws it onto a canvas sized to the base image, which silently clips
   // whatever falls outside, the same way the old ComfyUI-side pin/scale
   // graph cropped an over-large placement to the canvas before compositing.
-  // Only a generous ceiling (not the stage bounds) keeps it from growing
-  // large enough to lose its own handles off-screen.
-  function setBox(next) {
-    let { x, y, w, h } = next;
-    w = Math.max(minSize, Math.min(w, dispW * 4));
-    h = Math.max(minSize, Math.min(h, dispH * 4));
-    box = { x, y, w, h };
-    boxEl.style.left = `${x}px`;
-    boxEl.style.top = `${y}px`;
-    boxEl.style.width = `${w}px`;
-    boxEl.style.height = `${h}px`;
+  function render() {
+    ctx2d.clearRect(0, 0, dispW, dispH);
+    drawWarpedQuad(ctx2d, cutoutImg, quad);
+    ctx2d.save();
+    ctx2d.strokeStyle = "#8B5CF6";
+    ctx2d.lineWidth = 2;
+    ctx2d.beginPath();
+    ctx2d.moveTo(quad.nw.x, quad.nw.y);
+    ctx2d.lineTo(quad.ne.x, quad.ne.y);
+    ctx2d.lineTo(quad.se.x, quad.se.y);
+    ctx2d.lineTo(quad.sw.x, quad.sw.y);
+    ctx2d.closePath();
+    ctx2d.stroke();
+    ctx2d.restore();
+    for (const k of QUAD_CORNERS) {
+      handleEls[k].style.left = `${quad[k].x}px`;
+      handleEls[k].style.top = `${quad[k].y}px`;
+      if (!handleEls[k].style.cursor) handleEls[k].style.cursor = HANDLE_CURSORS[k];
+    }
   }
-  setBox({ x: (dispW - initW) / 2, y: (dispH - initH) / 2, w: initW, h: initH });
+  function setQuad(next) {
+    quad = next;
+    render();
+  }
+  {
+    const bx = (dispW - initW) / 2;
+    const by = (dispH - initH) / 2;
+    setQuad({
+      nw: { x: bx, y: by },
+      ne: { x: bx + initW, y: by },
+      sw: { x: bx, y: by + initH },
+      se: { x: bx + initW, y: by + initH },
+    });
+  }
 
   function pointerPos(evt) {
     const rect = stage.getBoundingClientRect();
     return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
   }
 
-  let drag = null; // { mode: "move" | "resize", handle, start: {x,y}, startBox }
+  // Shows a different cursor on a corner handle when ctrl is down and the
+  // pointer is on (or just moved onto) it -- the "this will skew, not
+  // resize" affordance -- reverting to its plain resize cursor otherwise.
+  for (const k of QUAD_CORNERS) {
+    const el = handleEls[k];
+    const updateCursor = (evt) => {
+      el.style.cursor = evt.ctrlKey ? "crosshair" : HANDLE_CURSORS[k];
+    };
+    el.addEventListener("pointerenter", updateCursor);
+    el.addEventListener("pointermove", updateCursor);
+    el.addEventListener("pointerleave", () => {
+      el.style.cursor = HANDLE_CURSORS[k];
+    });
+  }
+
+  let drag = null; // { mode: "move" | "corner", handle, start: {x,y}, startQuad }
   boxEl.addEventListener("pointerdown", (evt) => {
     const handle = evt.target.dataset.handle;
-    drag = { mode: handle ? "resize" : "move", handle, start: pointerPos(evt), startBox: { ...box } };
+    if (!handle && !pointInQuad(pointerPos(evt), quad)) return; // missed the shape entirely
+    drag = { mode: handle ? "corner" : "move", handle, start: pointerPos(evt), startQuad: cloneQuad(quad) };
     boxEl.setPointerCapture(evt.pointerId);
     evt.preventDefault();
   });
   boxEl.addEventListener("pointermove", (evt) => {
-    if (!drag) return;
+    if (!drag) {
+      boxEl.style.cursor = pointInQuad(pointerPos(evt), quad) ? "move" : "default";
+      return;
+    }
     const p = pointerPos(evt);
     const dx = p.x - drag.start.x;
     const dy = p.y - drag.start.y;
     if (drag.mode === "move") {
-      setBox({ x: drag.startBox.x + dx, y: drag.startBox.y + dy, w: drag.startBox.w, h: drag.startBox.h });
+      const next = cloneQuad(drag.startQuad);
+      for (const k of QUAD_CORNERS) {
+        next[k].x += dx;
+        next[k].y += dy;
+      }
+      setQuad(next);
       return;
     }
-    let { x, y, w, h } = drag.startBox;
-    if (drag.handle.includes("n")) {
-      y = drag.startBox.y + dy;
-      h = drag.startBox.h - dy;
+    const h = drag.handle;
+    const anchor = drag.startQuad[QUAD_OPPOSITE[h]];
+    const next = cloneQuad(drag.startQuad);
+    if (evt.ctrlKey) {
+      // Free corner: only the dragged corner moves, the other three stay
+      // exactly where they started -- scale becomes skew.
+      next[h] = {
+        x: clamp(drag.startQuad[h].x + dx, -dispW * 3, dispW * 4),
+        y: clamp(drag.startQuad[h].y + dy, -dispH * 3, dispH * 4),
+      };
+    } else {
+      // Plain resize: stays a rectangle anchored at the opposite corner.
+      let ddx = drag.startQuad[h].x + dx - anchor.x;
+      let ddy = drag.startQuad[h].y + dy - anchor.y;
+      ddx = Math.sign(ddx || 1) * clamp(Math.abs(ddx), minSize, dispW * 4);
+      ddy = Math.sign(ddy || 1) * clamp(Math.abs(ddy), minSize, dispH * 4);
+      next[h] = { x: anchor.x + ddx, y: anchor.y + ddy };
+      next[QUAD_ROW_NEIGHBOR[h]] = { x: drag.startQuad[QUAD_ROW_NEIGHBOR[h]].x, y: anchor.y + ddy };
+      next[QUAD_COL_NEIGHBOR[h]] = { x: anchor.x + ddx, y: drag.startQuad[QUAD_COL_NEIGHBOR[h]].y };
     }
-    if (drag.handle.includes("s")) h = drag.startBox.h + dy;
-    if (drag.handle.includes("w")) {
-      x = drag.startBox.x + dx;
-      w = drag.startBox.w - dx;
-    }
-    if (drag.handle.includes("e")) w = drag.startBox.w + dx;
-    setBox({ x, y, w, h });
+    setQuad(next);
   });
   boxEl.addEventListener("pointerup", () => {
     drag = null;
@@ -2741,13 +2892,15 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
     saveBtn.disabled = true;
     statusEl.innerHTML = `<span class="spinner"></span><span>Saving...</span>`;
     try {
-      const canvas = document.createElement("canvas");
-      canvas.width = naturalWidth;
-      canvas.height = naturalHeight;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(baseImg, 0, 0, naturalWidth, naturalHeight);
-      ctx.drawImage(cutoutImg, box.x / scale, box.y / scale, box.w / scale, box.h / scale);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      const outCanvas = document.createElement("canvas");
+      outCanvas.width = naturalWidth;
+      outCanvas.height = naturalHeight;
+      const outCtx = outCanvas.getContext("2d");
+      outCtx.drawImage(baseImg, 0, 0, naturalWidth, naturalHeight);
+      const naturalQuad = {};
+      for (const k of QUAD_CORNERS) naturalQuad[k] = { x: quad[k].x / scale, y: quad[k].y / scale };
+      drawWarpedQuad(outCtx, cutoutImg, naturalQuad);
+      const blob = await new Promise((resolve) => outCanvas.toBlob(resolve, "image/png"));
       const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: prompt });
       if (state.currentImageId === imageId) {
         state.currentImage.sam3_reference = savedRef;
@@ -2825,6 +2978,45 @@ if (savedComfyWorkflow && [...els.comfyWorkflowSelect.options].some((o) => o.val
 }
 updateComfyWorkflowVisibility();
 updateReferenceImagesVisibility();
+
+// ---------------------------------------------------------------------------
+// SAM3 prompt history -- shared between the prompt panel's SAM3 Prompt field
+// (els.sam3PromptInput) and the "Detect object" modal's prompt field, so
+// using either one feeds the same recency list. Keeps the 5 most recently
+// used prompts, most-recent first, surfaced via a <datalist> on both inputs.
+// The most recent entry also pre-fills the panel's field on load, so a fresh
+// session doesn't start from a blank SAM3 prompt.
+// ---------------------------------------------------------------------------
+const SAM3_PROMPT_HISTORY_KEY = "grok_img2img.sam3PromptHistory";
+const SAM3_PROMPT_HISTORY_MAX = 5;
+
+function getSam3PromptHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(SAM3_PROMPT_HISTORY_KEY));
+    return Array.isArray(list) ? list.filter((p) => typeof p === "string" && p.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSam3Prompt(prompt) {
+  prompt = prompt.trim();
+  if (!prompt) return;
+  const history = [prompt, ...getSam3PromptHistory().filter((p) => p !== prompt)].slice(0, SAM3_PROMPT_HISTORY_MAX);
+  localStorage.setItem(SAM3_PROMPT_HISTORY_KEY, JSON.stringify(history));
+  renderSam3PromptHistoryList();
+}
+
+function renderSam3PromptHistoryList() {
+  els.sam3PromptHistoryList.innerHTML = getSam3PromptHistory()
+    .map((p) => `<option value="${escapeAttr(p)}"></option>`)
+    .join("");
+}
+
+renderSam3PromptHistoryList();
+if (!els.sam3PromptInput.value.trim()) {
+  els.sam3PromptInput.value = getSam3PromptHistory()[0] || "";
+}
 
 // ---------------------------------------------------------------------------
 // Source pre-processing (rotate / crop / pad). Only the settings are stored on
@@ -3199,6 +3391,7 @@ async function enqueueGeneration(imageId) {
   const comfyWorkflow = engine === "comfyui" ? els.comfyWorkflowSelect.value : null;
   const isSam3 = comfyWorkflow === "sam3";
   const isSam3Xy = comfyWorkflow === "sam3_xy";
+  if (isSam3 || isSam3Xy) rememberSam3Prompt(els.sam3PromptInput.value);
   const numOrUndefined = (input) => (input.value !== "" ? parseFloat(input.value) : undefined);
   const referenceIds = referenceIdsForImage(imageId);
   const job = await api.generateResult(imageId, {

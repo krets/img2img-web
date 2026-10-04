@@ -1114,14 +1114,14 @@ kbd {
   position: absolute; box-sizing: border-box; cursor: move;
   border: 2px solid #8B5CF6; box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
 }
-/* Same drag/resize box as .crop-box, minus the dim-everything-outside mask --
-   used for the SAM3 placement tool, where the whole base image stays visible
-   and only the dragged object sits inside the box. */
-.placement-box {
-  position: absolute; box-sizing: border-box; cursor: move;
-  border: 2px solid #8B5CF6;
-}
-.placement-box img { width: 100%; height: 100%; display: block; pointer-events: none; }
+/* Used for the SAM3 placement tool. Unlike .crop-box this spans the whole
+   stage (not just the placed object) so a dragged corner handle can be
+   positioned anywhere, including mid-skew past the object's own bounds; the
+   object itself (image, outline, and the dim-outside mask it no longer has)
+   is drawn on a <canvas> underneath, since the draggable region is an
+   arbitrary quadrilateral rather than this element's own box. Cursor
+   feedback is therefore set per-pointer-event in JS instead of here. */
+.placement-box { position: absolute; inset: 0; }
 .crop-handle {
   position: absolute; width: 12px; height: 12px;
   background: #8B5CF6; border: 2px solid #fff; border-radius: 50%;
@@ -1130,6 +1130,12 @@ kbd {
 .crop-handle-ne { top: -7px; right: -7px; cursor: nesw-resize; }
 .crop-handle-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
 .crop-handle-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+/* The SAM3 placement tool's corner handles aren't inset from a sized box
+   like .crop-handle-nw etc. above -- .placement-box now spans the whole
+   stage, so each handle is placed directly at its quad corner's own (x,y)
+   via inline left/top, centered on that point. Cursor is set in JS there
+   too, since it depends on live ctrl-key state, not just which corner. */
+.crop-handle-quad { transform: translate(-50%, -50%); }
 
 .modal:has(.dup-groups) { width: 640px; }
 .dup-groups { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }

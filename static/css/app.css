@@ -58,6 +58,32 @@ a.topbar-tab:hover { color: #e6e6eb; background: rgba(139,92,246,0.12); }
 .topbar-tab.active { background: rgba(139,92,246,0.2); border-color: #8B5CF6; color: #e6e6eb; }
 .topbar-tab .project-menu-btn { font-weight: 500; }
 
+/* ComfyUI VRAM readout: shown only while a ComfyUI server answers
+   /system_stats. Click (or double-click) frees models and node cache. The
+   bar is a fixed size and the label a fixed width so the topbar doesn't
+   jitter as the numbers change on every poll. */
+.comfy-stats-btn {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.comfy-stats-btn.is-busy { opacity: 0.6; }
+.comfy-stats-btn.is-high { color: #f0b429; border-color: #6b5420; }
+.comfy-stats-bar {
+  position: relative; flex-shrink: 0;
+  width: 44px; height: 6px; border-radius: 3px;
+  background: #2a2c35; overflow: hidden;
+}
+.comfy-stats-bar-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+  background: #8B5CF6; border-radius: 3px;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+.comfy-stats-btn.is-high .comfy-stats-bar-fill { background: #f0b429; }
+/* Fixed px width (not ch): sized for the widest realistic reading
+   ("999.9GiB / 999.9GiB"), with overflow hidden as a backstop so an
+   extra digit can never make the text spill past the box. */
+.comfy-stats-label { flex-shrink: 0; width: 108px; overflow: hidden; text-align: left; }
+
 /* Hamburger menu: the topbar's secondary actions live in a dropdown. The
    buttons keep their own ids (wired in app.js/panels.js); this only restyles
    them as rows. */
@@ -178,6 +204,68 @@ kbd {
   color: #9ea2b0;
 }
 .icon-toggle-btn.active { background: rgba(139,92,246,0.25); border-color: #8B5CF6; color: #e6e6eb; }
+/* Auto-generate-on-upload: filled with the same gradient as the Generate
+   button it sits next to (static), plus a single bright spark with a
+   fading trail that circles the border, so the "live" state (it silently
+   fires a generation on every upload) reads as obviously-on. Same plain
+   background-image layering as an earlier marching-ants version (a masked
+   conic-gradient ring was tried instead and didn't render as a clean
+   border trace), but with one non-repeating comet tile per edge instead of
+   a repeating dash tile. Each edge's tile sits parked off its own edge
+   (invisible) except during its own quarter of the animation, when it
+   sweeps from corner to corner -- so only one comet is ever visible,
+   handing off edge to edge: top -> right -> bottom -> left, each parking
+   right where the next one picks up. The comet gradient is brightest at
+   its leading edge (the direction of travel) and fades out along its
+   trailing side.
+
+   Each edge's "parked" (fully hidden) position is exactly the edge's own
+   length (30px wide / 29px tall for this 30x29 button) -- an earlier
+   version overshot to a flat 44px on every side, which burned part of
+   each quarter's time budget on travel that was already fully invisible
+   and made the right-to-bottom handoff (where the waste landed on the
+   same side for both edges) lag noticeably behind the others.
+
+   At the three interior corners (top-right, right-bottom, bottom-left)
+   the outgoing and incoming edges' active windows now overlap by 6% of
+   the cycle on each side, so for a brief moment both are concurrently
+   mid-transit -- the old edge's dim trailing sliver and the new edge's
+   dim leading sliver crossfade instead of one cutting straight to the
+   other. The fourth corner (left back to top, across the loop's 100%/0%
+   seam) stays a non-overlapping handoff: CSS keyframes don't carry a
+   mid-transit value across that seam without restating it by hand, and
+   the gap there is already imperceptible since it's a single instant,
+   not a sustained pause. */
+#autoGenOnUploadToggle.active {
+  border-color: transparent;
+  color: #fff;
+  background-image:
+    linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.25) 35%, #fff 100%),
+    linear-gradient(180deg, transparent 0%, rgba(255,255,255,0.25) 35%, #fff 100%),
+    linear-gradient(90deg, #fff 0%, rgba(255,255,255,0.25) 65%, transparent 100%),
+    linear-gradient(180deg, #fff 0%, rgba(255,255,255,0.25) 65%, transparent 100%),
+    linear-gradient(90deg, #EC4899, #8B5CF6);
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: 14px 2px, 2px 14px, 14px 2px, 2px 14px, 100% 100%;
+  background-position: -14px 0%, 100% -14px, 30px 100%, 0% 29px, 0% 0%;
+  animation: auto-gen-spark 2s linear infinite;
+}
+@keyframes auto-gen-spark {
+  0%   { background-position: -14px 0%,   100% -14px,  30px 100%,   0% 29px,    0% 0%; }
+  19%  { background-position: 12.97px 0%, 100% -14px,  30px 100%,   0% 29px,    0% 0%; }
+  25%  { background-position: 21.48px 0%, 100% -7.03px,30px 100%,   0% 29px,    0% 0%; }
+  31%  { background-position: 30px 0%,    100% 0px,    30px 100%,   0% 29px,    0% 0%; }
+  44%  { background-position: 30px 0%,    100% 15.05px,30px 100%,   0% 29px,    0% 0%; }
+  50%  { background-position: 30px 0%,    100% 22.03px,22.86px 100%,0% 29px,    0% 0%; }
+  56%  { background-position: 30px 0%,    100% 29px,   15.73px 100%,0% 29px,    0% 0%; }
+  69%  { background-position: 30px 0%,    100% 29px,   0.27px 100%, 0% 29px,    0% 0%; }
+  75%  { background-position: 30px 0%,    100% 29px,   -6.86px 100%,0% 20.68px, 0% 0%; }
+  81%  { background-position: 30px 0%,    100% 29px,   -14px 100%,  0% 12.35px, 0% 0%; }
+  100% { background-position: 30px 0%,    100% 29px,   -14px 100%,  0% -14px,   0% 0%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #autoGenOnUploadToggle.active { animation: none; }
+}
 .btn-danger {
   background: transparent;
   border: 1px solid #7f1d1d;

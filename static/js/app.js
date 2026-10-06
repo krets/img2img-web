@@ -80,6 +80,9 @@ const els = {
   projectMenuBtn: document.getElementById("projectMenuBtn"),
   projectMenuName: document.getElementById("projectMenuName"),
   projectPanel: document.getElementById("projectPanel"),
+  comfyStatsBtn: document.getElementById("comfyStatsBtn"),
+  comfyStatsBarFill: document.getElementById("comfyStatsBarFill"),
+  comfyStatsLabel: document.getElementById("comfyStatsLabel"),
   topbarMenu: document.getElementById("topbarMenu"),
   topbarMenuBtn: document.getElementById("topbarMenuBtn"),
   topbarMenuPanel: document.getElementById("topbarMenuPanel"),
@@ -3464,6 +3467,54 @@ function mergeQueueJob(job) {
 }
 
 // ---------------------------------------------------------------------------
+// ComfyUI VRAM readout (topbar) — hidden whenever no ComfyUI server answers.
+// Click or double-click frees its models and node cache.
+// ---------------------------------------------------------------------------
+
+let comfyFreeInFlight = false;
+
+function formatGiB(bytes) {
+  return `${(bytes / 1073741824).toFixed(1)}GiB`;
+}
+
+async function pollComfyStats() {
+  if (comfyFreeInFlight) return; // don't fight the "Freeing..." label
+  let res;
+  try {
+    res = await api.getComfyuiStats();
+  } catch (e) {
+    res = { ok: false };
+  }
+  if (!res.ok || !res.stats) {
+    els.comfyStatsBtn.style.display = "none";
+    return;
+  }
+  const { vram_free, vram_total } = res.stats;
+  const usedFraction = 1 - vram_free / vram_total;
+  els.comfyStatsBarFill.style.width = `${Math.round(usedFraction * 100)}%`;
+  els.comfyStatsLabel.textContent = `${formatGiB(vram_total - vram_free)} / ${formatGiB(vram_total)}`;
+  els.comfyStatsBtn.classList.toggle("is-high", usedFraction >= 0.85);
+  els.comfyStatsBtn.style.display = "flex";
+}
+
+els.comfyStatsBtn.addEventListener("click", async () => {
+  if (comfyFreeInFlight) return;
+  comfyFreeInFlight = true;
+  els.comfyStatsBtn.classList.add("is-busy");
+  const previousLabel = els.comfyStatsLabel.textContent;
+  els.comfyStatsLabel.textContent = "Freeing...";
+  try {
+    await api.comfyuiFree();
+  } catch (e) {
+    // server hiccup -- next poll tick will reflect reality
+  }
+  await pollComfyStats();
+  if (els.comfyStatsBtn.style.display === "none") els.comfyStatsLabel.textContent = previousLabel;
+  els.comfyStatsBtn.classList.remove("is-busy");
+  comfyFreeInFlight = false;
+});
+
+// ---------------------------------------------------------------------------
 // Background job queue (overlay + per-image status/chits)
 // ---------------------------------------------------------------------------
 
@@ -4280,4 +4331,6 @@ initHotkeys({
   updateComfyWorkflowVisibility();
   pollQueue();
   setInterval(pollQueue, 1200);
+  pollComfyStats();
+  setInterval(pollComfyStats, 5000);
 })();

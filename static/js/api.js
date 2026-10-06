@@ -149,6 +149,7 @@ export const api = {
   checkConnection: () => request("POST", "/config/check-connection"),
   checkComfyuiConnection: () => request("POST", "/config/check-comfyui-connection"),
   comfyuiFree: () => request("POST", "/config/comfyui-free"),
+  getComfyuiStats: () => request("GET", "/config/comfyui-stats"),
   checkFalConnection: () => request("POST", "/config/check-fal-connection"),
   getFalModels: () => request("GET", "/config/fal-models"),
   getBalances: () => request("GET", "/config/balances"),

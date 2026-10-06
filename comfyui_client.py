@@ -467,6 +467,33 @@ def check_connection(base_url):
     return False, f"Unexpected response: {response.status_code}"
 
 
+def get_system_stats(base_url):
+    """Fetches ComfyUI's /system_stats and picks out the first GPU device's
+    VRAM figures, for a topbar readout. torch_vram_* is what ComfyUI's own
+    allocator is holding (the useful "is a model resident" signal); vram_*
+    is the OS/driver view of the whole card.
+    """
+    if not base_url:
+        return False, "No ComfyUI URL configured.", None
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/system_stats", timeout=5)
+    except Exception as e:
+        return False, f"Network error: {e}", None
+    if response.status_code != 200:
+        return False, f"Unexpected response: {response.status_code}", None
+    devices = response.json().get("devices", [])
+    if not devices:
+        return False, "No GPU devices reported.", None
+    device = devices[0]
+    return True, "OK", {
+        "name": device.get("name"),
+        "vram_total": device.get("vram_total"),
+        "vram_free": device.get("vram_free"),
+        "torch_vram_total": device.get("torch_vram_total"),
+        "torch_vram_free": device.get("torch_vram_free"),
+    }
+
+
 def free_memory(base_url):
     """Hits ComfyUI's own /free endpoint to unload models and clear the node
     execution cache -- the same thing its "Unload Models" / "Free model and

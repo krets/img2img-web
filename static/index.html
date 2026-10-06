@@ -22,6 +22,11 @@
       <a href="/manage" class="topbar-tab"><span class="topbar-tab-label">🗂 Review &amp; Export</span></a>
     </nav>
     <div class="topbar-right">
+      <button id="comfyStatsBtn" class="btn-ghost comfy-stats-btn" type="button" style="display:none" title="ComfyUI VRAM — click to free models and cache">
+        <span class="comfy-stats-icon" aria-hidden="true">🖥</span>
+        <span class="comfy-stats-bar"><span id="comfyStatsBarFill" class="comfy-stats-bar-fill"></span></span>
+        <span id="comfyStatsLabel" class="comfy-stats-label"></span>
+      </button>
       <div class="topbar-menu" id="topbarMenu">
         <button id="topbarMenuBtn" class="btn-ghost topbar-menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Menu" title="Menu">☰</button>
         <div id="topbarMenuPanel" class="topbar-menu-panel" style="display:none">

@@ -12,18 +12,19 @@ they mean the same thing on screen as in the render):
     {
       "rotation": 0 | 90 | 180 | 270,          # clockwise
       "crop": {"x": int, "y": int, "w": int, "h": int},
-      "fill": {"mode": "blur" | "color", "color": "#rrggbb"},
+      "fill": {"mode": "blur" | "color" | "extend" | "edge_color", "color": "#rrggbb"},
     }
 """
 
 import hashlib
 import json
 import math
+from collections import Counter
 
 from PIL import Image, ImageFilter
 
 ROTATIONS = (0, 90, 180, 270)
-FILL_MODES = ("blur", "color")
+FILL_MODES = ("blur", "color", "extend", "edge_color")
 DEFAULT_FILL = {"mode": "blur", "color": "#000000"}
 
 # Generous, but keeps a fat-fingered crop from asking PIL for a multi-GB canvas.
@@ -71,7 +72,7 @@ def normalize(params, width, height):
     fill_in = params.get("fill") or {}
     mode = fill_in.get("mode") or DEFAULT_FILL["mode"]
     if mode not in FILL_MODES:
-        raise ValueError("fill mode must be 'blur' or 'color'")
+        raise ValueError("fill mode must be 'blur', 'color', 'extend', or 'edge_color'")
     color = (fill_in.get("color") or DEFAULT_FILL["color"]).lower()
     _parse_color(color)
 
@@ -120,8 +121,13 @@ def render(img, params):
         return region  # crop sits entirely inside the image: no padding to fill
 
     fill = params["fill"]
-    if fill["mode"] == "color":
+    mode = fill["mode"]
+    if mode == "color":
         canvas = Image.new("RGB", (w, h), _parse_color(fill["color"]))
+    elif mode == "extend":
+        canvas = _edge_extend(region, ix0 - x, iy0 - y, w, h)
+    elif mode == "edge_color":
+        canvas = Image.new("RGB", (w, h), _predominant_edge_color(region, ix0 - x, iy0 - y, w, h))
     else:
         canvas = _blurred_cover(img, (w, h))
     canvas.paste(region, (ix0 - x, iy0 - y))
@@ -142,3 +148,54 @@ def _blurred_cover(img, size):
     small = small.crop((left, top, left + sw, top + sh))
     small = small.filter(ImageFilter.GaussianBlur(radius=max(sw, sh) / BLUR_RADIUS_DIVISOR))
     return small.resize((w, h), Image.Resampling.BICUBIC)
+
+
+def _edge_extend(region, left, top, w, h):
+    """Pads region out to (w, h) by replicating its boundary pixels outward:
+    each strip of padding is stretched from the single row/column of region
+    pixels it borders, and the four corners from region's corner pixel.
+    """
+    rw, rh = region.size
+    right, bottom = w - left - rw, h - top - rh
+    canvas = Image.new("RGB", (w, h))
+    if left > 0:
+        canvas.paste(region.crop((0, 0, 1, rh)).resize((left, rh), Image.Resampling.NEAREST), (0, top))
+    if right > 0:
+        canvas.paste(region.crop((rw - 1, 0, rw, rh)).resize((right, rh), Image.Resampling.NEAREST), (left + rw, top))
+    if top > 0:
+        canvas.paste(region.crop((0, 0, rw, 1)).resize((rw, top), Image.Resampling.NEAREST), (left, 0))
+    if bottom > 0:
+        canvas.paste(region.crop((0, rh - 1, rw, rh)).resize((rw, bottom), Image.Resampling.NEAREST), (left, top + rh))
+    if left > 0 and top > 0:
+        canvas.paste(region.crop((0, 0, 1, 1)).resize((left, top), Image.Resampling.NEAREST), (0, 0))
+    if right > 0 and top > 0:
+        canvas.paste(region.crop((rw - 1, 0, rw, 1)).resize((right, top), Image.Resampling.NEAREST), (left + rw, 0))
+    if left > 0 and bottom > 0:
+        canvas.paste(region.crop((0, rh - 1, 1, rh)).resize((left, bottom), Image.Resampling.NEAREST), (0, top + rh))
+    if right > 0 and bottom > 0:
+        canvas.paste(
+            region.crop((rw - 1, rh - 1, rw, rh)).resize((right, bottom), Image.Resampling.NEAREST),
+            (left + rw, top + rh),
+        )
+    return canvas
+
+
+def _predominant_edge_color(region, left, top, w, h):
+    """The most common color among the boundary pixels of region that face
+    padding -- the same rows/columns an "extend" fill would stretch outward,
+    collapsed here into a single solid color instead of stretched individually.
+    """
+    rw, rh = region.size
+    right, bottom = w - left - rw, h - top - rh
+    pixels = []
+    if left > 0:
+        pixels.extend(region.crop((0, 0, 1, rh)).getdata())
+    if right > 0:
+        pixels.extend(region.crop((rw - 1, 0, rw, rh)).getdata())
+    if top > 0:
+        pixels.extend(region.crop((0, 0, rw, 1)).getdata())
+    if bottom > 0:
+        pixels.extend(region.crop((0, rh - 1, rw, rh)).getdata())
+    if not pixels:
+        pixels = list(region.getdata())
+    return Counter(pixels).most_common(1)[0][0]

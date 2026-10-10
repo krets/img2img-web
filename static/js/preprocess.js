@@ -1,6 +1,7 @@
 /** Source pre-process editor: rotate in 90-degree steps and pick a crop
  * region that may extend past the image (the overhang is padded with a solid
- * color or a blurred copy of the image -- the server renders that on Apply, see
+ * color, a blurred copy of the image, replicated edge pixels, or the
+ * predominant edge color -- the server renders that on Apply, see
  * preprocess.py). Edits are only ever *settings*: the stored source is never
  * modified, and nothing here touches the server until Apply.
  *
@@ -28,10 +29,12 @@ const ASPECTS = [
   { value: "3:4", label: "3:4" },
 ];
 
+const FILL_MODES = ["blur", "color", "extend", "edge_color"];
+
 function loadFillPref() {
   try {
     const f = JSON.parse(localStorage.getItem(FILL_STORAGE_KEY));
-    if (f && (f.mode === "blur" || f.mode === "color") && /^#[0-9a-f]{6}$/i.test(f.color)) return f;
+    if (f && FILL_MODES.includes(f.mode) && /^#[0-9a-f]{6}$/i.test(f.color)) return f;
   } catch {}
   return { mode: "blur", color: "#000000" };
 }
@@ -67,6 +70,8 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
     <select class="pp-select" data-role="fill-mode" title="What to put in the parts of the crop that extend past the image">
       <option value="blur">Fill: blurred original</option>
       <option value="color">Fill: solid color</option>
+      <option value="extend">Fill: extend edge pixels</option>
+      <option value="edge_color">Fill: predominant edge color</option>
     </select>
     <input type="color" class="pp-color" data-role="fill-color" title="Fill color" />
     <span class="pp-size" data-role="size"></span>
@@ -163,6 +168,8 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
     Object.assign(cropEl.style, box);
     Object.assign(fillEl.style, box);
     fillEl.classList.toggle("pp-fill-blur", fill.mode === "blur");
+    fillEl.classList.toggle("pp-fill-extend", fill.mode === "extend");
+    fillEl.classList.toggle("pp-fill-edge-color", fill.mode === "edge_color");
     fillEl.style.background = fill.mode === "color" ? fill.color : "";
     const label = `${Math.round(crop.w)} × ${Math.round(crop.h)}`;
     readoutEl.textContent = label;

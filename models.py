@@ -36,7 +36,7 @@ class PreprocessCropIn(BaseModel):
 
 
 class PreprocessFillIn(BaseModel):
-    mode: Literal["blur", "color"] = "blur"
+    mode: Literal["blur", "color", "extend", "edge_color"] = "blur"
     color: str = "#000000"
 
 

@@ -1198,7 +1198,17 @@ kbd {
 
 .modal:has(.lightbox-img) { width: auto; max-width: 92vw; }
 .lightbox-stage { position: relative; display: flex; align-items: center; justify-content: center; }
-.lightbox-img { display: block; max-width: 88vw; max-height: 78vh; border-radius: 6px; }
+.lightbox-img-wrap { position: relative; display: inline-block; overflow: hidden; border-radius: 6px; }
+.lightbox-img { display: block; max-width: 88vw; max-height: 78vh; }
+/* Non-interactive outline of a reference image's applied crop, drawn over
+   the full original -- same dim-outside trick as .crop-box, just without
+   handles since this one's for display, not dragging. Positioned in percent
+   of the wrap (which always exactly matches the <img>'s own rendered box),
+   so it stays aligned at any lightbox size with no JS involved. */
+.lightbox-crop-box {
+  position: absolute; box-sizing: border-box; pointer-events: none;
+  border: 2px solid #8B5CF6; box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
+}
 .lightbox-nav-btn {
   position: absolute; top: 50%; transform: translateY(-50%); z-index: 1;
   width: 36px; height: 36px; border-radius: 50%; font-size: 20px; line-height: 1; padding: 0;

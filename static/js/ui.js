@@ -221,7 +221,18 @@ export const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 // flip through its filtered result set. Navigating does not touch
 // modalBackStack, so however many items the user pages through, a single
 // Back/Escape still returns straight to the grid.
-export function openImageLightbox(url, title, { onPrev, onNext, position } = {}) {
+//
+// crop, if given ({x, y, w, h, naturalWidth, naturalHeight}, all in the
+// original image's own pixel space), outlines that region over the full
+// image with the surrounding area dimmed -- the lightbox otherwise shows the
+// untouched original, with no way to tell what's actually cropped in for
+// generation. Expressed as percentages of the natural size, so it lines up
+// with the displayed image at any scale without extra JS on resize.
+//
+// onEditCrop, if given, adds an "Edit crop" action that hands off to the
+// crop editor; callers push a "redraw me" step onto modalBackStack first
+// (see pushModalBack) so cancelling the crop editor returns to this view.
+export function openImageLightbox(url, title, { onPrev, onNext, position, crop, onEditCrop } = {}) {
   const hasBack = modalBackStack.length > 0;
   const navBtns =
     onPrev || onNext
@@ -230,13 +241,20 @@ export function openImageLightbox(url, title, { onPrev, onNext, position } = {})
       <button class="lightbox-nav-btn lightbox-nav-next" id="mNext" title="Next (→)" ${onNext ? "" : "disabled"}>›</button>
     `
       : "";
+  const cropBoxHtml = crop
+    ? `<div class="lightbox-crop-box" style="left:${(crop.x / crop.naturalWidth) * 100}%;top:${(crop.y / crop.naturalHeight) * 100}%;width:${(crop.w / crop.naturalWidth) * 100}%;height:${(crop.h / crop.naturalHeight) * 100}%" title="Applied crop"></div>`
+    : "";
   const modal = openModal(`
     <div class="lightbox-stage">
       ${navBtns}
-      <img class="lightbox-img" src="${url}" alt="${escapeHtml(title || "")}" />
+      <div class="lightbox-img-wrap">
+        <img class="lightbox-img" src="${url}" alt="${escapeHtml(title || "")}" />
+        ${cropBoxHtml}
+      </div>
     </div>
     <div class="modal-actions">
       ${position ? `<span class="lightbox-position">${escapeHtml(position)}</span>` : ""}
+      ${onEditCrop ? `<button id="mEditCrop" class="btn-ghost" type="button">✂ Edit crop</button>` : ""}
       <a class="btn-ghost" href="${url}" target="_blank" rel="noopener">↗ Open</a>
       <button id="mCancel" class="btn-ghost">${hasBack ? "← Back" : "Close"}</button>
     </div>
@@ -244,6 +262,7 @@ export function openImageLightbox(url, title, { onPrev, onNext, position } = {})
   modal.querySelector("#mCancel").addEventListener("click", modalBack);
   if (onPrev) modal.querySelector("#mPrev").addEventListener("click", onPrev);
   if (onNext) modal.querySelector("#mNext").addEventListener("click", onNext);
+  if (onEditCrop) modal.querySelector("#mEditCrop").addEventListener("click", onEditCrop);
   lightboxNav = onPrev || onNext ? { prev: onPrev, next: onNext } : null;
 }
 

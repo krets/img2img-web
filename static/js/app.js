@@ -11,6 +11,8 @@ import {
   formatRelativeTime,
   openModal,
   closeModal,
+  modalBack,
+  pushModalBack,
   setModalOnClose,
   openConfirmModal,
   openImageLightbox,
@@ -2315,8 +2317,7 @@ function renderReferenceImages() {
   els.referenceImageList.querySelectorAll("[data-view-ref]").forEach((img) => {
     img.addEventListener("click", () => {
       const id = img.dataset.viewRef;
-      const ref = resolveReferenceForDisplay(id);
-      openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
+      openReferenceLightbox(resolveReferenceForDisplay(id), id);
     });
   });
   const banner = els.referenceImageList.querySelector("#sam3PendingBanner");
@@ -2409,8 +2410,7 @@ function openReferenceImagePicker() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const id = btn.dataset.viewPickerRef;
-      const ref = resolveReferenceForDisplay(id);
-      openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
+      openReferenceLightbox(resolveReferenceForDisplay(id), id);
     });
   });
 }
@@ -2521,12 +2521,66 @@ function openCropModal({ title, imageUrl, naturalWidth, naturalHeight, initialBo
     drag = null;
   });
 
-  modal.querySelector("#cropCancelBtn").addEventListener("click", closeModal); // triggers settleCancel via modalOnClose
+  // modalBack (not closeModal) so a caller that pushed a "redraw me" step
+  // (the lightbox's Edit crop button) returns there instead of closing
+  // outright; with nothing pushed it falls through to closeModal() same as
+  // before, still triggering settleCancel via modalOnClose.
+  modal.querySelector("#cropCancelBtn").addEventListener("click", modalBack);
   modal.querySelector("#cropSaveBtn").addEventListener("click", () => {
     const natural = { x: box.x / scale, y: box.y / scale, w: box.w / scale, h: box.h / scale };
     settled = true; // suppress the settleCancel that closeModal() would otherwise fire
     closeModal();
     onSave(natural);
+  });
+}
+
+// Opens the zoom lightbox for a reference image, outlining whatever crop is
+// currently applied over the full original (see openImageLightbox's `crop`
+// option) instead of just showing the original with no indication of what
+// region actually feeds generation. `ref` may be null (a stale/missing
+// reference -- see resolveReferenceForDisplay), in which case this falls
+// back to a plain lightbox with no crop overlay or edit action.
+//
+// The "Edit crop" button pushes a step that redraws this same lightbox onto
+// modalBackStack before opening openCropModal, so cancelling returns here;
+// saving re-fetches the ref (its crop fields and active file both changed)
+// and reopens this lightbox with the updated crop shown. A SAM3 placement
+// reference (ref.source_image_id set, see renderReferenceLibrary/picker)
+// isn't in state.referenceImages, so it refreshes via state.currentImage
+// instead of loadReferenceImages.
+function openReferenceLightbox(ref, id) {
+  const refId = ref ? ref.id : id;
+  const crop =
+    ref && ref.crop_x != null
+      ? { x: ref.crop_x, y: ref.crop_y, w: ref.crop_w, h: ref.crop_h, naturalWidth: ref.orig_width, naturalHeight: ref.orig_height }
+      : null;
+  openImageLightbox(`/api/reference-images/${refId}/original`, ref ? ref.display_name : "", {
+    crop,
+    onEditCrop: ref
+      ? () => {
+          pushModalBack(() => openReferenceLightbox(ref, id));
+          openCropModal({
+            title: `Crop "${ref.display_name}"`,
+            imageUrl: `/api/reference-images/${refId}/original`,
+            naturalWidth: ref.orig_width,
+            naturalHeight: ref.orig_height,
+            initialBox: crop,
+            onSave: async (box) => {
+              await api.recropReferenceImage(refId, box);
+              if (ref.source_image_id) {
+                if (state.currentImageId) {
+                  state.currentImage = await api.getImage(state.currentImageId);
+                  renderDetails();
+                  openReferenceLightbox(state.currentImage.sam3_reference, id);
+                }
+              } else {
+                await loadReferenceImages();
+                openReferenceLightbox(state.referenceImages.find((r) => r.id === refId), id);
+              }
+            },
+          });
+        }
+      : undefined,
   });
 }
 
@@ -3193,8 +3247,7 @@ function renderReferenceLibrary() {
   els.referenceLibraryGrid.querySelectorAll("[data-view-ref], [data-view-ref-btn]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.viewRef || el.dataset.viewRefBtn;
-      const ref = state.referenceImages.find((r) => r.id === id);
-      openImageLightbox(`/api/reference-images/${id}/original`, ref ? ref.display_name : "");
+      openReferenceLightbox(state.referenceImages.find((r) => r.id === id), id);
     });
   });
   els.referenceLibraryGrid.querySelectorAll("[data-crop-ref]").forEach((btn) => {

@@ -82,7 +82,9 @@ export const api = {
 
   // Reference images (per-project prep library, distinct from source images)
   listReferenceImages: (projectId) => request("GET", `/projects/${projectId}/reference-images`),
-  uploadReferenceImage: (projectId, { file, displayName, cropBox }) => {
+  // activeBlob is the already-cropped PNG (see app.js's cropImageToBlob) --
+  // the server just stores it as the active file, no Pillow crop needed.
+  uploadReferenceImage: (projectId, { file, displayName, cropBox, activeBlob }) => {
     const form = new FormData();
     form.append("file", file);
     if (displayName) form.append("display_name", displayName);
@@ -92,13 +94,19 @@ export const api = {
       form.append("crop_w", Math.round(cropBox.w));
       form.append("crop_h", Math.round(cropBox.h));
     }
+    if (activeBlob) form.append("active_file", activeBlob, "active.png");
     return request("POST", `/projects/${projectId}/reference-images`, { form });
   },
   updateReferenceImage: (refId, body) => request("PUT", `/reference-images/${refId}`, { json: body }),
-  recropReferenceImage: (refId, cropBox) =>
-    request("PUT", `/reference-images/${refId}/crop`, {
-      json: { crop_x: Math.round(cropBox.x), crop_y: Math.round(cropBox.y), crop_w: Math.round(cropBox.w), crop_h: Math.round(cropBox.h) },
-    }),
+  recropReferenceImage: (refId, cropBox, activeBlob) => {
+    const form = new FormData();
+    form.append("crop_x", Math.round(cropBox.x));
+    form.append("crop_y", Math.round(cropBox.y));
+    form.append("crop_w", Math.round(cropBox.w));
+    form.append("crop_h", Math.round(cropBox.h));
+    form.append("active_file", activeBlob, "active.png");
+    return request("PUT", `/reference-images/${refId}/crop`, { form });
+  },
   deleteReferenceImage: (refId) => request("DELETE", `/reference-images/${refId}`),
   restoreReferenceImage: (refId) => request("POST", `/reference-images/${refId}/restore`),
   permanentlyDeleteReferenceImage: (refId) => request("DELETE", `/reference-images/${refId}/permanent`),

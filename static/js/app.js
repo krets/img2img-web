@@ -2529,12 +2529,38 @@ function openCropModal({ title, imageUrl, naturalWidth, naturalHeight, initialBo
   // outright; with nothing pushed it falls through to closeModal() same as
   // before, still triggering settleCancel via modalOnClose.
   modal.querySelector("#cropCancelBtn").addEventListener("click", modalBack);
-  modal.querySelector("#cropSaveBtn").addEventListener("click", () => {
+  modal.querySelector("#cropSaveBtn").addEventListener("click", async () => {
     const natural = { x: box.x / scale, y: box.y / scale, w: box.w / scale, h: box.h / scale };
+    // Cropped right here in the browser, from the full-resolution <img> this
+    // modal already has loaded -- the server just persists the resulting
+    // bytes (see api.js/storage.py), no Pillow round-trip needed for a plain
+    // rectangular crop.
+    const blob = await cropImageToBlob(modal.querySelector("#cropImg"), natural);
     settled = true; // suppress the settleCancel that closeModal() would otherwise fire
     closeModal();
-    onSave(natural);
+    onSave(natural, blob);
   });
+}
+
+// Crops imgEl (its full natural-resolution bitmap, already decoded by the
+// browser) to box (natural pixel coords, fractional) and returns a PNG blob.
+// Flattens onto white first, matching what the server used to do when it
+// normalized/cropped with Pillow -- source images here never actually carry
+// alpha (reference originals are flattened on upload), but this keeps that
+// invariant even if one somehow did.
+function cropImageToBlob(imgEl, box) {
+  const x = Math.round(box.x);
+  const y = Math.round(box.y);
+  const w = Math.round(box.w);
+  const h = Math.round(box.h);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(imgEl, x, y, w, h, 0, 0, w, h);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
 
 // Opens the zoom lightbox for a reference image, outlining whatever crop is
@@ -2568,8 +2594,8 @@ function openReferenceLightbox(ref, id) {
             naturalWidth: ref.orig_width,
             naturalHeight: ref.orig_height,
             initialBox: crop,
-            onSave: async (box) => {
-              await api.recropReferenceImage(refId, box);
+            onSave: async (box, blob) => {
+              await api.recropReferenceImage(refId, box, blob);
               if (ref.source_image_id) {
                 if (state.currentImageId) {
                   state.currentImage = await api.getImage(state.currentImageId);
@@ -3290,8 +3316,8 @@ function recropReferenceImage(id) {
     naturalWidth: ref.orig_width,
     naturalHeight: ref.orig_height,
     initialBox: ref.crop_x != null ? { x: ref.crop_x, y: ref.crop_y, w: ref.crop_w, h: ref.crop_h } : null,
-    onSave: async (box) => {
-      await api.recropReferenceImage(id, box);
+    onSave: async (box, blob) => {
+      await api.recropReferenceImage(id, box, blob);
       await loadReferenceImages();
     },
   });
@@ -3329,21 +3355,21 @@ async function uploadReferenceFilesWithCrop(files) {
       continue;
     }
     const displayName = (file.name || "reference").replace(/\.[^.]+$/, "");
-    const cropBox = await new Promise((resolve) => {
+    const cropped = await new Promise((resolve) => {
       openCropModal({
         title: `Crop "${displayName}"`,
         imageUrl: dims.url,
         naturalWidth: dims.width,
         naturalHeight: dims.height,
         initialBox: null,
-        onSave: resolve,
+        onSave: (box, blob) => resolve({ box, blob }),
         onCancel: () => resolve(null),
       });
     });
     URL.revokeObjectURL(dims.url);
-    if (!cropBox) continue;
+    if (!cropped) continue;
     els.referenceUploadStatus.innerHTML = `<span class="spinner"></span><span>Uploading ${uploaded + 1}/${fileList.length}...</span>`;
-    await api.uploadReferenceImage(state.currentProjectId, { file, displayName, cropBox });
+    await api.uploadReferenceImage(state.currentProjectId, { file, displayName, cropBox: cropped.box, activeBlob: cropped.blob });
     uploaded++;
   }
   els.referenceUploadStatus.textContent = uploaded ? `Added ${uploaded} reference image(s).` : "";

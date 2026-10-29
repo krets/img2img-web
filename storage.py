@@ -168,24 +168,17 @@ def save_reference_image_original(project_id, ref_id, display_name, file_bytes):
                                   phash, dhash, compute_aspect(img.width, img.height))
 
 
-def apply_reference_crop(project_id, ref_id, display_name, original_file_name, crop_box):
-    """Crops the reference image's original file to crop_box (x, y, w, h in
-    original-pixel coordinates; None means the full image) and saves the
-    result as the active file used for thumbnails/generation. Always crops
-    from original_file_name, never from a previous crop, so repeated
-    re-cropping never compounds quality loss. Returns (file_name, width, height).
+def save_reference_active_cropped(project_id, ref_id, display_name, cropped_bytes):
+    """Saves an already-cropped PNG (cropped client-side, from the untouched
+    original) as the reference's active file. No Pillow round-trip: the crop
+    itself happened in the browser against the same original this would have
+    opened, so there's nothing left here to re-decode/re-encode.
     """
-    orig_path = cfg.project_reference_dir(project_id) / original_file_name
-    img = Image.open(orig_path).convert("RGB")
-    if crop_box is not None:
-        x, y, w, h = crop_box
-        img = img.crop((x, y, x + w, y + h))
-
     slug = slugify(display_name)
     file_name = f"{ref_id}_{slug}.png"
     dest = cfg.project_reference_dir(project_id) / file_name
-    img.save(dest, format="PNG")
-    return file_name, img.width, img.height
+    dest.write_bytes(cropped_bytes)
+    return file_name
 
 
 def save_reference_cutout(project_id, ref_id, display_name, image_bytes):

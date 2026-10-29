@@ -581,23 +581,19 @@ async def set_sam3_reference(image_id: str, file: UploadFile = File(...), sam3_p
         original = storage.save_reference_image_original(image["project_id"], ref_id, name, file_bytes)
     except Exception as e:
         raise HTTPException(400, f"Could not process placement image: {e}")
-    try:
-        active_file_name, width, height = storage.apply_reference_crop(
-            image["project_id"], ref_id, name, original.file_name, None
-        )
-    except Exception as e:
-        storage.delete_reference_image_files(image["project_id"], original.file_name, original.file_name)
-        raise HTTPException(400, f"Could not save placement image: {e}")
 
+    # No crop here (there's nothing to crop -- it's already the composited
+    # placement at its final size), so the original doubles as the active
+    # file, same as save_reference_cutout does for a raw cutout.
     return db.create_reference_image(
         ref_id=ref_id,
         project_id=image["project_id"],
         display_name=name,
         original_file_name=original.file_name,
-        file_name=active_file_name,
+        file_name=original.file_name,
         crop_x=None, crop_y=None, crop_w=None, crop_h=None,
         orig_width=original.width, orig_height=original.height,
-        width=width, height=height,
+        width=original.width, height=original.height,
         source_image_id=image_id,
         needs_composite=False,
         **original.hash_fields(),

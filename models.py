@@ -53,13 +53,6 @@ class ReferenceImageUpdateIn(BaseModel):
     display_name: Optional[str] = None
 
 
-class ReferenceImageCropIn(BaseModel):
-    crop_x: int
-    crop_y: int
-    crop_w: int
-    crop_h: int
-
-
 class Sam3CutoutIn(BaseModel):
     sam3_prompt: str
 

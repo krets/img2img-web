@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 
 import db
 import storage
-from models import ReferenceImageCropIn, ReferenceImageUpdateIn
+from models import ReferenceImageUpdateIn
 
 router = APIRouter(tags=["reference-images"])
 
@@ -29,6 +29,7 @@ def list_reference_images(project_id: str):
 async def upload_reference_image(
     project_id: str,
     file: UploadFile = File(...),
+    active_file: UploadFile = File(None),
     display_name: str = Form(None),
     crop_x: int = Form(None),
     crop_y: int = Form(None),
@@ -36,9 +37,11 @@ async def upload_reference_image(
     crop_h: int = Form(None),
 ):
     """Uploads a reference image with an optional just-in-time crop applied at
-    upload time. The untouched original is always kept alongside the cropped
-    (or full, if no crop box was given) active version, so the crop can be
-    redone later from full quality via the /crop endpoint.
+    upload time. The untouched original is always kept alongside the active
+    version; active_file, when given, is that crop already rendered
+    client-side (see api.js/app.js) -- just persisted as-is, no Pillow
+    round-trip. crop_x/y/w/h are metadata describing that box (used to seed
+    the crop tool next time), not something the server re-applies.
     """
     if not db.get_project(project_id):
         raise HTTPException(404, "Project not found")
@@ -58,12 +61,15 @@ async def upload_reference_image(
         crop_box = _clamp_crop_box(crop_x, crop_y, crop_w, crop_h, orig_width, orig_height)
 
     try:
-        active_file_name, width, height = storage.apply_reference_crop(
-            project_id, ref_id, name, original_file_name, crop_box
-        )
+        if active_file is not None:
+            active_bytes = await active_file.read()
+            active_file_name = storage.save_reference_active_cropped(project_id, ref_id, name, active_bytes)
+            width, height = (crop_box[2], crop_box[3]) if crop_box else (orig_width, orig_height)
+        else:
+            active_file_name, width, height = original_file_name, orig_width, orig_height
     except Exception as e:
         storage.delete_reference_image_files(project_id, original_file_name, original_file_name)
-        raise HTTPException(400, f"Could not crop reference image: {e}")
+        raise HTTPException(400, f"Could not save reference image: {e}")
 
     return db.create_reference_image(
         ref_id=ref_id,
@@ -91,21 +97,29 @@ def update_reference_image(ref_id: str, body: ReferenceImageUpdateIn):
 
 
 @router.put("/api/reference-images/{ref_id}/crop")
-def recrop_reference_image(ref_id: str, body: ReferenceImageCropIn):
-    """Re-crops from the untouched original (never from a previous crop), so
-    repeated adjustments never compound quality loss.
+async def recrop_reference_image(
+    ref_id: str,
+    active_file: UploadFile = File(...),
+    crop_x: int = Form(...),
+    crop_y: int = Form(...),
+    crop_w: int = Form(...),
+    crop_h: int = Form(...),
+):
+    """Saves a re-crop already rendered client-side, from the untouched
+    original (never from a previous crop, so repeated adjustments never
+    compound quality loss) -- no Pillow round-trip needed here either.
     """
     ref = db.get_reference_image(ref_id)
     if not ref:
         raise HTTPException(404, "Reference image not found")
 
-    crop_box = _clamp_crop_box(body.crop_x, body.crop_y, body.crop_w, body.crop_h, ref["orig_width"], ref["orig_height"])
+    crop_box = _clamp_crop_box(crop_x, crop_y, crop_w, crop_h, ref["orig_width"], ref["orig_height"])
+    active_bytes = await active_file.read()
     try:
-        active_file_name, width, height = storage.apply_reference_crop(
-            ref["project_id"], ref_id, ref["display_name"], ref["original_file_name"], crop_box
-        )
+        active_file_name = storage.save_reference_active_cropped(ref["project_id"], ref_id, ref["display_name"], active_bytes)
     except Exception as e:
-        raise HTTPException(400, f"Could not crop reference image: {e}")
+        raise HTTPException(400, f"Could not save crop: {e}")
+    width, height = crop_box[2], crop_box[3]
 
     if active_file_name != ref["file_name"]:
         storage.reference_image_path(ref["project_id"], ref["file_name"]).unlink(missing_ok=True)

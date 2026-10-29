@@ -157,7 +157,11 @@ def render(img, params):
     if mode == "color":
         canvas = Image.new("RGB", (w, h), _parse_color(fill["color"]))
     elif mode == "extend":
-        canvas = _edge_extend(region_rgb, dest[0], dest[1], w, h)
+        # Backstop for a transparent gap inside the region itself -- an
+        # off-90° rotation can open small ones at the corners, and
+        # _edge_extend below only paints the outer margin, not those.
+        base = Image.new("RGB", (w, h), _predominant_edge_color(region_rgb, dest[0], dest[1], w, h))
+        canvas = _edge_extend(region_rgb, dest[0], dest[1], w, h, base=base)
     elif mode == "edge_color":
         canvas = Image.new("RGB", (w, h), _predominant_edge_color(region_rgb, dest[0], dest[1], w, h))
     else:
@@ -193,14 +197,17 @@ def _blurred_cover(img, size):
     return small.resize((w, h), Image.Resampling.BICUBIC)
 
 
-def _edge_extend(region, left, top, w, h):
+def _edge_extend(region, left, top, w, h, base=None):
     """Pads region out to (w, h) by replicating its boundary pixels outward:
     each strip of padding is stretched from the single row/column of region
-    pixels it borders, and the four corners from region's corner pixel.
+    pixels it borders, and the four corners from region's corner pixel. base,
+    if given, is painted onto instead of a fresh (black) canvas -- a backstop
+    for any transparent gap inside region itself, which this only ever covers
+    at its outer margin.
     """
     rw, rh = region.size
     right, bottom = w - left - rw, h - top - rh
-    canvas = Image.new("RGB", (w, h))
+    canvas = base if base is not None else Image.new("RGB", (w, h))
     if left > 0:
         canvas.paste(region.crop((0, 0, 1, rh)).resize((left, rh), Image.Resampling.NEAREST), (0, top))
     if right > 0:

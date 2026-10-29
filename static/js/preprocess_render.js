@@ -61,6 +61,11 @@ export async function renderPreprocessed(imgEl, params) {
       ctx.fillStyle = fill.color;
       ctx.fillRect(0, 0, w, h);
     } else if (fill.mode === "extend") {
+      // Backstop for a transparent gap inside the region itself -- an
+      // off-90° rotation can open small ones at the corners, and
+      // edgeExtendFill below only paints the outer margin, not those.
+      ctx.fillStyle = predominantEdgeColor(rctx, ix0, iy0, regionW, regionH, destX, destY, w, h);
+      ctx.fillRect(0, 0, w, h);
       edgeExtendFill(ctx, rotCanvas, ix0, iy0, regionW, regionH, destX, destY, w, h);
     } else if (fill.mode === "edge_color") {
       ctx.fillStyle = predominantEdgeColor(rctx, ix0, iy0, regionW, regionH, destX, destY, w, h);

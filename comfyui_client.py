@@ -260,7 +260,7 @@ def detect_sam3_object(base_url, workflow_path, source_path, sam3_prompt, job_id
     if CUTOUT_PROMPT_NODE in graph:
         graph[CUTOUT_PROMPT_NODE]["inputs"]["text"] = sam3_prompt
 
-    prompt_id = _submit_prompt(base_url, graph, job_id)
+    prompt_id = _submit_prompt(base_url, graph, job_id, front=True)
     history_entry = _wait_for_result(base_url, job_id, prompt_id)
     jobs.update_job(job_id, phase="saving")
     outputs = history_entry.get("outputs", {})
@@ -288,11 +288,17 @@ def _combine_cutout(image_bytes, mask_bytes):
     return buf.getvalue()
 
 
-def _submit_prompt(base_url, graph, job_id):
+def _submit_prompt(base_url, graph, job_id, front=False):
     jobs.update_job(job_id, phase="queued")
-    response = requests.post(
-        f"{base_url}/prompt", json={"prompt": graph, "client_id": job_id}, timeout=REQUEST_TIMEOUT_SECONDS
-    )
+    payload = {"prompt": graph, "client_id": job_id}
+    if front:
+        # Tells ComfyUI's queue to insert this prompt ahead of whatever's
+        # already queued (it can't preempt a run already in progress, since
+        # ComfyUI only executes one prompt at a time). Used for SAM3 cutouts,
+        # which are a short interactive step the user is actively waiting on,
+        # not a long generation they queued and walked away from.
+        payload["front"] = True
+    response = requests.post(f"{base_url}/prompt", json=payload, timeout=REQUEST_TIMEOUT_SECONDS)
     if response.status_code != 200:
         raise RuntimeError(f"ComfyUI rejected the prompt: {response.status_code} {response.text}")
     data = response.json()

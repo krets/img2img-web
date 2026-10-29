@@ -56,6 +56,7 @@ const state = {
   // grows one crumb per generation) -- collapsed behind a toggle until asked
   // for, remembered across images/sessions like groupByLineage above.
   provenanceExpanded: localStorage.getItem("grok_img2img.provenanceExpanded") === "1",
+  config: null, // server config (incl. default_max_dim), loaded once at startup
 };
 
 function loadCollapsedImageIds() {
@@ -1660,15 +1661,17 @@ els.deleteImageBtn.addEventListener("click", async () => {
 
 function renderDetails() {
   const img = state.currentImage;
+  const hasImage = !!img;
+  els.detailsContent.querySelectorAll(".image-only-section").forEach((el) => {
+    if (el === els.detailsEmpty) return; // handled separately below
+    el.style.display = hasImage ? "" : "none";
+  });
+  els.detailsEmpty.style.display = hasImage ? "none" : "block";
   if (!img) {
-    els.detailsEmpty.style.display = "block";
-    els.detailsContent.style.display = "none";
     abViewer.setPreprocess(null);
     abViewer.setImages(null, null);
     return;
   }
-  els.detailsEmpty.style.display = "none";
-  els.detailsContent.style.display = "block";
   renderPreprocessNote();
   reconcileSam3ReferenceSelection(img);
 
@@ -2994,13 +2997,21 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
     saveBtn.disabled = true;
     statusEl.innerHTML = `<span class="spinner"></span><span>Saving...</span>`;
     try {
+      // Constrained to the server's upload size (default_max_dim) rather than
+      // the base image's full native resolution -- that's what the reference
+      // ends up resized to before it's sent anyway, so building it bigger
+      // than that just wastes memory/upload time for no gain in fidelity.
+      const maxDim = state.config?.default_max_dim || naturalWidth;
+      const outScale = Math.min(maxDim / naturalWidth, maxDim / naturalHeight, 1);
+      const outW = Math.round(naturalWidth * outScale);
+      const outH = Math.round(naturalHeight * outScale);
       const outCanvas = document.createElement("canvas");
-      outCanvas.width = naturalWidth;
-      outCanvas.height = naturalHeight;
+      outCanvas.width = outW;
+      outCanvas.height = outH;
       const outCtx = outCanvas.getContext("2d");
-      outCtx.drawImage(baseImg, 0, 0, naturalWidth, naturalHeight);
+      outCtx.drawImage(baseImg, 0, 0, outW, outH);
       const naturalQuad = {};
-      for (const k of QUAD_CORNERS) naturalQuad[k] = { x: quad[k].x / scale, y: quad[k].y / scale };
+      for (const k of QUAD_CORNERS) naturalQuad[k] = { x: (quad[k].x / scale) * outScale, y: (quad[k].y / scale) * outScale };
       drawWarpedQuad(outCtx, cutoutImg, naturalQuad);
       const blob = await new Promise((resolve) => outCanvas.toBlob(resolve, "image/png"));
       const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: prompt });
@@ -4376,6 +4387,7 @@ initHotkeys({
   }
   await loadPrompts();
   const config = await api.getConfig();
+  state.config = config;
   const savedEngine = localStorage.getItem(ENGINE_STORAGE_KEY);
   const engineKnown = (v) => [...els.engineSelect.options].some((o) => o.value === v);
   els.engineSelect.value = engineKnown(savedEngine) ? savedEngine : config.default_engine;

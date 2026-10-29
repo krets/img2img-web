@@ -1,3 +1,5 @@
+import json
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -426,11 +428,16 @@ def get_image_file(image_id: str):
 
 
 @router.put("/api/images/{image_id}/preprocess")
-def set_image_preprocess(image_id: str, body: PreprocessIn):
+async def set_image_preprocess(image_id: str, params: str = Form(...), file: UploadFile = File(None)):
     """Sets how the source gets rotated/cropped/padded before being sent to a
-    generation engine. Only the settings are stored -- the source file stays
-    untouched, and the processed render is cached (see storage.get_or_create_processed).
-    Params that amount to no change clear the setting. Returns the image detail.
+    generation engine. Only the settings are stored on the image row -- the
+    source file stays untouched -- but unlike before, the actual pixels
+    aren't rendered here: the browser already rendered them (see
+    preprocess_render.js) and uploads the result as `file`, which is just
+    persisted straight into the processed-render cache
+    (storage.save_processed_render). preprocess.render (Pillow) still exists
+    as a fallback for a cache miss elsewhere. Params that amount to no change
+    clear the setting (and file, if any, is ignored). Returns the image detail.
     """
     image = db.get_image(image_id)
     if not image or image["is_deleted"]:
@@ -442,14 +449,23 @@ def set_image_preprocess(image_id: str, body: PreprocessIn):
     with Image.open(path) as img:
         width, height = img.size
     try:
-        params = preprocess.normalize(body.model_dump(), width, height)
-    except ValueError as e:
+        parsed = PreprocessIn.model_validate_json(params)
+        normalized = preprocess.normalize(parsed.model_dump(), width, height)
+    except (ValueError, json.JSONDecodeError) as e:
         raise HTTPException(400, str(e))
 
     storage.clear_processed(image["project_id"], image_id)
-    if params:
-        storage.get_or_create_processed(image["project_id"], image_id, path, params)  # render now, so a failure surfaces here
-    return _image_detail(db.set_image_preprocess(image_id, params))
+    if normalized:
+        if file is None:
+            raise HTTPException(400, "A rendered file is required unless the settings are a no-op")
+        file_bytes = await file.read()
+        try:
+            with Image.open(BytesIO(file_bytes)) as rendered:
+                rendered.verify()
+        except Exception as e:
+            raise HTTPException(400, f"Could not read the pre-processed render: {e}")
+        storage.save_processed_render(image["project_id"], image_id, normalized, file_bytes)
+    return _image_detail(db.set_image_preprocess(image_id, normalized))
 
 
 @router.delete("/api/images/{image_id}/preprocess")

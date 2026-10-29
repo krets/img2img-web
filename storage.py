@@ -311,6 +311,22 @@ def get_or_create_processed(project_id, image_id, source_path, params):
     return dest
 
 
+def save_processed_render(project_id, image_id, params, file_bytes):
+    """Saves a pre-processed (rotate/crop/pad) render already produced
+    client-side (see preprocess_render.js) directly into the same cache
+    get_or_create_processed reads from -- same naming scheme (keyed by a hash
+    of params), so a later cache miss (e.g. after clear_processed, or for a
+    historical result whose exact render was never uploaded) still falls back
+    to Pillow (preprocess.render) and lands on the same file. No Pillow
+    round-trip for the normal edit/apply path.
+    """
+    dest = _thumbnail_dir("processed", project_id) / f"{image_id}_{preprocess.cache_key(params)}.png"
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(file_bytes)
+    tmp.replace(dest)
+    return dest
+
+
 def clear_processed(project_id, image_id):
     for path in _thumbnail_dir("processed", project_id).glob(f"{image_id}_*"):
         path.unlink(missing_ok=True)

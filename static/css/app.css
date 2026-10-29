@@ -687,6 +687,8 @@ kbd {
 }
 .viewer-preprocess-controls { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-left: 4px; min-width: 0; }
 .viewer-modebar.pp-active .viewer-compare { display: none !important; }
+.pp-rotation-slider { width: 90px; vertical-align: middle; }
+.pp-rotation-input { width: 52px; padding: 3px 4px; font-size: 12px; }
 .pp-select { padding: 3px 6px; font-size: 12px; }
 .pp-color { width: 30px; height: 26px; padding: 1px 2px; cursor: pointer; }
 .pp-size { font-size: 12px; color: #9ea2b0; font-variant-numeric: tabular-nums; white-space: nowrap; }

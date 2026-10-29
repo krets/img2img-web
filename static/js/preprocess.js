@@ -1,15 +1,20 @@
-/** Source pre-process editor: rotate in 90-degree steps and pick a crop
- * region that may extend past the image (the overhang is padded with a solid
- * color, a blurred copy of the image, replicated edge pixels, or the
- * predominant edge color -- the server renders that on Apply, see
- * preprocess.py). Edits are only ever *settings*: the stored source is never
- * modified, and nothing here touches the server until Apply.
+/** Source pre-process editor: rotate by any angle (90-degree buttons for a
+ * quick flip, a fine slider for the rest) and pick a crop region that may
+ * extend past the rotated image (the overhang -- plus, off the 90-degree
+ * grid, the small corner gaps rotation itself opens up -- is padded with a
+ * solid color, a blurred copy of the image, replicated edge pixels, or the
+ * predominant edge color). Edits are only ever *local* until Apply, which
+ * renders the result right here (see preprocess_render.js) and uploads it --
+ * the stored source is never modified, and nothing touches the server before
+ * that.
  *
  * Coordinates: crop is kept in the *rotated* image's pixel space (the same
- * space the server uses), so what's on screen is what gets rendered. The
+ * space the render uses), so what's on screen is what gets rendered. The
  * view re-fits around image+crop whenever a gesture ends, so the crop can be
  * walked further and further out without the image shrinking mid-drag.
  */
+import { renderPreprocessed, rotatedBoundingSize } from "./preprocess_render.js";
+
 const FILL_STORAGE_KEY = "grok_img2img.preprocessFill";
 const MIN_CROP = 8; // world px
 const MAX_SIDE = 12000; // keep in sync with preprocess.py
@@ -64,6 +69,9 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
   controlsHost.innerHTML = `
     <button type="button" class="viewer-mode-btn" data-act="rotate-ccw" title="Rotate 90° counter-clockwise">↺</button>
     <button type="button" class="viewer-mode-btn" data-act="rotate-cw" title="Rotate 90° clockwise">↻</button>
+    <input type="range" class="pp-rotation-slider" data-role="rotation-slider" min="-45" max="45" step="0.1" value="0"
+      title="Fine rotation (straighten), on top of the 90° buttons above" />
+    <input type="number" class="pp-rotation-input" data-role="rotation-input" min="-45" max="45" step="0.1" value="0" />
     <select class="pp-select" data-role="aspect" title="Lock the crop region to an aspect ratio">
       ${ASPECTS.map((a) => `<option value="${a.value}">${a.label}</option>`).join("")}
     </select>
@@ -87,6 +95,8 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
   const cropEl = q(stage, "crop");
   const readoutEl = q(stage, "readout");
   const aspectSel = q(controlsHost, "aspect");
+  const rotationSlider = q(controlsHost, "rotation-slider");
+  const rotationInput = q(controlsHost, "rotation-input");
   const fillModeSel = q(controlsHost, "fill-mode");
   const fillColorInput = q(controlsHost, "fill-color");
   const sizeEl = q(controlsHost, "size");
@@ -96,7 +106,16 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
   let opened = false;
   let natW = 0;
   let natH = 0;
-  let rotation = 0; // clockwise degrees
+  // rotation (clockwise degrees, any value) = the nearest 90° turn (changed
+  // only by the two quick buttons, which remap the crop exactly -- that
+  // remap is valid relative to whatever rotation already is, not just exact
+  // multiples of 90, so it composes fine with fineOffset below) plus
+  // fineOffset (-45..45, the slider/number input, which never remaps the
+  // crop -- an arbitrary angle has no exact remap, so the user just
+  // readjusts the crop after straightening, same as any photo tool's
+  // straighten control).
+  let rotation = 0;
+  let fineOffset = 0;
   let crop = { x: 0, y: 0, w: 0, h: 0 }; // rotated-image pixel space, floats while dragging
   let fill = loadFillPref();
   let lock = "free";
@@ -105,8 +124,9 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
   let offX = 0;
   let offY = 0;
 
-  const rotW = () => (rotation % 180 === 0 ? natW : natH);
-  const rotH = () => (rotation % 180 === 0 ? natH : natW);
+  const normalizeDeg = (deg) => ((deg % 360) + 360) % 360;
+  const rotW = () => rotatedBoundingSize(natW, natH, rotation).w;
+  const rotH = () => rotatedBoundingSize(natW, natH, rotation).h;
 
   function lockRatio() {
     if (lock === "free") return null;
@@ -300,19 +320,42 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
   // --- toolbar ---------------------------------------------------------------
 
   // A 90-degree turn is a rotation of the whole plane about the image, so the
-  // crop keeps covering the same image content (padding included).
+  // crop keeps covering the same image content (padding included) -- this
+  // remap is exact relative to whatever rotation already is (see the big
+  // comment up top), not just exact multiples of 90, so it composes fine
+  // with a nonzero fineOffset too.
   function rotate(clockwise) {
     const W = rotW();
     const H = rotH();
     const { x, y, w, h } = crop;
     crop = clockwise ? { x: H - (y + h), y: x, w: h, h: w } : { x: y, y: W - (x + w), w: h, h: w };
-    rotation = (rotation + (clockwise ? 90 : 270)) % 360;
+    rotation = normalizeDeg(rotation + (clockwise ? 90 : 270));
     if (lock === "original") conformCropToLock();
     fitView();
   }
 
+  // Sets the fine (straighten) offset directly, keeping whatever quarter-turn
+  // state rotation already carries -- no crop remap, since an arbitrary-angle
+  // rotation has no exact one (see the big comment up top).
+  function setFineOffset(v) {
+    v = clamp(Number(v) || 0, -45, 45);
+    const quarter = rotation - fineOffset; // exact: rotation was built from quarter + fineOffset last time
+    fineOffset = v;
+    rotation = normalizeDeg(quarter + v);
+    syncRotationControls();
+    fitView();
+  }
+
+  function syncRotationControls() {
+    const v = Math.round(fineOffset * 10) / 10;
+    rotationSlider.value = v;
+    rotationInput.value = v;
+  }
+
   function reset() {
     rotation = 0;
+    fineOffset = 0;
+    syncRotationControls();
     crop = { x: 0, y: 0, w: natW, h: natH };
     lock = "free";
     aspectSel.value = lock;
@@ -330,6 +373,8 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
     conformCropToLock();
     fitView();
   });
+  rotationSlider.addEventListener("input", () => setFineOffset(rotationSlider.value));
+  rotationInput.addEventListener("change", () => setFineOffset(rotationInput.value));
   fillModeSel.addEventListener("change", () => {
     fill = { ...fill, mode: fillModeSel.value };
     syncFillControls();
@@ -344,7 +389,7 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
 
   function currentParams() {
     return {
-      rotation,
+      rotation: Math.round(rotation * 100) / 100,
       crop: { x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h) },
       fill: { mode: fill.mode, color: fill.color },
     };
@@ -353,10 +398,13 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
   async function apply() {
     applyBtn.disabled = true;
     const label = applyBtn.textContent;
-    applyBtn.textContent = "Applying…";
     errorEl.textContent = "";
     try {
-      await onApply(currentParams());
+      const params = currentParams();
+      applyBtn.textContent = "Rendering…";
+      const blob = await renderPreprocessed(imgEl, params);
+      applyBtn.textContent = "Applying…";
+      await onApply(params, blob);
     } catch (err) {
       errorEl.textContent = err.message;
     } finally {
@@ -407,16 +455,19 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
       natW = imgEl.naturalWidth;
       natH = imgEl.naturalHeight;
       if (params) {
-        rotation = params.rotation || 0;
+        rotation = normalizeDeg(params.rotation || 0);
+        fineOffset = rotation - 90 * Math.round(rotation / 90);
         crop = { ...params.crop };
         fill = { ...params.fill };
       } else {
         rotation = 0;
+        fineOffset = 0;
         crop = { x: 0, y: 0, w: natW, h: natH };
         fill = loadFillPref();
       }
       lock = "free";
       aspectSel.value = lock;
+      syncRotationControls();
       syncFillControls();
       imgEl.style.visibility = "";
       fitView();

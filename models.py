@@ -42,9 +42,11 @@ class PreprocessFillIn(BaseModel):
 
 class PreprocessIn(BaseModel):
     """Crop coordinates are in the rotated image's pixel space and may extend
-    past its edges (the overhang gets padded) -- see preprocess.py.
+    past its edges (the overhang gets padded) -- see preprocess.py. rotation
+    is any angle, not just a multiple of 90 -- see preprocess.normalize for
+    the actual range/precision clamp applied on top of this.
     """
-    rotation: Literal[0, 90, 180, 270] = 0
+    rotation: float = 0
     crop: Optional[PreprocessCropIn] = None  # None = the whole (rotated) image
     fill: PreprocessFillIn = PreprocessFillIn()
 

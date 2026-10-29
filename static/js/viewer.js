@@ -165,17 +165,17 @@ export function initABViewer(container) {
   const lineageBadge = container.querySelector("#lineageBadge");
   let onCompareChange = null;
 
-  // { imageId, rawUrl, params, onApply(params) } for the selected image, or
+  // { imageId, rawUrl, params, onApply(params, blob) } for the selected image, or
   // null while there's nothing editable (no image, or its details haven't
   // loaded yet). See setPreprocess().
   let preprocessCtx = null;
   const editor = createPreprocessEditor({
     stage: preprocessStage,
     controlsHost: preprocessControls,
-    onApply: async (params) => {
+    onApply: async (params, blob) => {
       const ctx = preprocessCtx;
       if (!ctx) return;
-      await ctx.onApply(params);
+      await ctx.onApply(params, blob);
       if (mode === PREPROCESS_MODE && preprocessCtx?.imageId === ctx.imageId) setMode(compareMode);
     },
     onCancel: () => setMode(compareMode),
@@ -565,7 +565,7 @@ export function initABViewer(container) {
       }
       compareSelect.value = selectedId || "";
     },
-    // ctx: { imageId, rawUrl, params, onApply(params) => Promise, onError(msg) } for the
+    // ctx: { imageId, rawUrl, params, onApply(params, blob) => Promise, onError(msg) } for the
     // image the crop/pre-process mode edits, or null to disable it. rawUrl is
     // the untouched source; params are its current settings (null = none).
     // Called again with the same imageId after every save -- an open editor is

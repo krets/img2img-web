@@ -1723,7 +1723,7 @@ function syncViewer() {
     imageId: img.id,
     rawUrl: `/api/images/${img.id}/file`,
     params: img.preprocess,
-    onApply: (params) => savePreprocess(img.id, params),
+    onApply: (params, blob) => savePreprocess(img.id, params, blob),
     onError: (message) => {
       els.generateStatus.textContent = `Error: ${message}`;
     },
@@ -3229,8 +3229,8 @@ function applyPreprocessedImage(image) {
   if (listed) listed.preprocess = image.preprocess;
 }
 
-async function savePreprocess(imageId, params) {
-  applyPreprocessedImage(await api.setImagePreprocess(imageId, params));
+async function savePreprocess(imageId, params, blob) {
+  applyPreprocessedImage(await api.setImagePreprocess(imageId, params, blob));
 }
 
 els.preprocessClearBtn.addEventListener("click", async () => {

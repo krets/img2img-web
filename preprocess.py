@@ -1,16 +1,23 @@
-"""Non-destructive source-image pre-processing: rotate in 90-degree steps, then
-crop to a region that may extend past the image's edges (the overhang is
-padded with either a solid color or a heavily blurred copy of the image).
+"""Non-destructive source-image pre-processing: rotate by an arbitrary angle,
+then crop to a region that may extend past the rotated image's edges (the
+overhang -- and, for a non-90-degree angle, the small transparent corner gaps
+the rotation itself opens up -- is padded with either a solid color or a
+heavily blurred copy of the image).
 
-The stored source file is never modified. An image only carries the small
-parameter dict below (images.preprocess, as JSON); the processed pixels are
-rendered on demand into a cache (see storage.get_or_create_processed) and
-that render is what gets sent to the generation engine and shown in the viewer.
+The browser renders this now (see static/js/preprocess_render.js) and uploads
+the result directly, so the normal edit/apply path never touches this module
+-- an image only carries the small parameter dict below (images.preprocess,
+as JSON), and storage.save_processed_render just persists whatever bytes the
+browser sent. render() below exists as a server-side fallback for when there's
+no browser render to fall back on: a cache miss (storage.get_or_create_processed),
+or reconstructing a historical result's exact source from its source_preprocess
+snapshot. Keeping both implementations behaving the same is the point of this
+module's docstring and the one at the top of preprocess_render.js.
 
 Params (all pixel values are in the *rotated* image's coordinate space, so
 they mean the same thing on screen as in the render):
     {
-      "rotation": 0 | 90 | 180 | 270,          # clockwise
+      "rotation": float,          # clockwise degrees, any value
       "crop": {"x": int, "y": int, "w": int, "h": int},
       "fill": {"mode": "blur" | "color" | "extend" | "edge_color", "color": "#rrggbb"},
     }
@@ -23,7 +30,6 @@ from collections import Counter
 
 from PIL import Image, ImageFilter
 
-ROTATIONS = (0, 90, 180, 270)
 FILL_MODES = ("blur", "color", "extend", "edge_color")
 DEFAULT_FILL = {"mode": "blur", "color": "#000000"}
 
@@ -45,7 +51,15 @@ _ROTATE_TRANSPOSE = {
 
 
 def rotated_size(width, height, rotation):
-    return (height, width) if rotation in (90, 270) else (width, height)
+    """The bounding box of width x height rotated by `rotation` degrees (like
+    PIL's Image.rotate(expand=True)). Exact for multiples of 90 -- the usual
+    cos/sin float error rounds away cleanly -- and otherwise the same formula
+    any renderer (this module, preprocess_render.js) needs to agree on, since
+    it's what crop coordinates are validated against.
+    """
+    rad = math.radians(rotation)
+    c, s = abs(math.cos(rad)), abs(math.sin(rad))
+    return round(width * c + height * s), round(width * s + height * c)
 
 
 def normalize(params, width, height):
@@ -55,9 +69,10 @@ def normalize(params, width, height):
     """
     if not params:
         return None
-    rotation = int(params.get("rotation") or 0)
-    if rotation not in ROTATIONS:
-        raise ValueError("rotation must be 0, 90, 180, or 270")
+    try:
+        rotation = round(float(params.get("rotation") or 0) % 360, 2)
+    except (TypeError, ValueError):
+        raise ValueError("rotation must be a number") from None
     rw, rh = rotated_size(width, height, rotation)
 
     crop = params.get("crop") or {"x": 0, "y": 0, "w": rw, "h": rh}
@@ -103,35 +118,63 @@ def cache_key(params):
 
 
 def render(img, params):
-    """Applies params to a PIL image and returns the processed RGB image."""
-    img = img.convert("RGB")
-    transpose = _ROTATE_TRANSPOSE.get(params["rotation"])
-    if transpose is not None:
-        img = img.transpose(transpose)
+    """Applies params to a PIL image and returns the processed RGB image.
+    Multiples of 90 use a lossless transpose, same as always; any other angle
+    resamples via rotate(expand=True), which (unlike a transpose) also opens
+    small transparent gaps at the rotated canvas's corners -- those get filled
+    exactly like crop overhang, since visually they're the same kind of
+    "nothing here" region. See preprocess_render.js for the client-side
+    equivalent this exists as a fallback for.
+    """
+    img = img.convert("RGBA")
+    rotation = params["rotation"] % 360
+    if rotation % 90 == 0:
+        transpose = _ROTATE_TRANSPOSE.get(int(rotation))
+        rotated = img.transpose(transpose) if transpose is not None else img
+    else:
+        rotated = img.rotate(-rotation, expand=True, resample=Image.Resampling.BICUBIC)
 
     c = params["crop"]
     x, y, w, h = c["x"], c["y"], c["w"], c["h"]
-    iw, ih = img.size
+    rw, rh = rotated.size
 
-    # The part of the crop that actually lands on image pixels, in image coords.
+    # The part of the crop that actually lands on the rotated canvas, in its coords.
     ix0, iy0 = max(x, 0), max(y, 0)
-    ix1, iy1 = min(x + w, iw), min(y + h, ih)
-    region = img.crop((ix0, iy0, ix1, iy1))
-    if (ix1 - ix0, iy1 - iy0) == (w, h):
-        return region  # crop sits entirely inside the image: no padding to fill
+    ix1, iy1 = min(x + w, rw), min(y + h, rh)
+    region = rotated.crop((ix0, iy0, ix1, iy1))
+    dest = (ix0 - x, iy0 - y)
+    if region.size == (w, h) and not _has_transparency(region):
+        return region.convert("RGB")  # crop sits entirely inside solid pixels: no padding to fill
 
     fill = params["fill"]
     mode = fill["mode"]
+    # Border-sampling fill modes read region.convert("RGB"): a transparent
+    # corner-gap pixel converts to whatever RGB value PIL carried under the
+    # dropped alpha (not meaningful), so a crop whose border happens to land
+    # exactly on a gap can pick up a slightly off sample there -- a narrow
+    # edge case, same risk the client-side renderer accepts for the same reason.
+    region_rgb = region.convert("RGB")
     if mode == "color":
         canvas = Image.new("RGB", (w, h), _parse_color(fill["color"]))
     elif mode == "extend":
-        canvas = _edge_extend(region, ix0 - x, iy0 - y, w, h)
+        canvas = _edge_extend(region_rgb, dest[0], dest[1], w, h)
     elif mode == "edge_color":
-        canvas = Image.new("RGB", (w, h), _predominant_edge_color(region, ix0 - x, iy0 - y, w, h))
+        canvas = Image.new("RGB", (w, h), _predominant_edge_color(region_rgb, dest[0], dest[1], w, h))
     else:
-        canvas = _blurred_cover(img, (w, h))
-    canvas.paste(region, (ix0 - x, iy0 - y))
-    return canvas
+        canvas = _blurred_cover(_flatten_white(rotated), (w, h))
+    canvas = canvas.convert("RGBA")
+    canvas.alpha_composite(region, dest=dest)
+    return canvas.convert("RGB")
+
+
+def _has_transparency(region):
+    return region.mode == "RGBA" and region.getextrema()[3][0] < 255
+
+
+def _flatten_white(img_rgba):
+    bg = Image.new("RGB", img_rgba.size, (255, 255, 255))
+    bg.paste(img_rgba, mask=img_rgba.split()[3])
+    return bg
 
 
 def _blurred_cover(img, size):

@@ -67,8 +67,15 @@ export function modalBack() {
   if (step) step();
   else closeModal();
 }
+// Only close when the click (mousedown + mouseup) both started on the overlay,
+// not when the user drag-selects text inside the modal and releases outside.
+let overlayMousedownTarget = null;
+modalOverlay.addEventListener("mousedown", (e) => {
+  overlayMousedownTarget = e.target;
+});
 modalOverlay.addEventListener("click", (e) => {
-  if (e.target === modalOverlay) modalBack();
+  if (e.target === modalOverlay && overlayMousedownTarget === modalOverlay) modalBack();
+  overlayMousedownTarget = null;
 });
 document.addEventListener("keydown", (e) => {
   if (modalOverlay.style.display === "none") return;

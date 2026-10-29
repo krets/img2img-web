@@ -108,14 +108,14 @@
         <button class="panel-collapse-btn" id="detailsCollapseBtn" title="Collapse details panel">›</button>
         <div class="panel-resize-handle" id="detailsResizeHandle"></div>
       </div>
-      <div id="detailsEmpty" class="empty-state">Select an image to see details.</div>
-      <div id="detailsContent" style="display:none">
-        <div class="field">
+      <div id="detailsContent">
+        <div id="detailsEmpty" class="empty-state image-only-section" style="display:none">Select an image to see its name, comment, and results.</div>
+        <div class="field image-only-section" style="display:none">
           <label>Name</label>
           <input id="displayNameInput" type="text" />
         </div>
-        <div id="provenanceLine" class="provenance-line" style="display:none"></div>
-        <div class="field">
+        <div id="provenanceLine" class="provenance-line image-only-section" style="display:none"></div>
+        <div class="field image-only-section" style="display:none">
           <label>Comment</label>
           <textarea id="commentInput" rows="2"></textarea>
         </div>
@@ -201,13 +201,13 @@
         <input id="uploadResultInput" type="file" accept="image/*" hidden />
         <div id="generateStatus" class="status-line"></div>
 
-        <div class="field">
+        <div class="field image-only-section" style="display:none">
           <label>Results (<span id="resultCount">0</span>)</label>
           <div id="resultGrid" class="result-grid"></div>
         </div>
-        <div id="revisedPrompt" class="revised-prompt"></div>
+        <div id="revisedPrompt" class="revised-prompt image-only-section" style="display:none"></div>
 
-        <div class="field" style="margin-top: 24px; border-top: 1px solid #2a2c35; padding-top: 16px;">
+        <div class="field image-only-section" style="display:none; margin-top: 24px; border-top: 1px solid #2a2c35; padding-top: 16px;">
           <button id="deleteImageBtn" class="btn-danger" style="width:100%">🗑 Delete Image (and all its results)</button>
         </div>
       </div>

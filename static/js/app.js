@@ -2676,12 +2676,22 @@ function existingSam3Prompt(image) {
   return name.startsWith("SAM3: ") ? name.slice(6) : "";
 }
 
-// A finished multi-layer placement's combined prompt is saved as one
-// ", "-joined display_name (see the save handler in renderSam3StageStep),
-// so re-opening the prompt step for it (e.g. "try a different prompt")
-// needs to split that back into the original per-layer prompts rather than
-// treating the whole joined string as a single prompt.
+// A finished multi-layer placement stores its original per-layer prompts
+// as a JSON array (sam3_reference.sam3_prompts -- see the save handler in
+// renderSam3StageStep) alongside the human-readable ", "-joined
+// display_name, so re-opening the prompt step for it (e.g. "try a
+// different prompt") can restore the exact original rows. display_name
+// alone isn't safe to split back apart -- a single prompt can itself
+// contain a comma -- so that's only a last-resort fallback for a
+// placement saved before sam3_prompts existed.
 function existingSam3Prompts(image) {
+  const raw = image.sam3_reference?.sam3_prompts;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch {}
+  }
   const joined = existingSam3Prompt(image);
   if (!joined) return null;
   const parts = joined.split(",").map((s) => s.trim()).filter(Boolean);
@@ -2835,7 +2845,6 @@ async function openSam3PositioningModal(imageId, image) {
 
 function renderSam3PromptStep(imageId, image) {
   const existing = image.sam3_reference;
-  const SAM3_MAX_LAYERS = 5;
   // Resuming this image's own in-progress placement takes priority; failing
   // that, offer the same set of prompts (and layer count) as whatever batch
   // was last submitted for any image, rather than always starting back at a
@@ -2885,7 +2894,6 @@ function renderSam3PromptStep(imageId, image) {
     rowsEl.querySelectorAll(".sam3-reorder-btn").forEach((btn) => {
       btn.addEventListener("click", () => moveRow(modal, Number(btn.dataset.index), Number(btn.dataset.dir)));
     });
-    modal.querySelector("#sam3AddLayerBtn").disabled = prompts.length >= SAM3_MAX_LAYERS;
   }
 
   const modal = openModal(`
@@ -2907,7 +2915,6 @@ function renderSam3PromptStep(imageId, image) {
   const detectBtn = modal.querySelector("#sam3ModalDetectBtn");
   modal.querySelector("#sam3ModalCancelBtn").addEventListener("click", closeModal);
   modal.querySelector("#sam3AddLayerBtn").addEventListener("click", () => {
-    if (prompts.length >= SAM3_MAX_LAYERS) return;
     prompts = [...currentValues(modal), ""];
     renderRows(modal);
     [...modal.querySelectorAll(".sam3-prompt-input")].at(-1)?.focus();
@@ -3253,8 +3260,9 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
         drawWarpedQuad(outCtx, l.img, naturalQuad);
       });
       const blob = await new Promise((resolve) => outCanvas.toBlob(resolve, "image/png"));
-      const combinedPrompt = layers.map((l) => l.prompt).filter(Boolean).join(", ");
-      const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: combinedPrompt });
+      const layerPrompts = layers.map((l) => l.prompt).filter(Boolean);
+      const combinedPrompt = layerPrompts.join(", ");
+      const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: combinedPrompt, sam3Prompts: layerPrompts });
       if (state.currentImageId === imageId) {
         state.currentImage.sam3_reference = savedRef;
         const max = maxReferenceImages();

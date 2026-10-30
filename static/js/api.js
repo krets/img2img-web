@@ -133,10 +133,11 @@ export const api = {
   startSam3CutoutBatch: (imageId, sam3Prompts) =>
     request("POST", `/images/${imageId}/sam3-cutout-batch`, { json: { sam3_prompts: sam3Prompts } }),
   getSam3Layers: (imageId) => request("GET", `/images/${imageId}/sam3-layers`),
-  setSam3Reference: (imageId, { file, sam3Prompt }) => {
+  setSam3Reference: (imageId, { file, sam3Prompt, sam3Prompts }) => {
     const form = new FormData();
     form.append("file", file);
     if (sam3Prompt) form.append("sam3_prompt", sam3Prompt);
+    if (sam3Prompts) form.append("sam3_prompts", JSON.stringify(sam3Prompts));
     return request("POST", `/images/${imageId}/sam3-reference`, { form });
   },
   clearSam3Reference: (imageId) => request("DELETE", `/images/${imageId}/sam3-reference`),

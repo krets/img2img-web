@@ -64,8 +64,6 @@ class Sam3CutoutBatchIn(BaseModel):
         cleaned = [p.strip() for p in value if p.strip()]
         if not cleaned:
             raise ValueError("At least one SAM3 prompt is required")
-        if len(cleaned) > 5:
-            raise ValueError("At most 5 SAM3 layers are supported at once")
         return cleaned
 
 

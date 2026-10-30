@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS reference_images (
     -- This layer's position in the batch's requested stacking order (0 =
     -- bottom). NULL unless needs_composite=1.
     layer_index          INTEGER,
+    -- For a finished (needs_composite=0) multi-layer placement: the original
+    -- per-layer SAM3 prompts as a JSON array, bottom-to-top -- display_name
+    -- only holds a human-readable ", "-joined copy for display, which isn't
+    -- safe to split back apart (a single prompt can itself contain a comma).
+    -- NULL for a raw (needs_composite=1) layer or an ordinary library entry.
+    sam3_prompts         TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY (source_image_id) REFERENCES images(id) ON DELETE CASCADE
 );
@@ -305,6 +311,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE reference_images ADD COLUMN batch_id TEXT")
     if "layer_index" not in reference_columns:
         conn.execute("ALTER TABLE reference_images ADD COLUMN layer_index INTEGER")
+    if "sam3_prompts" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN sam3_prompts TEXT")
 
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()}
     if "engine" not in result_columns:
@@ -826,19 +834,19 @@ def merge_images(keep_id, remove_id):
 def create_reference_image(project_id, display_name, original_file_name, file_name,
                             crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height, ref_id=None,
                             content_hash=None, phash=None, dhash=None, aspect=None, source_image_id=None,
-                            needs_composite=False, batch_id=None, layer_index=None):
+                            needs_composite=False, batch_id=None, layer_index=None, sam3_prompts=None):
     conn = get_connection()
     ref_id = ref_id or new_id()
     conn.execute(
         """INSERT INTO reference_images (id, project_id, display_name, original_file_name, file_name,
                                           crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
                                           content_hash, phash, dhash, aspect, source_image_id, needs_composite,
-                                          batch_id, layer_index)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          batch_id, layer_index, sam3_prompts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (ref_id, project_id, display_name, original_file_name, file_name,
          crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
          content_hash, phash, dhash, aspect, source_image_id, int(bool(needs_composite)),
-         batch_id, layer_index),
+         batch_id, layer_index, json.dumps(sam3_prompts) if sam3_prompts is not None else None),
     )
     conn.commit()
     return get_reference_image(ref_id)

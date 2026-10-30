@@ -234,17 +234,35 @@ CUTOUT_IMAGE_NODE = "902"
 CUTOUT_MASK_NODE = "903"
 
 
-def detect_sam3_object(base_url, workflow_path, source_path, sam3_prompt, job_id, max_dim=None):
-    """Runs the lightweight SAM3 cutout workflow (comfyui_sam3_cutout.json):
-    detects the prompted object in source_path and returns just that object,
-    tightly cropped with its mask baked in as alpha (RGBA PNG bytes) -- no
-    Flux.2 generation involved. Meant for an interactive frontend tool where
-    the user drags/resizes the cutout onto the source image themselves,
-    rather than tuning scale/pin numbers and re-running a full generation
-    each time. job_id is a real queue job (see jobs.py, kind="sam3_cutout")
-    -- ComfyUI only runs one prompt at a time, so this can end up waiting
-    behind a real generation, and tracking it as a normal job keeps that
-    wait visible and cancellable instead of just blocking the caller.
+def detect_sam3_object(base_url, workflow_path, source_path, sam3_prompt, job_id, max_dim=None, front=True):
+    """Runs the lightweight SAM3 cutout workflow end to end: submit_sam3_detection
+    followed by await_sam3_result. See those two for the split -- a
+    multi-layer batch calls them separately so every layer's prompt lands in
+    ComfyUI's queue before any of them start waiting, instead of only
+    submitting each one lazily after the previous finishes (which leaves a
+    window for an unrelated job, started in the meantime, to slip in ahead of
+    a later layer that hasn't been submitted yet).
+    """
+    base_url = base_url.rstrip("/")
+    prompt_id = submit_sam3_detection(base_url, workflow_path, source_path, sam3_prompt, job_id, max_dim, front)
+    return await_sam3_result(base_url, job_id, prompt_id)
+
+
+def submit_sam3_detection(base_url, workflow_path, source_path, sam3_prompt, job_id, max_dim=None, front=True):
+    """Builds and submits the SAM3 cutout workflow's prompt to ComfyUI,
+    returning its prompt_id immediately (before the run starts) -- see
+    detect_sam3_object. job_id is a real queue job (see jobs.py,
+    kind="sam3_cutout") -- ComfyUI only runs one prompt at a time, so this
+    can end up waiting behind a real generation, and tracking it as a normal
+    job keeps that wait visible and cancellable instead of just blocking the
+    caller.
+
+    front controls whether this submission jumps ComfyUI's own queue (see
+    _submit_prompt) -- callers queuing several of these back-to-back (a
+    multi-layer batch) must pass front=True only for the first one, since
+    "front" means "ahead of whatever's already queued": if every layer in a
+    batch submitted with front=True, each later layer would cut in front of
+    the earlier ones still waiting, so the batch would run in reverse order.
     """
     base_url = base_url.rstrip("/")
     if jobs.is_cancelled(job_id):
@@ -260,7 +278,14 @@ def detect_sam3_object(base_url, workflow_path, source_path, sam3_prompt, job_id
     if CUTOUT_PROMPT_NODE in graph:
         graph[CUTOUT_PROMPT_NODE]["inputs"]["text"] = sam3_prompt
 
-    prompt_id = _submit_prompt(base_url, graph, job_id, front=True)
+    return _submit_prompt(base_url, graph, job_id, front=front)
+
+
+def await_sam3_result(base_url, job_id, prompt_id):
+    """Waits for a prompt submitted by submit_sam3_detection to finish and
+    returns the cutout as transparent-background RGBA PNG bytes.
+    """
+    base_url = base_url.rstrip("/")
     history_entry = _wait_for_result(base_url, job_id, prompt_id)
     jobs.update_job(job_id, phase="saving")
     outputs = history_entry.get("outputs", {})

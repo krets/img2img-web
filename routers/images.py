@@ -512,9 +512,13 @@ def _replace_scoped_reference(image):
 def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: BackgroundTasks):
     """Queues one SAM3 detect/crop job per prompt, all sharing a
     batch_id and tagged with their requested layer_index (bottom to top, in
-    the order the prompts were given) -- see _run_sam3_cutout_layer. ComfyUI
-    only runs one prompt at a time, so these queue up behind each other (and
-    behind any generation already in flight); each still finishes
+    the order the prompts were given) -- see _await_sam3_cutout_layer. Each
+    cache-miss prompt is submitted to ComfyUI right here, synchronously,
+    before this handler returns -- not lazily from a background task -- so
+    the whole batch claims its queue positions up front and nothing started
+    afterwards (a generation, say) can slip in between two of its layers.
+    ComfyUI still only runs one prompt at a time, so they wait behind each
+    other (and behind any generation already in flight); each still finishes
     independently into its own needs_composite=1 reference_images row, and
     the positioning UI waits for all of them before opening.
 
@@ -549,6 +553,7 @@ def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: 
     _replace_scoped_reference(image)
     batch_id = db.new_id()
     jobs_out = []
+    queued_any = False
     for layer_index, (sam3_prompt, cache_key, cutout_bytes) in enumerate(zip(body.sam3_prompts, cache_keys, cached_bytes)):
         job = jobs.create_job(
             image_id=image_id,
@@ -565,9 +570,36 @@ def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: 
                 jobs.finish_job(job["id"], error=str(e))
             job = jobs.get_job(job["id"])
         else:
-            background_tasks.add_task(
-                _run_sam3_cutout_layer, job["id"], image, sam3_prompt, config, batch_id, layer_index, cache_key
-            )
+            # Submit this layer's prompt to ComfyUI right now, synchronously,
+            # instead of waiting for a background task to get around to it.
+            # That reserves its place in ComfyUI's queue (see submit_sam3_detection's
+            # front param -- only the first job actually queued in the batch
+            # jumps the queue, the rest just queue normally behind it) before
+            # this handler returns, so a generation started right after this
+            # batch can't slip in between two of its layers -- which it could
+            # if each layer only submitted lazily, after the previous one's
+            # background task finished waiting on its result.
+            try:
+                source_path = _effective_source_path(image)
+                prompt_id = comfyui_client.submit_sam3_detection(
+                    base_url=config["comfyui_url"],
+                    workflow_path=cfg.comfyui_workflow_path(config, "cutout"),
+                    source_path=source_path,
+                    sam3_prompt=sam3_prompt,
+                    job_id=job["id"],
+                    max_dim=config["default_max_dim"],
+                    front=not queued_any,
+                )
+            except jobs.GenerationCancelled:
+                jobs.cancel_job(job["id"])
+            except Exception as e:
+                jobs.finish_job(job["id"], error=str(e))
+            else:
+                background_tasks.add_task(
+                    _await_sam3_cutout_layer, job["id"], image, sam3_prompt, config, batch_id, layer_index, cache_key, prompt_id
+                )
+            queued_any = True
+            job = jobs.get_job(job["id"])
         jobs_out.append(job)
     return {"batch_id": batch_id, "jobs": jobs_out}
 
@@ -593,18 +625,13 @@ def _save_sam3_cutout_layer(job_id, image, sam3_prompt, batch_id, layer_index, c
     jobs.finish_job(job_id)
 
 
-def _run_sam3_cutout_layer(job_id, image, sam3_prompt, config, batch_id, layer_index, cache_key):
+def _await_sam3_cutout_layer(job_id, image, sam3_prompt, config, batch_id, layer_index, cache_key, prompt_id):
+    """Waits for a prompt already submitted by sam3_cutout_batch (via
+    comfyui_client.submit_sam3_detection) and saves the result.
+    """
     try:
         jobs.update_job(job_id, status="running")
-        source_path = _effective_source_path(image)
-        cutout_bytes = comfyui_client.detect_sam3_object(
-            base_url=config["comfyui_url"],
-            workflow_path=cfg.comfyui_workflow_path(config, "cutout"),
-            source_path=source_path,
-            sam3_prompt=sam3_prompt,
-            job_id=job_id,
-            max_dim=config["default_max_dim"],
-        )
+        cutout_bytes = comfyui_client.await_sam3_result(config["comfyui_url"], job_id, prompt_id)
         storage.save_sam3_cutout_cache(image["project_id"], cache_key, cutout_bytes)
         _save_sam3_cutout_layer(job_id, image, sam3_prompt, batch_id, layer_index, cutout_bytes)
     except jobs.GenerationCancelled:

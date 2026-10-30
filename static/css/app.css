@@ -1251,8 +1251,9 @@ kbd {
   flex: 0 0 160px; display: flex; flex-direction: column; gap: 4px;
   max-height: 100%; overflow-y: auto;
 }
+.sam3-layer-item-row { display: flex; align-items: center; gap: 4px; }
 .sam3-layer-item {
-  text-align: left; padding: 6px 10px; border-radius: 6px;
+  flex: 1; min-width: 0; text-align: left; padding: 6px 10px; border-radius: 6px;
   border: 1px solid #2a2c35; background: #1a1b22; color: #c7c9d3;
   font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -1265,6 +1266,13 @@ kbd {
   flex: 0 0 18px; text-align: center; font-size: 11px; color: #9ea2b0;
 }
 .sam3-prompt-row .sam3-prompt-input { flex: 1; }
+.sam3-reorder-btns { display: flex; flex-direction: column; flex: 0 0 auto; }
+.sam3-reorder-btn {
+  background: none; border: none; color: #9ea2b0; cursor: pointer;
+  font-size: 9px; line-height: 1; padding: 1px 4px;
+}
+.sam3-reorder-btn:hover:not(:disabled) { color: #e6e6eb; }
+.sam3-reorder-btn:disabled { color: #46485a; cursor: default; }
 .sam3-remove-row-btn {
   flex: 0 0 auto; background: none; border: none; color: #9ea2b0; cursor: pointer; font-size: 13px; padding: 2px 4px;
 }

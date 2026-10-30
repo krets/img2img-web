@@ -2824,10 +2824,28 @@ async function openSam3PositioningModal(imageId, image) {
 function renderSam3PromptStep(imageId, image) {
   const existing = image.sam3_reference;
   const SAM3_MAX_LAYERS = 5;
-  let prompts = [existingSam3Prompt(image) || getSam3PromptHistory()[0] || ""];
+  // Resuming this image's own in-progress placement takes priority; failing
+  // that, offer the same set of prompts (and layer count) as whatever batch
+  // was last submitted for any image, rather than always starting back at a
+  // single blank row -- see rememberSam3LastBatch below.
+  let prompts = existingSam3Prompt(image)
+    ? [existingSam3Prompt(image)]
+    : getSam3LastBatch() || [getSam3PromptHistory()[0] || ""];
 
   function currentValues(modal) {
     return [...modal.querySelectorAll(".sam3-prompt-input")].map((el) => el.value);
+  }
+
+  // Layers stack bottom-to-top in list order (row 1 = bottom); reordering
+  // here keeps that order in sync with the positioning stage's sidebar,
+  // which lists/stacks layers the same way once they're detected.
+  function moveRow(modal, index, delta) {
+    const values = currentValues(modal);
+    const target = index + delta;
+    if (target < 0 || target >= values.length) return;
+    [values[index], values[target]] = [values[target], values[index]];
+    prompts = values;
+    renderRows(modal);
   }
 
   function renderRows(modal) {
@@ -2837,6 +2855,10 @@ function renderSam3PromptStep(imageId, image) {
         (value, index) => `
       <div class="sam3-prompt-row">
         <span class="sam3-layer-index">${index + 1}</span>
+        <div class="sam3-reorder-btns">
+          <button type="button" class="sam3-reorder-btn" data-index="${index}" data-dir="-1" title="Move layer up" ${index === 0 ? "disabled" : ""}>▲</button>
+          <button type="button" class="sam3-reorder-btn" data-index="${index}" data-dir="1" title="Move layer down" ${index === prompts.length - 1 ? "disabled" : ""}>▼</button>
+        </div>
         <input type="text" class="sam3-prompt-input" placeholder="Object to detect..." list="sam3PromptHistoryList" value="${escapeAttr(value)}" />
         ${prompts.length > 1 ? `<button type="button" class="sam3-remove-row-btn" data-index="${index}" title="Remove layer">✕</button>` : ""}
       </div>
@@ -2849,6 +2871,9 @@ function renderSam3PromptStep(imageId, image) {
         prompts.splice(Number(btn.dataset.index), 1);
         renderRows(modal);
       });
+    });
+    rowsEl.querySelectorAll(".sam3-reorder-btn").forEach((btn) => {
+      btn.addEventListener("click", () => moveRow(modal, Number(btn.dataset.index), Number(btn.dataset.dir)));
     });
     modal.querySelector("#sam3AddLayerBtn").disabled = prompts.length >= SAM3_MAX_LAYERS;
   }
@@ -2906,10 +2931,11 @@ function renderSam3PromptStep(imageId, image) {
       return;
     }
     detectBtn.disabled = true;
-    modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = true));
+    modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, .sam3-reorder-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = true));
     statusEl.innerHTML = `<span class="spinner"></span><span>Queuing ${values.length} layer${values.length > 1 ? "s" : ""}...</span>`;
     try {
       values.forEach(rememberSam3Prompt);
+      rememberSam3LastBatch(values);
       const { jobs } = await api.startSam3CutoutBatch(imageId, values);
       jobs.forEach(mergeQueueJob);
       applyQueueOrdering();
@@ -2923,7 +2949,7 @@ function renderSam3PromptStep(imageId, image) {
     } catch (e) {
       statusEl.textContent = `Error: ${e.message}`;
       detectBtn.disabled = false;
-      modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = false));
+      modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, .sam3-reorder-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = false));
     }
   });
 }
@@ -2965,17 +2991,13 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
       se: { x: bx + w, y: by + h },
     };
   }
-  const layerQuads = layers.map((l, i) => initialQuad(l.img, i));
+  let layerQuads = layers.map((l, i) => initialQuad(l.img, i));
   let activeIndex = layers.length - 1; // top layer selected by default
-
-  const sidebarItemsHtml = layers
-    .map((l, i) => `<button type="button" class="sam3-layer-item" data-index="${i}">${escapeHtml(l.prompt || l.ref.display_name)}</button>`)
-    .join("");
 
   const modal = openModal(`
     <h3>Position objects (SAM3)</h3>
     <div class="sam3-stage-layout">
-      <div class="sam3-layer-sidebar" id="sam3LayerSidebar">${sidebarItemsHtml}</div>
+      <div class="sam3-layer-sidebar" id="sam3LayerSidebar"></div>
       <div class="crop-stage-wrap sam3-stage-wrap">
         <div class="crop-stage" id="sam3Stage" style="width:${dispW}px;height:${dispH}px">
           <img id="sam3BaseImg" src="${baseImg.src}" draggable="false" style="width:${dispW}px;height:${dispH}px" />
@@ -3004,19 +3026,48 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
   const statusEl = modal.querySelector("#sam3ModalStatus");
   const sidebarEl = modal.querySelector("#sam3LayerSidebar");
 
-  function updateSidebarActive() {
+  // Swaps two layers' stacking position -- both their z-order (layers'
+  // array order, which render() draws bottom to top) and their sidebar
+  // position move together, since the sidebar lists them in the same
+  // order they're stacked. The active selection follows whichever layer
+  // moved, so reordering never silently switches what the handles act on.
+  function moveLayer(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= layers.length) return;
+    [layers[index], layers[target]] = [layers[target], layers[index]];
+    [layerQuads[index], layerQuads[target]] = [layerQuads[target], layerQuads[index]];
+    if (activeIndex === index) activeIndex = target;
+    else if (activeIndex === target) activeIndex = index;
+    renderSidebar();
+    render();
+  }
+
+  function renderSidebar() {
+    sidebarEl.innerHTML = layers
+      .map(
+        (l, i) => `
+      <div class="sam3-layer-item-row">
+        <div class="sam3-reorder-btns">
+          <button type="button" class="sam3-reorder-btn" data-index="${i}" data-dir="-1" title="Move layer up" ${i === 0 ? "disabled" : ""}>▲</button>
+          <button type="button" class="sam3-reorder-btn" data-index="${i}" data-dir="1" title="Move layer down" ${i === layers.length - 1 ? "disabled" : ""}>▼</button>
+        </div>
+        <button type="button" class="sam3-layer-item${i === activeIndex ? " active" : ""}" data-index="${i}">${escapeHtml(l.prompt || l.ref.display_name)}</button>
+      </div>
+    `
+      )
+      .join("");
     sidebarEl.querySelectorAll(".sam3-layer-item").forEach((btn) => {
-      btn.classList.toggle("active", Number(btn.dataset.index) === activeIndex);
+      btn.addEventListener("click", () => {
+        activeIndex = Number(btn.dataset.index);
+        renderSidebar();
+        render();
+      });
+    });
+    sidebarEl.querySelectorAll(".sam3-reorder-btn").forEach((btn) => {
+      btn.addEventListener("click", () => moveLayer(Number(btn.dataset.index), Number(btn.dataset.dir)));
     });
   }
-  sidebarEl.querySelectorAll(".sam3-layer-item").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      activeIndex = Number(btn.dataset.index);
-      updateSidebarActive();
-      render();
-    });
-  });
-  updateSidebarActive();
+  renderSidebar();
 
   // Reachable right from the stage, not just by backing out to the prompt
   // step first -- the usual reason to want this here is "wrong object, bad
@@ -3308,6 +3359,29 @@ function renderSam3PromptHistoryList() {
 renderSam3PromptHistoryList();
 if (!els.sam3PromptInput.value.trim()) {
   els.sam3PromptInput.value = getSam3PromptHistory()[0] || "";
+}
+
+// Remembers the full set of prompts from the last multi-layer SAM3 batch
+// submitted (any image), so opening "Detect objects" fresh offers the same
+// number of layers, pre-filled with the same prompts, instead of starting
+// back at a single blank row every time -- separate from the single-value
+// history above, which only remembers individual prompt strings for
+// autocomplete, not how many layers were last used together.
+const SAM3_LAST_BATCH_KEY = "grok_img2img.sam3LastBatch";
+
+function getSam3LastBatch() {
+  try {
+    const list = JSON.parse(localStorage.getItem(SAM3_LAST_BATCH_KEY));
+    return Array.isArray(list) && list.length ? list.filter((p) => typeof p === "string" && p.trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberSam3LastBatch(prompts) {
+  const cleaned = prompts.map((p) => p.trim()).filter(Boolean);
+  if (!cleaned.length) return;
+  localStorage.setItem(SAM3_LAST_BATCH_KEY, JSON.stringify(cleaned));
 }
 
 // ---------------------------------------------------------------------------

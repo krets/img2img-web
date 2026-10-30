@@ -22,7 +22,7 @@ from models import (
     MergeImagesIn,
     MoveImagesIn,
     PreprocessIn,
-    Sam3CutoutIn,
+    Sam3CutoutBatchIn,
 )
 
 router = APIRouter(tags=["images"])
@@ -494,52 +494,62 @@ def _effective_source_path(image):
 
 
 def _replace_scoped_reference(image):
-    """Removes this image's existing scoped SAM3 reference (if any) -- see
-    get_scoped_reference_image. There's only ever one slot: a fresh
-    detection and a finished positioning both replace it rather than piling
-    up multiple.
+    """Removes all of this image's existing scoped SAM3 references (if any)
+    -- see get_scoped_reference_image / list_scoped_cutout_layers. A fresh
+    batch of detections and a finished positioning both clear the slot
+    rather than piling up on top of what was there before.
     """
-    existing = db.get_scoped_reference_image(image["id"])
-    if existing:
-        storage.delete_reference_image_files(image["project_id"], existing["original_file_name"], existing["file_name"])
-        db.delete_reference_image(existing["id"])
+    existing = db.list_scoped_cutout_layers(image["id"])
+    finished = db.get_scoped_reference_image(image["id"])
+    if finished and not finished.get("needs_composite"):
+        existing = existing + [finished]
+    for ref in existing:
+        storage.delete_reference_image_files(image["project_id"], ref["original_file_name"], ref["file_name"])
+        db.delete_reference_image(ref["id"])
 
 
-@router.post("/api/images/{image_id}/sam3-cutout")
-def sam3_cutout(image_id: str, body: Sam3CutoutIn, background_tasks: BackgroundTasks):
-    """Queues just the SAM3 detect/crop pass (no Flux.2 generation, no
-    interactive placement) as a normal background job -- ComfyUI only runs
-    one prompt at a time, so this can end up waiting behind an actual
-    generation, and queuing it (rather than blocking this request) keeps the
-    UI responsive and shows the wait in the same queue overlay, with the
-    same cancel affordance. Unlike a generation job, this one finishes by
-    saving the raw cutout straight into the reference library (needs_composite
-    -- see db's reference_images table), rather than by handing bytes back
-    through the job itself: detection can complete unattended, in the
-    background, and just sit there "needing attention" (a chit in the image
-    list, a banner in the reference panel) until the user gets around to
-    positioning it -- see set_sam3_reference below.
+@router.post("/api/images/{image_id}/sam3-cutout-batch")
+def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: BackgroundTasks):
+    """Queues one SAM3 detect/crop job per prompt (up to 5), all sharing a
+    batch_id and tagged with their requested layer_index (bottom to top, in
+    the order the prompts were given) -- see _run_sam3_cutout_layer. ComfyUI
+    only runs one prompt at a time, so these queue up behind each other (and
+    behind any generation already in flight); each still finishes
+    independently into its own needs_composite=1 reference_images row, and
+    the positioning UI waits for all of them before opening.
+
+    Checks ComfyUI is actually reachable before queuing anything: each
+    queued job's own submit call has a 120s timeout (comfyui_client's
+    REQUEST_TIMEOUT_SECONDS) and jobs run strictly one at a time, so a dead
+    server would otherwise cost prompts*120s of silent waiting -- up to 10
+    minutes for a full 5-layer batch -- before the user sees any error.
     """
     image = db.get_image(image_id)
     if not image or image["is_deleted"]:
         raise HTTPException(404, "Image not found")
-    if not body.sam3_prompt.strip():
-        raise HTTPException(400, "SAM3 prompt text is required")
 
     config = cfg.load_config()
-    job = jobs.create_job(
-        image_id=image_id,
-        project_id=image["project_id"],
-        image_name=image["display_name"],
-        engine="comfyui",
-        prompt_text=body.sam3_prompt,
-        kind="sam3_cutout",
-    )
-    background_tasks.add_task(_run_sam3_cutout, job["id"], image, body.sam3_prompt, config)
-    return job
+    reachable, detail = comfyui_client.check_connection(config.get("comfyui_url"))
+    if not reachable:
+        raise HTTPException(503, f"ComfyUI isn't reachable, so SAM3 detection can't run right now: {detail}")
+    _replace_scoped_reference(image)
+    batch_id = db.new_id()
+    jobs_out = []
+    for layer_index, sam3_prompt in enumerate(body.sam3_prompts):
+        job = jobs.create_job(
+            image_id=image_id,
+            project_id=image["project_id"],
+            image_name=image["display_name"],
+            engine="comfyui",
+            prompt_text=sam3_prompt,
+            kind="sam3_cutout",
+        )
+        background_tasks.add_task(_run_sam3_cutout_layer, job["id"], image, sam3_prompt, config, batch_id, layer_index)
+        jobs_out.append(job)
+    return {"batch_id": batch_id, "jobs": jobs_out}
 
 
-def _run_sam3_cutout(job_id, image, sam3_prompt, config):
+def _run_sam3_cutout_layer(job_id, image, sam3_prompt, config, batch_id, layer_index):
     try:
         jobs.update_job(job_id, status="running")
         source_path = _effective_source_path(image)
@@ -551,7 +561,6 @@ def _run_sam3_cutout(job_id, image, sam3_prompt, config):
             job_id=job_id,
             max_dim=config["default_max_dim"],
         )
-        _replace_scoped_reference(image)
         name = f"SAM3: {sam3_prompt.strip()}"
         ref_id = db.new_id()
         file_name, width, height = storage.save_reference_cutout(image["project_id"], ref_id, name, cutout_bytes)
@@ -566,6 +575,8 @@ def _run_sam3_cutout(job_id, image, sam3_prompt, config):
             width=width, height=height,
             source_image_id=image["id"],
             needs_composite=True,
+            batch_id=batch_id,
+            layer_index=layer_index,
         )
         jobs.finish_job(job_id)
     except jobs.GenerationCancelled:
@@ -614,6 +625,21 @@ async def set_sam3_reference(image_id: str, file: UploadFile = File(...), sam3_p
         needs_composite=False,
         **original.hash_fields(),
     )
+
+
+@router.get("/api/images/{image_id}/sam3-layers")
+def get_sam3_layers(image_id: str):
+    """The raw (needs_composite=1) cutout layers finished so far for this
+    image, in requested stacking order -- the frontend polls this after
+    queuing a batch until it has one entry per prompt submitted, then opens
+    the positioning UI with all of them. _replace_scoped_reference clears
+    any stale rows from a superseded batch before a new one is queued, so
+    this never mixes layers from two different batches.
+    """
+    image = db.get_image(image_id)
+    if not image or image["is_deleted"]:
+        raise HTTPException(404, "Image not found")
+    return db.list_scoped_cutout_layers(image_id)
 
 
 @router.delete("/api/images/{image_id}/sam3-reference")

@@ -927,6 +927,12 @@ kbd {
 }
 .reference-pending-banner:hover { background: #5a2205; }
 .reference-pending-icon { font-size: 14px; }
+/* A batch still mid-detection -- distinct from the amber "ready" banner
+   above so it reads as "not yet", not as an invitation to act. */
+.reference-pending-banner-waiting {
+  background: #1a1c23; border: 1px dashed #46485a; color: #9ea2b0; cursor: default;
+}
+.reference-pending-banner-waiting:hover { background: #1a1c23; }
 
 .picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; max-height: 50vh; overflow-y: auto; }
 .picker-item { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; cursor: pointer; border: 2px solid transparent; }
@@ -1227,6 +1233,43 @@ kbd {
    precisely, and its box is allowed to extend past the stage's edges (see
    .placement-box), unlike the crop box which never leaves the image. */
 .modal:has(.sam3-stage-wrap) { width: 900px; }
+/* The positioning stage wants all the screen it can get -- dragging/resizing
+   quads precisely is much easier with more room, and there's nothing else
+   competing for space in this modal. Near-fullscreen rather than a fixed
+   width/height, with padding trimmed down so almost none of it is wasted. */
+.modal:has(.sam3-stage-layout) {
+  width: 98vw; max-width: 98vw; height: 96vh; max-height: 96vh;
+  padding: 10px; display: flex; flex-direction: column;
+}
+.modal:has(.sam3-stage-layout) .sam3-stage-layout { flex: 1; min-height: 0; }
+.modal:has(.sam3-stage-layout) .sam3-layer-sidebar { max-height: 100%; }
+.modal:has(.sam3-stage-layout) .crop-stage-wrap { height: 100%; align-items: center; }
+/* Layer sidebar for the multi-layer SAM3 positioning stage -- sits beside
+   the stage, not above it, so it doesn't eat into the stage's own height. */
+.sam3-stage-layout { display: flex; gap: 14px; align-items: flex-start; }
+.sam3-layer-sidebar {
+  flex: 0 0 160px; display: flex; flex-direction: column; gap: 4px;
+  max-height: 100%; overflow-y: auto;
+}
+.sam3-layer-item {
+  text-align: left; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid #2a2c35; background: #1a1b22; color: #c7c9d3;
+  font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sam3-layer-item:hover { border-color: #46485a; }
+.sam3-layer-item.active { border-color: #8B5CF6; background: #2a2440; color: #fff; }
+/* Multi-prompt list in the "Detect objects" step -- one row per layer,
+   bottom-to-top order matching the positioning stage's layer sidebar. */
+.sam3-prompt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sam3-layer-index {
+  flex: 0 0 18px; text-align: center; font-size: 11px; color: #9ea2b0;
+}
+.sam3-prompt-row .sam3-prompt-input { flex: 1; }
+.sam3-remove-row-btn {
+  flex: 0 0 auto; background: none; border: none; color: #9ea2b0; cursor: pointer; font-size: 13px; padding: 2px 4px;
+}
+.sam3-remove-row-btn:hover { color: #e6e6eb; }
+.sam3-add-layer-btn { margin-bottom: 8px; }
 .crop-stage-wrap { display: flex; justify-content: center; }
 .crop-stage { position: relative; touch-action: none; }
 .crop-stage img { display: block; -webkit-user-drag: none; user-select: none; }

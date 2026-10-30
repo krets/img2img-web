@@ -79,6 +79,14 @@ CREATE TABLE IF NOT EXISTS reference_images (
     -- positions it, which replaces it with a finished (needs_composite=0)
     -- one. Always 0 for an ordinary (non-scoped) library entry.
     needs_composite     INTEGER DEFAULT 0,
+    -- Groups the raw (needs_composite=1) cutouts queued together by one
+    -- sam3-cutout-batch request, so a later batch for the same image can
+    -- tell its own rows apart from a straggler finishing from a previous
+    -- batch. NULL for an ordinary library entry or a finished placement.
+    batch_id             TEXT,
+    -- This layer's position in the batch's requested stacking order (0 =
+    -- bottom). NULL unless needs_composite=1.
+    layer_index          INTEGER,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY (source_image_id) REFERENCES images(id) ON DELETE CASCADE
 );
@@ -293,6 +301,10 @@ def _migrate(conn):
         conn.execute("ALTER TABLE reference_images ADD COLUMN source_image_id TEXT REFERENCES images(id) ON DELETE CASCADE")
     if "needs_composite" not in reference_columns:
         conn.execute("ALTER TABLE reference_images ADD COLUMN needs_composite INTEGER DEFAULT 0")
+    if "batch_id" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN batch_id TEXT")
+    if "layer_index" not in reference_columns:
+        conn.execute("ALTER TABLE reference_images ADD COLUMN layer_index INTEGER")
 
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()}
     if "engine" not in result_columns:
@@ -814,17 +826,19 @@ def merge_images(keep_id, remove_id):
 def create_reference_image(project_id, display_name, original_file_name, file_name,
                             crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height, ref_id=None,
                             content_hash=None, phash=None, dhash=None, aspect=None, source_image_id=None,
-                            needs_composite=False):
+                            needs_composite=False, batch_id=None, layer_index=None):
     conn = get_connection()
     ref_id = ref_id or new_id()
     conn.execute(
         """INSERT INTO reference_images (id, project_id, display_name, original_file_name, file_name,
                                           crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
-                                          content_hash, phash, dhash, aspect, source_image_id, needs_composite)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          content_hash, phash, dhash, aspect, source_image_id, needs_composite,
+                                          batch_id, layer_index)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (ref_id, project_id, display_name, original_file_name, file_name,
          crop_x, crop_y, crop_w, crop_h, orig_width, orig_height, width, height,
-         content_hash, phash, dhash, aspect, source_image_id, int(bool(needs_composite))),
+         content_hash, phash, dhash, aspect, source_image_id, int(bool(needs_composite)),
+         batch_id, layer_index),
     )
     conn.commit()
     return get_reference_image(ref_id)
@@ -870,13 +884,42 @@ def get_reference_image(ref_id):
 def get_scoped_reference_image(source_image_id):
     """The one reference image (if any) auto-generated for this specific
     source image, e.g. by the SAM3 object-placement tool. There's at most
-    one live row per image -- callers replace rather than accumulate.
+    one *finished* (needs_composite=0) row per image -- callers replace
+    rather than accumulate. While a multi-layer batch is still in flight
+    there can also be several needs_composite=1 rows (see
+    list_scoped_cutout_layers); this returns the first row found and is
+    meant for callers that only care about the finished placement or about
+    whether *anything* still needs attention.
     """
     conn = get_connection()
     row = conn.execute(
-        "SELECT * FROM reference_images WHERE source_image_id = ? AND is_deleted = 0", (source_image_id,)
+        "SELECT * FROM reference_images WHERE source_image_id = ? AND is_deleted = 0 "
+        "ORDER BY needs_composite ASC, layer_index ASC",
+        (source_image_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def list_scoped_cutout_layers(source_image_id, batch_id=None):
+    """All raw (needs_composite=1) cutout layers for this source image, in
+    requested stacking order (layer_index ascending). Pass batch_id to
+    scope to one in-flight batch, ignoring any straggler row left behind by
+    an earlier batch that was superseded before it finished.
+    """
+    conn = get_connection()
+    if batch_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM reference_images WHERE source_image_id = ? AND is_deleted = 0 "
+            "AND needs_composite = 1 AND batch_id = ? ORDER BY layer_index ASC",
+            (source_image_id, batch_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM reference_images WHERE source_image_id = ? AND is_deleted = 0 "
+            "AND needs_composite = 1 ORDER BY layer_index ASC",
+            (source_image_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def update_reference_image(ref_id, display_name=None):

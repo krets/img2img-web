@@ -1372,6 +1372,16 @@ els.multiSelectMoveBtn.addEventListener("click", () => {
 // unfinished_sam3_reference_id), unlike the others here, which all come from
 // the in-memory job queue and disappear once resolved -- this is what the
 // in-flight pending chit above hands off to once the job completes.
+// Still-running (queued/running) sam3_cutout jobs for one image -- used to
+// hold off the "ready to position" signals (banner/chit/button label) until
+// every layer in a batch has actually finished, not just the first one. A
+// batch's jobs are all added to state.queue together at submit time (see
+// renderSam3PromptStep), so this reflects the whole batch's progress, not
+// just whichever layer happens to be running right now.
+function sam3PendingLayerJobs(imageId) {
+  return state.queue.filter((j) => j.image_id === imageId && j.kind === "sam3_cutout" && (j.status === "queued" || j.status === "running"));
+}
+
 function renderChits(img) {
   const completedChits = (img.result_evaluations || []).map(
     (r) => `<span class="chit ${r.evaluation}" data-result-id="${r.id}" title="${r.evaluation}"></span>`
@@ -1382,7 +1392,11 @@ function renderChits(img) {
     .map((j) => `<span class="chit pending ${jobDisplayState(j)}" title="${escapeHtml(formatJobStatus(j))}"></span>`);
   const errorChits = failedJobsFor(img.id)
     .map((j) => `<span class="chit error" title="${escapeHtml(j.error || "Generation failed")}"></span>`);
-  const sam3PendingChits = img.unfinished_sam3_reference_id
+  // Withheld while any layer in the batch is still detecting (its own
+  // pending chit above already shows that) -- otherwise this would pop up
+  // as soon as the first of several layers finishes, inviting the user to
+  // position a placement that isn't fully ready yet.
+  const sam3PendingChits = img.unfinished_sam3_reference_id && !sam3PendingLayerJobs(img.id).length
     ? [`<span class="chit sam3-pending" title="SAM3 placement ready -- needs positioning"></span>`]
     : [];
 
@@ -2269,7 +2283,21 @@ function resolveReferenceForDisplay(id) {
 // on it. It's never in referenceImageIds (see reconcileSam3ReferenceSelection),
 // so it wouldn't otherwise appear in this row at all.
 function renderSam3PendingBannerHtml() {
-  const ref = state.currentImage?.sam3_reference;
+  const image = state.currentImage;
+  if (!image) return "";
+  const ref = image.sam3_reference;
+  const pending = sam3PendingLayerJobs(image.id);
+  // While any layer is still detecting, say so instead of either staying
+  // silent or claiming the whole placement is ready -- the latter used to
+  // fire as soon as the *first* of several queued layers finished.
+  if (pending.length) {
+    return `
+      <div class="reference-pending-banner reference-pending-banner-waiting" id="sam3PendingBanner">
+        <span class="spinner"></span>
+        <span>Detecting ${pending.length} more SAM3 layer${pending.length > 1 ? "s" : ""}...</span>
+      </div>
+    `;
+  }
   if (!ref || !ref.needs_composite) return "";
   return `
     <button type="button" class="reference-pending-banner" id="sam3PendingBanner" title="Click to position this object on the image">
@@ -2284,10 +2312,18 @@ function renderSam3PendingBannerHtml() {
 // most of the time it starts a fresh background detection, but once one has
 // finished and is sitting unpositioned (the banner above), clicking it jumps
 // straight to positioning instead, skipping the prompt step entirely -- so
-// "Position object" was misleading as the one label for both.
+// "Position object" was misleading as the one label for both. While a batch
+// is still detecting, it instead jumps to the wait-then-position flow (see
+// openSam3PlacementModal), so the label says that's what's happening.
 function updateSam3PlaceBtn() {
-  const ref = state.currentImage?.sam3_reference;
-  if (ref && ref.needs_composite) {
+  const image = state.currentImage;
+  if (!image) return;
+  const ref = image.sam3_reference;
+  const pending = sam3PendingLayerJobs(image.id);
+  if (pending.length) {
+    els.sam3PlaceBtn.textContent = `⏳ Detecting ${pending.length} more layer${pending.length > 1 ? "s" : ""}...`;
+    els.sam3PlaceBtn.title = "SAM3 is still detecting the rest of this batch's layers";
+  } else if (ref && ref.needs_composite) {
     els.sam3PlaceBtn.textContent = "📍 Position object (SAM3)";
     els.sam3PlaceBtn.title = "Drag and resize the already-detected object onto this image";
   } else {
@@ -2323,7 +2359,10 @@ function renderReferenceImages() {
       openReferenceLightbox(resolveReferenceForDisplay(id), id);
     });
   });
-  const banner = els.referenceImageList.querySelector("#sam3PendingBanner");
+  // Only the "ready" banner (a <button>) is clickable -- the "still
+  // detecting" one (a plain <div>, see renderSam3PendingBannerHtml) is
+  // informational only, since there's nothing to position yet.
+  const banner = els.referenceImageList.querySelector("button#sam3PendingBanner");
   if (banner) banner.addEventListener("click", openSam3PlacementModal);
 }
 
@@ -2721,51 +2760,104 @@ function drawWarpedQuad(ctx, img, quad) {
   drawTexturedTriangle(ctx, img, [srcNW, srcSE, srcSW], [quad.nw, quad.se, quad.sw]);
 }
 
-// Detection is fire-and-forget (see api.startSam3Cutout): it's just queued
-// here and the modal closes right away, so a long wait behind other work in
-// ComfyUI's queue -- or just wanting to go do something else in the
+// Detection is fire-and-forget (see api.startSam3CutoutBatch): it's just
+// queued here and the modal closes right away, so a long wait behind other
+// work in ComfyUI's queue -- or just wanting to go do something else in the
 // meantime -- never leaves anything blocked. Its result shows up later as a
 // "needs positioning" chit in the sidebar (renderChits) and a banner here in
 // the details panel (renderSam3PendingBannerHtml) once list_images/getImage
 // next report it, via the normal queue poll's anyNewlyFinished handling --
-// no separate polling loop needed for this modal at all.
+// no separate polling loop needed for this modal at all. While any layer of
+// the batch is still detecting, this goes to the same wait-then-position
+// flow as a finished batch (it shows live "waiting for N more" status)
+// rather than either re-opening the prompt step or jumping into positioning
+// with an incomplete set of layers.
 function openSam3PlacementModal() {
   const imageId = state.currentImageId;
   const image = state.currentImage;
   if (!imageId || !image) return;
   const ref = image.sam3_reference;
-  if (ref && ref.needs_composite) {
-    openSam3PositioningModal(imageId, image, ref);
+  if ((ref && ref.needs_composite) || sam3PendingLayerJobs(imageId).length) {
+    openSam3PositioningModal(imageId, image);
   } else {
     renderSam3PromptStep(imageId, image);
   }
 }
 
-// Loads an already-detected (but unpositioned) cutout straight into the
-// interactive stage -- entered from the "needs positioning" banner/chit,
-// skipping the prompt/detect step since detection already ran in the
-// background.
-async function openSam3PositioningModal(imageId, image, ref) {
-  const modal = openModal(`<h3>Position object (SAM3)</h3><div id="sam3ModalStatus" class="status-line"><span class="spinner"></span><span>Loading...</span></div>`);
+// Waits for every layer in the in-flight batch to finish -- piggybacking on
+// the global queue poll already running (see pollQueue) rather than running
+// a separate network poll of its own -- then loads the base image plus each
+// finished cutout and enters the multi-layer positioning stage. Entered
+// from the "needs positioning" banner/chit, skipping the prompt/detect step
+// since detection already ran (or is still running) in the background.
+async function openSam3PositioningModal(imageId, image) {
+  const modal = openModal(`<h3>Position objects (SAM3)</h3><div id="sam3ModalStatus" class="status-line"><span class="spinner"></span><span>Loading...</span></div>`);
+  const statusEl = () => modal.querySelector("#sam3ModalStatus");
   try {
+    while (true) {
+      const pending = state.queue.filter(
+        (j) => j.image_id === imageId && j.kind === "sam3_cutout" && (j.status === "queued" || j.status === "running")
+      );
+      if (!pending.length) break;
+      if (!statusEl()) return; // modal closed/cancelled while waiting
+      statusEl().innerHTML = `<span class="spinner"></span><span>Waiting for ${pending.length} more layer${pending.length > 1 ? "s" : ""}...</span>`;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!statusEl()) return;
+    const layers = await api.getSam3Layers(imageId);
+    if (!layers.length) throw new Error("No SAM3 layers are ready to position");
     const baseUrl = sourceUrlFor(image).url;
-    const cutoutUrl = `/api/reference-images/${ref.id}/original?v=${ref.id}`;
-    const [baseImg, cutoutImg] = await Promise.all([loadImage(baseUrl), loadImage(cutoutUrl)]);
-    renderSam3StageStep(imageId, image, existingSam3Prompt(image), baseImg, cutoutImg);
+    const cutoutImgs = await Promise.all(layers.map((ref) => loadImage(`/api/reference-images/${ref.id}/original?v=${ref.id}`)));
+    const baseImg = await loadImage(baseUrl);
+    if (!statusEl()) return;
+    const layerData = layers.map((ref, i) => ({
+      ref,
+      img: cutoutImgs[i],
+      prompt: existingSam3Prompt({ sam3_reference: ref }),
+    }));
+    renderSam3StageStep(imageId, image, baseImg, layerData);
   } catch (e) {
-    modal.querySelector("#sam3ModalStatus").textContent = `Error: ${e.message}`;
+    if (statusEl()) statusEl().textContent = `Error: ${e.message}`;
   }
 }
 
 function renderSam3PromptStep(imageId, image) {
   const existing = image.sam3_reference;
+  const SAM3_MAX_LAYERS = 5;
+  let prompts = [existingSam3Prompt(image) || getSam3PromptHistory()[0] || ""];
+
+  function currentValues(modal) {
+    return [...modal.querySelectorAll(".sam3-prompt-input")].map((el) => el.value);
+  }
+
+  function renderRows(modal) {
+    const rowsEl = modal.querySelector("#sam3PromptRows");
+    rowsEl.innerHTML = prompts
+      .map(
+        (value, index) => `
+      <div class="sam3-prompt-row">
+        <span class="sam3-layer-index">${index + 1}</span>
+        <input type="text" class="sam3-prompt-input" placeholder="Object to detect..." list="sam3PromptHistoryList" value="${escapeAttr(value)}" />
+        ${prompts.length > 1 ? `<button type="button" class="sam3-remove-row-btn" data-index="${index}" title="Remove layer">✕</button>` : ""}
+      </div>
+    `
+      )
+      .join("");
+    rowsEl.querySelectorAll(".sam3-remove-row-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        prompts = currentValues(modal);
+        prompts.splice(Number(btn.dataset.index), 1);
+        renderRows(modal);
+      });
+    });
+    modal.querySelector("#sam3AddLayerBtn").disabled = prompts.length >= SAM3_MAX_LAYERS;
+  }
+
   const modal = openModal(`
-    <h3>Detect object (SAM3)</h3>
-    <p class="dup-section-hint">Detects an object with SAM3 in the background -- once it's ready (watch for the amber chit on this image), come back here to drag and resize it onto the image before saving it as a reference.</p>
-    <div class="field">
-      <label>SAM3 Prompt <span class="hint">(object to detect, e.g. "elephants")</span></label>
-      <input id="sam3ModalPromptInput" type="text" placeholder="Object to detect..." list="sam3PromptHistoryList" value="${escapeAttr(existingSam3Prompt(image) || getSam3PromptHistory()[0] || "")}" />
-    </div>
+    <h3>Detect objects (SAM3)</h3>
+    <p class="dup-section-hint">Detects each object with SAM3 in the background, each as its own layer -- once they're all ready (watch for the amber chit on this image), come back here to arrange them onto the image before saving as a reference. Layers stack in the order listed below, bottom first.</p>
+    <div class="field" id="sam3PromptRows"></div>
+    <button id="sam3AddLayerBtn" class="btn-ghost sam3-add-layer-btn" type="button">+ Add layer</button>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
       ${existing ? '<button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Remove placement</button>' : ""}
@@ -2773,11 +2865,18 @@ function renderSam3PromptStep(imageId, image) {
       <button id="sam3ModalDetectBtn" class="btn-primary" type="button">Detect</button>
     </div>
   `);
-  const promptInput = modal.querySelector("#sam3ModalPromptInput");
+  renderRows(modal);
+
   const statusEl = modal.querySelector("#sam3ModalStatus");
   const removeBtn = modal.querySelector("#sam3ModalRemoveBtn");
   const detectBtn = modal.querySelector("#sam3ModalDetectBtn");
   modal.querySelector("#sam3ModalCancelBtn").addEventListener("click", closeModal);
+  modal.querySelector("#sam3AddLayerBtn").addEventListener("click", () => {
+    if (prompts.length >= SAM3_MAX_LAYERS) return;
+    prompts = [...currentValues(modal), ""];
+    renderRows(modal);
+    [...modal.querySelectorAll(".sam3-prompt-input")].at(-1)?.focus();
+  });
 
   if (removeBtn) {
     removeBtn.addEventListener("click", async () => {
@@ -2799,35 +2898,48 @@ function renderSam3PromptStep(imageId, image) {
     });
   }
   detectBtn.addEventListener("click", async () => {
-    const prompt = promptInput.value.trim();
-    if (!prompt) {
-      statusEl.textContent = "Enter a SAM3 prompt first.";
+    const values = currentValues(modal)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (!values.length) {
+      statusEl.textContent = "Enter at least one SAM3 prompt.";
       return;
     }
     detectBtn.disabled = true;
-    promptInput.disabled = true;
-    statusEl.innerHTML = `<span class="spinner"></span><span>Queuing...</span>`;
+    modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = true));
+    statusEl.innerHTML = `<span class="spinner"></span><span>Queuing ${values.length} layer${values.length > 1 ? "s" : ""}...</span>`;
     try {
-      rememberSam3Prompt(prompt);
-      const job = await api.startSam3Cutout(imageId, prompt);
-      mergeQueueJob(job);
+      values.forEach(rememberSam3Prompt);
+      const { jobs } = await api.startSam3CutoutBatch(imageId, values);
+      jobs.forEach(mergeQueueJob);
       applyQueueOrdering();
       renderQueueOverlay();
+      // Reflects the new "detecting N layers" state in the button/banner
+      // right away -- otherwise it only catches up once some job actually
+      // finishes (see pollQueue's anyNewlyFinished branch), which could be
+      // a while for a job still sitting queued behind other work.
+      if (state.currentImageId === imageId) renderReferenceImages();
       closeModal();
     } catch (e) {
       statusEl.textContent = `Error: ${e.message}`;
       detectBtn.disabled = false;
-      promptInput.disabled = false;
+      modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = false));
     }
   });
 }
 
-function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
-  // Bigger than the crop tool's stage: this tool benefits from more precision
-  // room, and (unlike a crop box) the placement box is allowed to run past
-  // the edges -- see render/setQuad below -- so there's more to see at once.
-  const maxW = 820;
-  const maxH = Math.max(420, Math.round(window.innerHeight * 0.65));
+// layers: [{ ref, img, prompt }, ...] in bottom-to-top stacking order (as
+// requested when detection was queued). Each layer gets its own quad
+// (nw/ne/sw/se corners, same warp math as the single-layer tool used to);
+// only the layer selected in the sidebar shows its handles, which jump to
+// whichever layer becomes active -- the others stay exactly as positioned.
+function renderSam3StageStep(imageId, image, baseImg, layers) {
+  // The modal is near-fullscreen (see .modal:has(.sam3-stage-layout)) so
+  // this tool gets as much precision room as the viewport allows for
+  // dragging/resizing quads -- leaves just enough headroom for the layer
+  // sidebar, title, hint text, status line and action buttons around it.
+  const maxW = Math.max(600, Math.round(window.innerWidth * 0.98) - 220);
+  const maxH = Math.max(420, Math.round(window.innerHeight * 0.96) - 170);
   const naturalWidth = baseImg.naturalWidth;
   const naturalHeight = baseImg.naturalHeight;
   const scale = Math.min(maxW / naturalWidth, maxH / naturalHeight, 1);
@@ -2835,32 +2947,53 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
   const dispH = Math.round(naturalHeight * scale);
   const minSize = 12;
 
-  // Default placement: the cutout at its own detected size (capped to fit
-  // the stage), centered -- a much more useful starting point than filling
-  // the whole canvas, since the user is about to drag/resize it anyway.
-  const fitScale = Math.min(dispW / cutoutImg.naturalWidth, dispH / cutoutImg.naturalHeight, 1);
-  const initW = cutoutImg.naturalWidth * fitScale;
-  const initH = cutoutImg.naturalHeight * fitScale;
+  // Default per-layer placement: each cutout at its own detected size
+  // (capped to fit the stage), staggered slightly from center so several
+  // layers don't all start exactly on top of each other -- each is still
+  // just a starting point the user is about to drag/resize anyway.
+  function initialQuad(img, index) {
+    const fitScale = Math.min(dispW / img.naturalWidth, dispH / img.naturalHeight, 1);
+    const w = img.naturalWidth * fitScale;
+    const h = img.naturalHeight * fitScale;
+    const stagger = (index - (layers.length - 1) / 2) * 24;
+    const bx = clamp((dispW - w) / 2 + stagger, -dispW, dispW * 2);
+    const by = clamp((dispH - h) / 2 + stagger, -dispH, dispH * 2);
+    return {
+      nw: { x: bx, y: by },
+      ne: { x: bx + w, y: by },
+      sw: { x: bx, y: by + h },
+      se: { x: bx + w, y: by + h },
+    };
+  }
+  const layerQuads = layers.map((l, i) => initialQuad(l.img, i));
+  let activeIndex = layers.length - 1; // top layer selected by default
+
+  const sidebarItemsHtml = layers
+    .map((l, i) => `<button type="button" class="sam3-layer-item" data-index="${i}">${escapeHtml(l.prompt || l.ref.display_name)}</button>`)
+    .join("");
 
   const modal = openModal(`
-    <h3>Position object (SAM3)</h3>
-    <div class="crop-stage-wrap sam3-stage-wrap">
-      <div class="crop-stage" id="sam3Stage" style="width:${dispW}px;height:${dispH}px">
-        <img id="sam3BaseImg" src="${baseImg.src}" draggable="false" style="width:${dispW}px;height:${dispH}px" />
-        <canvas id="sam3Canvas" width="${dispW}" height="${dispH}" style="position:absolute;left:0;top:0;width:${dispW}px;height:${dispH}px;pointer-events:none"></canvas>
-        <div class="placement-box" id="sam3Box">
-          <div class="crop-handle crop-handle-quad" data-handle="nw"></div>
-          <div class="crop-handle crop-handle-quad" data-handle="ne"></div>
-          <div class="crop-handle crop-handle-quad" data-handle="sw"></div>
-          <div class="crop-handle crop-handle-quad" data-handle="se"></div>
+    <h3>Position objects (SAM3)</h3>
+    <div class="sam3-stage-layout">
+      <div class="sam3-layer-sidebar" id="sam3LayerSidebar">${sidebarItemsHtml}</div>
+      <div class="crop-stage-wrap sam3-stage-wrap">
+        <div class="crop-stage" id="sam3Stage" style="width:${dispW}px;height:${dispH}px">
+          <img id="sam3BaseImg" src="${baseImg.src}" draggable="false" style="width:${dispW}px;height:${dispH}px" />
+          <canvas id="sam3Canvas" width="${dispW}" height="${dispH}" style="position:absolute;left:0;top:0;width:${dispW}px;height:${dispH}px;pointer-events:none"></canvas>
+          <div class="placement-box" id="sam3Box">
+            <div class="crop-handle crop-handle-quad" data-handle="nw"></div>
+            <div class="crop-handle crop-handle-quad" data-handle="ne"></div>
+            <div class="crop-handle crop-handle-quad" data-handle="sw"></div>
+            <div class="crop-handle crop-handle-quad" data-handle="se"></div>
+          </div>
         </div>
       </div>
     </div>
-    <p class="dup-section-hint">Drag to move, drag a corner to resize. Ctrl+drag a corner to skew.</p>
+    <p class="dup-section-hint">Select a layer at left, then drag to move, drag a corner to resize, or ctrl+drag a corner to skew it.</p>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Discard</button>
-      <button id="sam3ModalBackBtn" class="btn-ghost" type="button">Try a different prompt</button>
+      <button id="sam3ModalBackBtn" class="btn-ghost" type="button">Try different prompts</button>
       <button id="sam3ModalCancelBtn" class="btn-ghost" type="button">Cancel</button>
       <button id="sam3ModalSaveBtn" class="btn-primary" type="button">Save as reference</button>
     </div>
@@ -2869,9 +3002,26 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
   const stage = modal.querySelector("#sam3Stage");
   const boxEl = modal.querySelector("#sam3Box");
   const statusEl = modal.querySelector("#sam3ModalStatus");
+  const sidebarEl = modal.querySelector("#sam3LayerSidebar");
+
+  function updateSidebarActive() {
+    sidebarEl.querySelectorAll(".sam3-layer-item").forEach((btn) => {
+      btn.classList.toggle("active", Number(btn.dataset.index) === activeIndex);
+    });
+  }
+  sidebarEl.querySelectorAll(".sam3-layer-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeIndex = Number(btn.dataset.index);
+      updateSidebarActive();
+      render();
+    });
+  });
+  updateSidebarActive();
+
   // Reachable right from the stage, not just by backing out to the prompt
   // step first -- the usual reason to want this here is "wrong object, bad
-  // crop" becoming obvious only once you're looking at it positioned.
+  // crop" becoming obvious only once you're looking at it positioned. This
+  // discards every layer in the placement, not just the active one.
   modal.querySelector("#sam3ModalRemoveBtn").addEventListener("click", async (evt) => {
     evt.currentTarget.disabled = true;
     statusEl.textContent = "Removing...";
@@ -2889,27 +3039,33 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
       evt.currentTarget.disabled = false;
     }
   });
-  // The placement is a quad (nw/ne/sw/se corners, in DISPLAY pixel coords
+  // Each placement is a quad (nw/ne/sw/se corners, in DISPLAY pixel coords
   // relative to the stage) rather than a plain box: a rectangle is just the
   // case where all four corners still form a right angle. Plain drag-resize
   // keeps it that way (resizing anchored at the opposite corner, as before);
   // ctrl+drag on a corner instead moves only that corner, leaving the other
   // three exactly where they were -- turning the resize into a skew/distort.
-  let quad;
   const canvas = modal.querySelector("#sam3Canvas");
   const ctx2d = canvas.getContext("2d");
   const handleEls = {};
   for (const k of QUAD_CORNERS) handleEls[k] = boxEl.querySelector(`[data-handle="${k}"]`);
   const HANDLE_CURSORS = { nw: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", se: "nwse-resize" };
 
+  function activeQuad() {
+    return layerQuads[activeIndex];
+  }
+
   // Unlike the crop box, this is allowed to run past the stage's edges in
   // either direction -- the final composite (see the Save handler below)
   // draws it onto a canvas sized to the base image, which silently clips
   // whatever falls outside, the same way the old ComfyUI-side pin/scale
   // graph cropped an over-large placement to the canvas before compositing.
+  // Layers are drawn bottom to top (array order); only the active layer
+  // gets the selection outline and draggable handles.
   function render() {
     ctx2d.clearRect(0, 0, dispW, dispH);
-    drawWarpedQuad(ctx2d, cutoutImg, quad);
+    layers.forEach((l, i) => drawWarpedQuad(ctx2d, l.img, layerQuads[i]));
+    const quad = activeQuad();
     ctx2d.save();
     ctx2d.strokeStyle = "#8B5CF6";
     ctx2d.lineWidth = 2;
@@ -2928,19 +3084,10 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
     }
   }
   function setQuad(next) {
-    quad = next;
+    layerQuads[activeIndex] = next;
     render();
   }
-  {
-    const bx = (dispW - initW) / 2;
-    const by = (dispH - initH) / 2;
-    setQuad({
-      nw: { x: bx, y: by },
-      ne: { x: bx + initW, y: by },
-      sw: { x: bx, y: by + initH },
-      se: { x: bx + initW, y: by + initH },
-    });
-  }
+  render();
 
   function pointerPos(evt) {
     const rect = stage.getBoundingClientRect();
@@ -2965,14 +3112,14 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
   let drag = null; // { mode: "move" | "corner", handle, start: {x,y}, startQuad }
   boxEl.addEventListener("pointerdown", (evt) => {
     const handle = evt.target.dataset.handle;
-    if (!handle && !pointInQuad(pointerPos(evt), quad)) return; // missed the shape entirely
-    drag = { mode: handle ? "corner" : "move", handle, start: pointerPos(evt), startQuad: cloneQuad(quad) };
+    if (!handle && !pointInQuad(pointerPos(evt), activeQuad())) return; // missed the shape entirely
+    drag = { mode: handle ? "corner" : "move", handle, start: pointerPos(evt), startQuad: cloneQuad(activeQuad()) };
     boxEl.setPointerCapture(evt.pointerId);
     evt.preventDefault();
   });
   boxEl.addEventListener("pointermove", (evt) => {
     if (!drag) {
-      boxEl.style.cursor = pointInQuad(pointerPos(evt), quad) ? "move" : "default";
+      boxEl.style.cursor = pointInQuad(pointerPos(evt), activeQuad()) ? "move" : "default";
       return;
     }
     const p = pointerPos(evt);
@@ -3036,11 +3183,17 @@ function renderSam3StageStep(imageId, image, prompt, baseImg, cutoutImg) {
       outCanvas.height = outH;
       const outCtx = outCanvas.getContext("2d");
       outCtx.drawImage(baseImg, 0, 0, outW, outH);
-      const naturalQuad = {};
-      for (const k of QUAD_CORNERS) naturalQuad[k] = { x: (quad[k].x / scale) * outScale, y: (quad[k].y / scale) * outScale };
-      drawWarpedQuad(outCtx, cutoutImg, naturalQuad);
+      // Flattened bottom to top, same as the stage preview -- the server
+      // only ever sees one finished composite, never individual layers.
+      layers.forEach((l, i) => {
+        const quad = layerQuads[i];
+        const naturalQuad = {};
+        for (const k of QUAD_CORNERS) naturalQuad[k] = { x: (quad[k].x / scale) * outScale, y: (quad[k].y / scale) * outScale };
+        drawWarpedQuad(outCtx, l.img, naturalQuad);
+      });
       const blob = await new Promise((resolve) => outCanvas.toBlob(resolve, "image/png"));
-      const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: prompt });
+      const combinedPrompt = layers.map((l) => l.prompt).filter(Boolean).join(", ");
+      const savedRef = await api.setSam3Reference(imageId, { file: blob, sam3Prompt: combinedPrompt });
       if (state.currentImageId === imageId) {
         state.currentImage.sam3_reference = savedRef;
         const max = maxReferenceImages();
@@ -3668,7 +3821,17 @@ async function pollQueue() {
   } else {
     applyQueueOrdering();
     renderImageList();
-    if (state.currentImage) updatePendingTiles(state.currentImageId);
+    if (state.currentImage) {
+      updatePendingTiles(state.currentImageId);
+      // Keeps the "detecting N more layers" button/banner state current
+      // even across ticks where nothing finished yet (e.g. right after a
+      // page reload mid-batch, or while a later layer is still queued
+      // behind an earlier one) -- cheap since it's just re-reading
+      // state.queue, not a fetch.
+      if (sam3PendingLayerJobs(state.currentImageId).length || state.currentImage.sam3_reference?.needs_composite) {
+        renderReferenceImages();
+      }
+    }
   }
 
   updateGenerateStatusForCurrentImage();

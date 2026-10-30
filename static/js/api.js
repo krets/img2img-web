@@ -127,8 +127,12 @@ export const api = {
   // this can end up waiting behind a real generation -- startSam3Cutout just
   // returns the queued job; poll getQueue() for it, then fetch the image at
   // `/queue/{job_id}/sam3-cutout` (a plain URL, not wrapped here) once done.
-  startSam3Cutout: (imageId, sam3Prompt) =>
-    request("POST", `/images/${imageId}/sam3-cutout`, { json: { sam3_prompt: sam3Prompt } }),
+  // Multi-layer version: queues one job per prompt (bottom-to-top order,
+  // capped at 5 server-side), all sharing a batch_id. getSam3CutoutBatch
+  // polls for the raw cutouts as they finish.
+  startSam3CutoutBatch: (imageId, sam3Prompts) =>
+    request("POST", `/images/${imageId}/sam3-cutout-batch`, { json: { sam3_prompts: sam3Prompts } }),
+  getSam3Layers: (imageId) => request("GET", `/images/${imageId}/sam3-layers`),
   setSam3Reference: (imageId, { file, sam3Prompt }) => {
     const form = new FormData();
     form.append("file", file);

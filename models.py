@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ProjectIn(BaseModel):
@@ -55,8 +55,18 @@ class ReferenceImageUpdateIn(BaseModel):
     display_name: Optional[str] = None
 
 
-class Sam3CutoutIn(BaseModel):
-    sam3_prompt: str
+class Sam3CutoutBatchIn(BaseModel):
+    sam3_prompts: list[str]
+
+    @field_validator("sam3_prompts")
+    @classmethod
+    def _validate_prompts(cls, value):
+        cleaned = [p.strip() for p in value if p.strip()]
+        if not cleaned:
+            raise ValueError("At least one SAM3 prompt is required")
+        if len(cleaned) > 5:
+            raise ValueError("At most 5 SAM3 layers are supported at once")
+        return cleaned
 
 
 class MoveImagesIn(BaseModel):

@@ -2676,6 +2676,18 @@ function existingSam3Prompt(image) {
   return name.startsWith("SAM3: ") ? name.slice(6) : "";
 }
 
+// A finished multi-layer placement's combined prompt is saved as one
+// ", "-joined display_name (see the save handler in renderSam3StageStep),
+// so re-opening the prompt step for it (e.g. "try a different prompt")
+// needs to split that back into the original per-layer prompts rather than
+// treating the whole joined string as a single prompt.
+function existingSam3Prompts(image) {
+  const joined = existingSam3Prompt(image);
+  if (!joined) return null;
+  const parts = joined.split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.length ? parts : null;
+}
+
 // ---------------------------------------------------------------------------
 // Quad warp math for the SAM3 placement tool's free-corner (ctrl+drag) mode.
 // The placement is a quadrilateral (nw/ne/sw/se corners, each {x,y}) rather
@@ -2828,9 +2840,7 @@ function renderSam3PromptStep(imageId, image) {
   // that, offer the same set of prompts (and layer count) as whatever batch
   // was last submitted for any image, rather than always starting back at a
   // single blank row -- see rememberSam3LastBatch below.
-  let prompts = existingSam3Prompt(image)
-    ? [existingSam3Prompt(image)]
-    : getSam3LastBatch() || [getSam3PromptHistory()[0] || ""];
+  let prompts = existingSam3Prompts(image) || getSam3LastBatch() || [getSam3PromptHistory()[0] || ""];
 
   function currentValues(modal) {
     return [...modal.querySelectorAll(".sam3-prompt-input")].map((el) => el.value);

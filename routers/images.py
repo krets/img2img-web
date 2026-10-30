@@ -518,8 +518,14 @@ def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: 
     independently into its own needs_composite=1 reference_images row, and
     the positioning UI waits for all of them before opening.
 
-    Checks ComfyUI is actually reachable before queuing anything: each
-    queued job's own submit call has a 120s timeout (comfyui_client's
+    SAM3 detection is deterministic for a given source image and prompt, so
+    each prompt is first checked against storage's on-disk cutout cache
+    (keyed on the source bytes + prompt + max_dim) -- useful when re-running
+    a prompt that mis-segmented the object the first time. ComfyUI is only
+    required to be reachable if at least one prompt actually misses.
+
+    Checks ComfyUI is actually reachable before queuing anything that needs
+    it: each queued job's own submit call has a 120s timeout (comfyui_client's
     REQUEST_TIMEOUT_SECONDS) and jobs run strictly one at a time, so a dead
     server would otherwise cost prompts*120s of silent waiting -- up to 10
     minutes for a full 5-layer batch -- before the user sees any error.
@@ -529,13 +535,20 @@ def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: 
         raise HTTPException(404, "Image not found")
 
     config = cfg.load_config()
-    reachable, detail = comfyui_client.check_connection(config.get("comfyui_url"))
-    if not reachable:
-        raise HTTPException(503, f"ComfyUI isn't reachable, so SAM3 detection can't run right now: {detail}")
+    source_path = _effective_source_path(image)
+    max_dim = config["default_max_dim"]
+    cache_keys = [storage.sam3_cutout_cache_key(source_path, p, max_dim) for p in body.sam3_prompts]
+    any_cache_miss = any(
+        storage.get_cached_sam3_cutout(image["project_id"], key) is None for key in cache_keys
+    )
+    if any_cache_miss:
+        reachable, detail = comfyui_client.check_connection(config.get("comfyui_url"))
+        if not reachable:
+            raise HTTPException(503, f"ComfyUI isn't reachable, so SAM3 detection can't run right now: {detail}")
     _replace_scoped_reference(image)
     batch_id = db.new_id()
     jobs_out = []
-    for layer_index, sam3_prompt in enumerate(body.sam3_prompts):
+    for layer_index, (sam3_prompt, cache_key) in enumerate(zip(body.sam3_prompts, cache_keys)):
         job = jobs.create_job(
             image_id=image_id,
             project_id=image["project_id"],
@@ -544,23 +557,28 @@ def sam3_cutout_batch(image_id: str, body: Sam3CutoutBatchIn, background_tasks: 
             prompt_text=sam3_prompt,
             kind="sam3_cutout",
         )
-        background_tasks.add_task(_run_sam3_cutout_layer, job["id"], image, sam3_prompt, config, batch_id, layer_index)
+        background_tasks.add_task(
+            _run_sam3_cutout_layer, job["id"], image, sam3_prompt, config, batch_id, layer_index, cache_key
+        )
         jobs_out.append(job)
     return {"batch_id": batch_id, "jobs": jobs_out}
 
 
-def _run_sam3_cutout_layer(job_id, image, sam3_prompt, config, batch_id, layer_index):
+def _run_sam3_cutout_layer(job_id, image, sam3_prompt, config, batch_id, layer_index, cache_key):
     try:
         jobs.update_job(job_id, status="running")
-        source_path = _effective_source_path(image)
-        cutout_bytes = comfyui_client.detect_sam3_object(
-            base_url=config["comfyui_url"],
-            workflow_path=cfg.comfyui_workflow_path(config, "cutout"),
-            source_path=source_path,
-            sam3_prompt=sam3_prompt,
-            job_id=job_id,
-            max_dim=config["default_max_dim"],
-        )
+        cutout_bytes = storage.get_cached_sam3_cutout(image["project_id"], cache_key)
+        if cutout_bytes is None:
+            source_path = _effective_source_path(image)
+            cutout_bytes = comfyui_client.detect_sam3_object(
+                base_url=config["comfyui_url"],
+                workflow_path=cfg.comfyui_workflow_path(config, "cutout"),
+                source_path=source_path,
+                sam3_prompt=sam3_prompt,
+                job_id=job_id,
+                max_dim=config["default_max_dim"],
+            )
+            storage.save_sam3_cutout_cache(image["project_id"], cache_key, cutout_bytes)
         name = f"SAM3: {sam3_prompt.strip()}"
         ref_id = db.new_id()
         file_name, width, height = storage.save_reference_cutout(image["project_id"], ref_id, name, cutout_bytes)

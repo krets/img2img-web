@@ -311,6 +311,40 @@ def get_or_create_processed(project_id, image_id, source_path, params):
     return dest
 
 
+def _sam3_cache_dir(project_id):
+    d = cfg.WORKSPACE_ROOT / "sam3_cache" / project_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def sam3_cutout_cache_key(source_path, sam3_prompt, max_dim):
+    """SAM3 detection is deterministic for a given source image and prompt,
+    so repeated detect calls (e.g. re-running a prompt that mis-segmented)
+    can reuse a prior result instead of re-running ComfyUI. Keyed on the
+    actual source bytes rather than the image id, so edits to the source
+    (or its pre-processed render) naturally miss the cache.
+    """
+    hasher = hashlib.sha256()
+    hasher.update(source_path.read_bytes())
+    hasher.update(b"\0")
+    hasher.update(sam3_prompt.strip().encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(str(max_dim).encode())
+    return hasher.hexdigest()
+
+
+def get_cached_sam3_cutout(project_id, cache_key):
+    path = _sam3_cache_dir(project_id) / f"{cache_key}.png"
+    return path.read_bytes() if path.exists() else None
+
+
+def save_sam3_cutout_cache(project_id, cache_key, image_bytes):
+    dest = _sam3_cache_dir(project_id) / f"{cache_key}.png"
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(image_bytes)
+    tmp.replace(dest)
+
+
 def save_processed_render(project_id, image_id, params, file_bytes):
     """Saves a pre-processed (rotate/crop/pad) render already produced
     client-side (see preprocess_render.js) directly into the same cache

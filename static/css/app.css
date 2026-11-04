@@ -1243,7 +1243,7 @@ kbd {
 }
 .modal:has(.sam3-stage-layout) .sam3-stage-layout { flex: 1; min-height: 0; }
 .modal:has(.sam3-stage-layout) .sam3-layer-sidebar { max-height: 100%; }
-.modal:has(.sam3-stage-layout) .crop-stage-wrap { height: 100%; align-items: center; }
+.modal:has(.sam3-stage-layout) .crop-stage-wrap { flex: 1; min-width: 0; height: 100%; align-items: center; }
 /* Layer sidebar for the multi-layer SAM3 positioning stage -- sits beside
    the stage, not above it, so it doesn't eat into the stage's own height. */
 .sam3-stage-layout { display: flex; gap: 14px; align-items: flex-start; }

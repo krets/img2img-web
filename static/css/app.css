@@ -386,6 +386,10 @@ kbd {
 .sidebar-controls-row { display: flex; gap: 6px; }
 .sidebar-controls-row select { flex: 1; }
 
+.upload-drop-row { display: flex; align-items: stretch; gap: 6px; margin-bottom: 10px; }
+.upload-drop-row .upload-drop { flex: 1; margin-bottom: 0; }
+.upload-drop-row .icon-toggle-btn { width: 34px; }
+
 .upload-drop {
   display: block;
   text-align: center;

@@ -71,10 +71,13 @@
               </select>
             </div>
           </div>
-          <label class="upload-drop" id="uploadDrop">
-            + Upload images (or paste)
-            <input id="uploadInput" type="file" accept="image/*" multiple hidden />
-          </label>
+          <div class="upload-drop-row">
+            <label class="upload-drop" id="uploadDrop">
+              + Upload images (or paste)
+              <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+            </label>
+            <button id="uploadClickPasteToggle" type="button" class="icon-toggle-btn" aria-pressed="false">📋</button>
+          </div>
           <div id="uploadStatus" class="status-line"></div>
           <div id="multiSelectBar" class="sidebar-controls-row multi-select-bar" style="display:none">
             <span id="multiSelectCount"></span>
@@ -85,10 +88,13 @@
         </div>
         <div id="referencesTabPanel" style="display:none">
           <p class="dup-section-hint reference-tab-hint">Reference images are a separate per-project library used as extra generation inputs (ComfyUI, Grok, and most fal.ai models) -- they don't show up in the main image list.</p>
-          <label class="upload-drop" id="referenceUploadDrop">
-            + Add reference image (or paste)
-            <input id="referenceUploadInput" type="file" accept="image/*" multiple hidden />
-          </label>
+          <div class="upload-drop-row">
+            <label class="upload-drop" id="referenceUploadDrop">
+              + Add reference image (or paste)
+              <input id="referenceUploadInput" type="file" accept="image/*" multiple hidden />
+            </label>
+            <button id="referenceUploadClickPasteToggle" type="button" class="icon-toggle-btn" aria-pressed="false">📋</button>
+          </div>
           <div id="referenceUploadStatus" class="status-line"></div>
           <div id="referenceLibraryGrid" class="reference-library-grid"></div>
         </div>

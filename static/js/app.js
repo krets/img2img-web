@@ -98,6 +98,7 @@ const els = {
   filterSelect: document.getElementById("filterSelect"),
   uploadDrop: document.getElementById("uploadDrop"),
   uploadInput: document.getElementById("uploadInput"),
+  uploadClickPasteToggle: document.getElementById("uploadClickPasteToggle"),
   autoGenOnUploadToggle: document.getElementById("autoGenOnUploadToggle"),
   uploadStatus: document.getElementById("uploadStatus"),
   libraryMenuBtn: document.getElementById("libraryMenuBtn"),
@@ -107,6 +108,7 @@ const els = {
   referencesTabPanel: document.getElementById("referencesTabPanel"),
   referenceUploadDrop: document.getElementById("referenceUploadDrop"),
   referenceUploadInput: document.getElementById("referenceUploadInput"),
+  referenceUploadClickPasteToggle: document.getElementById("referenceUploadClickPasteToggle"),
   referenceUploadStatus: document.getElementById("referenceUploadStatus"),
   referenceLibraryGrid: document.getElementById("referenceLibraryGrid"),
   duplicatesBtn: document.getElementById("duplicatesBtn"),
@@ -1558,6 +1560,69 @@ els.uploadInput.addEventListener("change", async () => {
 });
 els.uploadDrop.addEventListener("drop", async (e) => {
   await handleUploadedFiles(e.dataTransfer.files);
+});
+
+// "Click pastes clipboard" preference for an upload drop-zone: when on,
+// clicking the (or paste) label reads an image straight from the clipboard
+// instead of opening the file picker, for people who copy screenshots more
+// often than they browse files. Off by default; persisted per drop-zone
+// since the images and reference zones are independent.
+function setupClickToPasteUpload({ dropEl, toggleEl, statusEl, storageKey, onFiles }) {
+  const isActive = () => localStorage.getItem(storageKey) === "1";
+  function applyState(active) {
+    toggleEl.classList.toggle("active", active);
+    toggleEl.setAttribute("aria-pressed", String(active));
+    toggleEl.title = `Click pastes from clipboard: ${active ? "ON" : "off"} — click to turn ${
+      active ? "off" : "on"
+    }. When on, clicking this button pastes an image from the clipboard instead of opening the file picker.`;
+  }
+  applyState(isActive());
+  toggleEl.addEventListener("click", () => {
+    const active = !isActive();
+    localStorage.setItem(storageKey, active ? "1" : "0");
+    applyState(active);
+  });
+
+  dropEl.addEventListener("click", async (e) => {
+    if (!isActive()) return;
+    e.preventDefault();
+    if (!clipboardAvailable) {
+      statusEl.textContent = "Clipboard access isn't available on this connection.";
+      return;
+    }
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      const files = [];
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((t) => t.startsWith("image/"));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        const ext = imageType.split("/")[1] || "png";
+        files.push(new File([blob], `clipboard-${Date.now()}.${ext}`, { type: imageType }));
+      }
+      if (!files.length) {
+        statusEl.textContent = "No image found on the clipboard.";
+        return;
+      }
+      await onFiles(files);
+    } catch (err) {
+      statusEl.textContent = `Clipboard read failed: ${err.message}`;
+    }
+  });
+}
+setupClickToPasteUpload({
+  dropEl: els.uploadDrop,
+  toggleEl: els.uploadClickPasteToggle,
+  statusEl: els.uploadStatus,
+  storageKey: "grok_img2img.uploadClickPastes",
+  onFiles: handleUploadedFiles,
+});
+setupClickToPasteUpload({
+  dropEl: els.referenceUploadDrop,
+  toggleEl: els.referenceUploadClickPasteToggle,
+  statusEl: els.referenceUploadStatus,
+  storageKey: "grok_img2img.referenceUploadClickPastes",
+  onFiles: uploadReferenceFilesWithCrop,
 });
 
 // Paste an image (e.g. copied from a screenshot tool or browser) straight

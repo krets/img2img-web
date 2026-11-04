@@ -2704,10 +2704,11 @@ function existingSam3Prompts(image) {
 // than a plain box -- a rectangle is just the common case where all four
 // corners still form a right angle. Canvas 2D has no built-in way to draw an
 // image into an arbitrary quad, so it's approximated the standard way: split
-// the quad into two triangles and draw each as an affine-warped (clipped)
-// copy of the whole source image. A true single-pass projective warp would
-// need per-pixel resampling; the triangle split is the cheap, GPU-free
-// alternative and the seam along the diagonal is not visible in practice.
+// the quad into a grid of smaller quads, each drawn as two affine-warped
+// (clipped) copies of the corresponding piece of the source image (see
+// drawWarpedQuad below). A true single-pass projective warp would need
+// per-pixel resampling; this mesh of affine triangles is the cheap, GPU-free
+// alternative and converges to it as the grid gets finer.
 // ---------------------------------------------------------------------------
 const QUAD_CORNERS = ["nw", "ne", "sw", "se"];
 const QUAD_OPPOSITE = { nw: "se", ne: "sw", sw: "ne", se: "nw" };
@@ -2769,17 +2770,44 @@ function drawTexturedTriangle(ctx, img, src, dst) {
   ctx.restore();
 }
 
+// Bilinear interpolation of the four quad corners at (u, v) in [0, 1].
+function lerpQuad(quad, u, v) {
+  const top = { x: quad.nw.x + (quad.ne.x - quad.nw.x) * u, y: quad.nw.y + (quad.ne.y - quad.nw.y) * u };
+  const bottom = { x: quad.sw.x + (quad.se.x - quad.sw.x) * u, y: quad.sw.y + (quad.se.y - quad.sw.y) * u };
+  return { x: top.x + (bottom.x - top.x) * v, y: top.y + (bottom.y - top.y) * v };
+}
+
 // Draws `img` warped so its four corners land on quad.nw/ne/sw/se, in
 // whatever coordinate space `quad` is expressed in (the ctx's own pixels).
+// A single quad split into 2 affine triangles shows a visible shear along
+// that diagonal once the quad isn't a rectangle, because the two triangles
+// use unrelated linear mappings on either side of a shared edge. Subdividing
+// into a grid of smaller quads (each still 2 triangles) bilinearly interpolates
+// the corners instead, so the warp approaches a smooth projective one and the
+// crease disappears -- cheap since it's still plain canvas affine draws.
+const QUAD_MESH_STEPS = 12;
 function drawWarpedQuad(ctx, img, quad) {
   const w = img.naturalWidth;
   const h = img.naturalHeight;
-  const srcNW = { x: 0, y: 0 };
-  const srcNE = { x: w, y: 0 };
-  const srcSW = { x: 0, y: h };
-  const srcSE = { x: w, y: h };
-  drawTexturedTriangle(ctx, img, [srcNW, srcNE, srcSE], [quad.nw, quad.ne, quad.se]);
-  drawTexturedTriangle(ctx, img, [srcNW, srcSE, srcSW], [quad.nw, quad.se, quad.sw]);
+  const n = QUAD_MESH_STEPS;
+  for (let row = 0; row < n; row++) {
+    const v0 = row / n;
+    const v1 = (row + 1) / n;
+    for (let col = 0; col < n; col++) {
+      const u0 = col / n;
+      const u1 = (col + 1) / n;
+      const srcNW = { x: u0 * w, y: v0 * h };
+      const srcNE = { x: u1 * w, y: v0 * h };
+      const srcSW = { x: u0 * w, y: v1 * h };
+      const srcSE = { x: u1 * w, y: v1 * h };
+      const dstNW = lerpQuad(quad, u0, v0);
+      const dstNE = lerpQuad(quad, u1, v0);
+      const dstSW = lerpQuad(quad, u0, v1);
+      const dstSE = lerpQuad(quad, u1, v1);
+      drawTexturedTriangle(ctx, img, [srcNW, srcNE, srcSE], [dstNW, dstNE, dstSE]);
+      drawTexturedTriangle(ctx, img, [srcNW, srcSE, srcSW], [dstNW, dstSE, dstSW]);
+    }
+  }
 }
 
 // Detection is fire-and-forget (see api.startSam3CutoutBatch): it's just

@@ -10,6 +10,7 @@ client_id) so the frontend's queue overlay can follow it live.
 
 import json
 import random
+import threading
 import time
 from io import BytesIO
 from pathlib import Path
@@ -76,6 +77,31 @@ POLL_TIMEOUT_SECONDS = 300
 # flaky/slow network doesn't abort a request that would've completed given more time.
 REQUEST_TIMEOUT_SECONDS = 120
 WS_OPEN_TIMEOUT_SECONDS = 30
+
+# ComfyUI's own queue has no backpressure: throwing a big batch of
+# generations at it at once (e.g. auto-generate-on-upload across many images)
+# has been observed to make it time out rather than just queuing them. Cap how
+# many of this server's own generation jobs are uploaded/submitted to ComfyUI
+# at once and hold the rest back here, trickle-feeding new submissions in as
+# earlier ones finish. SAM3 cutout detections (submit_sam3_detection) aren't
+# gated by this -- they're submitted synchronously as a batch so a later
+# generation can't jump ahead of an earlier batch layer, and are bounded by
+# how many object prompts one image's batch has rather than by queue depth.
+MAX_CONCURRENT_COMFYUI_GENERATIONS = 10
+_generation_slot = threading.Semaphore(MAX_CONCURRENT_COMFYUI_GENERATIONS)
+
+
+def _acquire_generation_slot(job_id):
+    """Blocks until a generation slot is free, polling job cancellation
+    while waiting so a job cancelled before its turn comes up doesn't sit
+    holding up the queue until it's admitted.
+    """
+    while not _generation_slot.acquire(timeout=0.5):
+        if jobs.is_cancelled(job_id):
+            raise jobs.GenerationCancelled()
+    if jobs.is_cancelled(job_id):
+        _generation_slot.release()
+        raise jobs.GenerationCancelled()
 
 
 def _load_workflow(workflow_path):
@@ -172,61 +198,66 @@ def generate_image_edit(
     if jobs.is_cancelled(job_id):
         raise jobs.GenerationCancelled()
 
-    jobs.update_job(job_id, phase="uploading", value=0, max=0)
-    graph = _load_workflow(workflow_path)
-    _align_scale_nodes(graph)
-    uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
+    jobs.update_job(job_id, phase="queued", value=0, max=0)
+    _acquire_generation_slot(job_id)
+    try:
+        jobs.update_job(job_id, phase="uploading", value=0, max=0)
+        graph = _load_workflow(workflow_path)
+        _align_scale_nodes(graph)
+        uploaded_name = _upload_image(base_url, source_path, max_dim=max_dim)
 
-    # Every LoadImage node gets pointed at the uploaded source image by default.
-    # The workflow has reference-image slots (extra_image_nodes) that ComfyUI
-    # still evaluates even when the index node below leaves them switched out,
-    # so they need a valid file to read too -- falling back to the primary
-    # image is harmless since their output is discarded downstream in that case.
-    for node in graph.values():
-        if node.get("class_type") == "LoadImage":
-            node["inputs"]["image"] = uploaded_name
+        # Every LoadImage node gets pointed at the uploaded source image by default.
+        # The workflow has reference-image slots (extra_image_nodes) that ComfyUI
+        # still evaluates even when the index node below leaves them switched out,
+        # so they need a valid file to read too -- falling back to the primary
+        # image is harmless since their output is discarded downstream in that case.
+        for node in graph.values():
+            if node.get("class_type") == "LoadImage":
+                node["inputs"]["image"] = uploaded_name
 
-    for node_id, extra_path in zip(extra_image_nodes, extra_source_paths):
-        graph[node_id]["inputs"]["image"] = _upload_image(base_url, extra_path, max_dim=max_dim)
+        for node_id, extra_path in zip(extra_image_nodes, extra_source_paths):
+            graph[node_id]["inputs"]["image"] = _upload_image(base_url, extra_path, max_dim=max_dim)
 
-    if INDEX_NODE in graph:
-        graph[INDEX_NODE]["inputs"]["b"] = len(extra_source_paths)
+        if INDEX_NODE in graph:
+            graph[INDEX_NODE]["inputs"]["b"] = len(extra_source_paths)
 
-    if POSITIVE_PROMPT_NODE in graph:
-        graph[POSITIVE_PROMPT_NODE]["inputs"]["text"] = prompt
-    if SEED_NODE in graph:
-        graph[SEED_NODE]["inputs"]["noise_seed"] = random.randint(0, 2**63 - 1)
+        if POSITIVE_PROMPT_NODE in graph:
+            graph[POSITIVE_PROMPT_NODE]["inputs"]["text"] = prompt
+        if SEED_NODE in graph:
+            graph[SEED_NODE]["inputs"]["noise_seed"] = random.randint(0, 2**63 - 1)
 
-    if sam3_prompt is not None and nodes.get("sam3_prompt_node"):
-        graph[nodes["sam3_prompt_node"]]["inputs"]["text"] = sam3_prompt
-    if scale_by is not None and nodes.get("scale_by_node"):
-        graph[nodes["scale_by_node"]]["inputs"]["scale_by"] = scale_by
-    if scale_x is not None and nodes.get("scale_x_node"):
-        graph[nodes["scale_x_node"]]["inputs"]["value"] = scale_x
-    if scale_y is not None and nodes.get("scale_y_node"):
-        graph[nodes["scale_y_node"]]["inputs"]["value"] = scale_y
-    if lr_pin is not None and nodes.get("lr_pin_node"):
-        graph[nodes["lr_pin_node"]]["inputs"]["value"] = lr_pin
-    if tb_pin is not None and nodes.get("tb_pin_node"):
-        graph[nodes["tb_pin_node"]]["inputs"]["value"] = tb_pin
+        if sam3_prompt is not None and nodes.get("sam3_prompt_node"):
+            graph[nodes["sam3_prompt_node"]]["inputs"]["text"] = sam3_prompt
+        if scale_by is not None and nodes.get("scale_by_node"):
+            graph[nodes["scale_by_node"]]["inputs"]["scale_by"] = scale_by
+        if scale_x is not None and nodes.get("scale_x_node"):
+            graph[nodes["scale_x_node"]]["inputs"]["value"] = scale_x
+        if scale_y is not None and nodes.get("scale_y_node"):
+            graph[nodes["scale_y_node"]]["inputs"]["value"] = scale_y
+        if lr_pin is not None and nodes.get("lr_pin_node"):
+            graph[nodes["lr_pin_node"]]["inputs"]["value"] = lr_pin
+        if tb_pin is not None and nodes.get("tb_pin_node"):
+            graph[nodes["tb_pin_node"]]["inputs"]["value"] = tb_pin
 
-    prompt_id = _submit_prompt(base_url, graph, job_id)
+        prompt_id = _submit_prompt(base_url, graph, job_id)
 
-    history_entry = _wait_for_result(base_url, job_id, prompt_id)
-    finished_at = time.time()
-    jobs.update_job(job_id, phase="saving")
-    outputs = history_entry.get("outputs", {})
-    save_node_output = outputs.get(SAVE_IMAGE_NODE)
-    if not save_node_output or not save_node_output.get("images"):
-        raise RuntimeError(f"ComfyUI run finished without a saved image. Outputs: {outputs}")
+        history_entry = _wait_for_result(base_url, job_id, prompt_id)
+        finished_at = time.time()
+        jobs.update_job(job_id, phase="saving")
+        outputs = history_entry.get("outputs", {})
+        save_node_output = outputs.get(SAVE_IMAGE_NODE)
+        if not save_node_output or not save_node_output.get("images"):
+            raise RuntimeError(f"ComfyUI run finished without a saved image. Outputs: {outputs}")
 
-    image_info = save_node_output["images"][0]
-    image_bytes = _download_image(base_url, image_info)
+        image_info = save_node_output["images"][0]
+        image_bytes = _download_image(base_url, image_info)
 
-    job = jobs.get_job(job_id)
-    processing_started_at = job.get("processing_started_at") if job else None
-    processing_seconds = (finished_at - processing_started_at) if processing_started_at else None
-    return image_bytes, None, processing_seconds
+        job = jobs.get_job(job_id)
+        processing_started_at = job.get("processing_started_at") if job else None
+        processing_seconds = (finished_at - processing_started_at) if processing_started_at else None
+        return image_bytes, None, processing_seconds
+    finally:
+        _generation_slot.release()
 
 
 CUTOUT_PROMPT_NODE = "643:640"

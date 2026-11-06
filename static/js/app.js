@@ -3032,7 +3032,7 @@ function renderSam3PromptStep(imageId, image) {
       }
     });
   }
-  detectBtn.addEventListener("click", async () => {
+  detectBtn.addEventListener("click", () => {
     const values = currentValues(modal)
       .map((v) => v.trim())
       .filter(Boolean);
@@ -3040,27 +3040,26 @@ function renderSam3PromptStep(imageId, image) {
       statusEl.textContent = "Enter at least one SAM3 prompt.";
       return;
     }
-    detectBtn.disabled = true;
-    modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, .sam3-reorder-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = true));
-    statusEl.innerHTML = `<span class="spinner"></span><span>Queuing ${values.length} layer${values.length > 1 ? "s" : ""}...</span>`;
-    try {
-      values.forEach(rememberSam3Prompt);
-      rememberSam3LastBatch(values);
-      const { jobs } = await api.startSam3CutoutBatch(imageId, values);
-      jobs.forEach(mergeQueueJob);
-      applyQueueOrdering();
-      renderQueueOverlay();
-      // Reflects the new "detecting N layers" state in the button/banner
-      // right away -- otherwise it only catches up once some job actually
-      // finishes (see pollQueue's anyNewlyFinished branch), which could be
-      // a while for a job still sitting queued behind other work.
-      if (state.currentImageId === imageId) renderReferenceImages();
-      closeModal();
-    } catch (e) {
-      statusEl.textContent = `Error: ${e.message}`;
-      detectBtn.disabled = false;
-      modal.querySelectorAll(".sam3-prompt-input, .sam3-remove-row-btn, .sam3-reorder-btn, #sam3AddLayerBtn").forEach((el) => (el.disabled = false));
-    }
+    values.forEach(rememberSam3Prompt);
+    rememberSam3LastBatch(values);
+    // Closes right away instead of waiting on startSam3CutoutBatch's
+    // response -- that request submits every cache-miss layer to ComfyUI
+    // synchronously server-side (see sam3_cutout_batch's docstring) so it can
+    // take a while if ComfyUI is busy, and there's nothing left for this
+    // modal to usefully show meanwhile: the jobs it's waiting on already show
+    // up via the normal queue poll the moment the server creates them, well
+    // before this request even returns.
+    closeModal();
+    api.startSam3CutoutBatch(imageId, values)
+      .then(({ jobs }) => {
+        jobs.forEach(mergeQueueJob);
+        applyQueueOrdering();
+        renderQueueOverlay();
+        if (state.currentImageId === imageId) renderReferenceImages();
+      })
+      .catch((e) => {
+        els.generateStatus.textContent = `Error starting SAM3 detection: ${e.message}`;
+      });
   });
 }
 

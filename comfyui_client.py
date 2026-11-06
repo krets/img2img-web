@@ -72,7 +72,15 @@ def max_extra_images(workflow="default"):
 
 
 POLL_INTERVAL_SECONDS = 1.0
+# Applies only once a prompt is actually executing (see processing_started in
+# _wait_for_result_ws/_http) -- a stuck/hung run should still get caught. Time
+# spent waiting its turn in ComfyUI's own queue is not counted against this:
+# that queue has no size limit of its own, and a submission sitting behind a
+# backlog of other work (e.g. a big generation batch) is normal, not stuck.
 POLL_TIMEOUT_SECONDS = 300
+# Generous backstop for queue wait alone, so a prompt ComfyUI silently never
+# picks up doesn't hang a job forever -- normal queue waits are nowhere near this.
+QUEUE_WAIT_TIMEOUT_SECONDS = 3600
 # Generous ceiling for individual HTTP calls (upload, submit, poll, download) so a
 # flaky/slow network doesn't abort a request that would've completed given more time.
 REQUEST_TIMEOUT_SECONDS = 120
@@ -387,10 +395,21 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
     Returns the history entry once execution completes, or None if the
     connection ends without a clear completion signal (caller falls back
     to HTTP polling in that case).
+
+    Two different deadlines apply depending on whether this prompt has
+    started executing yet (see processing_started) -- see POLL_TIMEOUT_SECONDS
+    and QUEUE_WAIT_TIMEOUT_SECONDS above.
     """
     ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://") + f"/ws?clientId={job_id}"
-    deadline = time.time() + POLL_TIMEOUT_SECONDS
+    deadline = time.time() + QUEUE_WAIT_TIMEOUT_SECONDS
     processing_started = False
+
+    def _start_processing():
+        nonlocal deadline, processing_started
+        jobs.update_job(job_id, processing_started_at=time.time())
+        processing_started = True
+        deadline = time.time() + POLL_TIMEOUT_SECONDS
+
     with _ws_connect(ws_url, open_timeout=WS_OPEN_TIMEOUT_SECONDS) as ws:
         while time.time() < deadline:
             if jobs.is_cancelled(job_id):
@@ -417,8 +436,7 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
             msg_type = msg.get("type")
             if msg_type == "progress":
                 if not processing_started:
-                    jobs.update_job(job_id, processing_started_at=time.time())
-                    processing_started = True
+                    _start_processing()
                 jobs.update_job(job_id, phase="running", value=msg_data.get("value", 0), max=msg_data.get("max", 0))
             elif msg_type == "executing":
                 if msg_data.get("prompt_id") == prompt_id and msg_data.get("node") is None:
@@ -430,8 +448,7 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
                         time.sleep(0.5)
                     return None
                 if not processing_started:
-                    jobs.update_job(job_id, processing_started_at=time.time())
-                    processing_started = True
+                    _start_processing()
                 jobs.update_job(job_id, phase="running")
             elif msg_type == "execution_error":
                 raise RuntimeError(f"ComfyUI execution failed: {msg_data}")
@@ -439,7 +456,7 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
 
 
 def _wait_for_result_http(base_url, job_id, prompt_id):
-    deadline = time.time() + POLL_TIMEOUT_SECONDS
+    deadline = time.time() + QUEUE_WAIT_TIMEOUT_SECONDS
     processing_started = False
     while time.time() < deadline:
         if jobs.is_cancelled(job_id):
@@ -456,6 +473,7 @@ def _wait_for_result_http(base_url, job_id, prompt_id):
             if prompt_id in running_ids:
                 jobs.update_job(job_id, processing_started_at=time.time())
                 processing_started = True
+                deadline = time.time() + POLL_TIMEOUT_SECONDS
         jobs.update_job(job_id, phase="running")
         time.sleep(POLL_INTERVAL_SECONDS)
     raise RuntimeError(f"Timed out waiting for ComfyUI to finish prompt {prompt_id}")

@@ -396,12 +396,29 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
     connection ends without a clear completion signal (caller falls back
     to HTTP polling in that case).
 
-    Two different deadlines apply depending on whether this prompt has
-    started executing yet (see processing_started) -- see POLL_TIMEOUT_SECONDS
-    and QUEUE_WAIT_TIMEOUT_SECONDS above.
+    Deliberately does NOT use the long QUEUE_WAIT_TIMEOUT_SECONDS budget for
+    the pre-execution wait the way _wait_for_result_http does: this path only
+    learns a prompt has started (or finished) by actually receiving a message
+    for it, and a submission made moments before this connects can have
+    already started or even finished on ComfyUI's end without us ever seeing
+    that event, which would otherwise strand us listening for a message that
+    will never come. Giving up after a short, bounded wait and falling back
+    to _wait_for_result_http -- which checks the actual history/queue state
+    instead of waiting on events -- keeps that race from hanging a job for
+    anywhere near an hour.
+
+    That same race -- a prompt finishing before this connects, or an event
+    for it getting lost -- is also guarded directly here with an occasional
+    straight history check alongside the event stream (HISTORY_CHECK_SECONDS),
+    so a missed completion event only costs a few seconds instead of the full
+    POLL_TIMEOUT_SECONDS before HTTP polling gets a turn. SAM3 batch layers
+    are especially prone to this: every layer in the batch is submitted
+    synchronously, back to back, before any of their background waits start
+    listening, so a fast layer can easily finish before its own socket opens.
     """
+    HISTORY_CHECK_SECONDS = 5.0
     ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://") + f"/ws?clientId={job_id}"
-    deadline = time.time() + QUEUE_WAIT_TIMEOUT_SECONDS
+    deadline = time.time() + POLL_TIMEOUT_SECONDS
     processing_started = False
 
     def _start_processing():
@@ -411,6 +428,10 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
         deadline = time.time() + POLL_TIMEOUT_SECONDS
 
     with _ws_connect(ws_url, open_timeout=WS_OPEN_TIMEOUT_SECONDS) as ws:
+        entry = _fetch_history(base_url, prompt_id)
+        if entry:
+            return entry
+        last_history_check = time.time()
         while time.time() < deadline:
             if jobs.is_cancelled(job_id):
                 _cancel_on_comfyui(base_url, prompt_id)
@@ -421,6 +442,11 @@ def _wait_for_result_ws(base_url, job_id, prompt_id):
                 # sitting in ComfyUI's own queue behind other work).
                 raw = ws.recv(timeout=min(2.0, max(0.5, deadline - time.time())))
             except TimeoutError:
+                if time.time() - last_history_check >= HISTORY_CHECK_SECONDS:
+                    last_history_check = time.time()
+                    entry = _fetch_history(base_url, prompt_id)
+                    if entry:
+                        return entry
                 continue
             if isinstance(raw, (bytes, bytearray)):
                 continue  # binary preview-image frame, not a status message

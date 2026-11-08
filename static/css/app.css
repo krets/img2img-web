@@ -1311,6 +1311,17 @@ kbd {
    via inline left/top, centered on that point. Cursor is set in JS there
    too, since it depends on live ctrl-key state, not just which corner. */
 .crop-handle-quad { transform: translate(-50%, -50%); }
+/* Edge-midpoint handles (shown only once "Edge points" is toggled on for
+   the active layer) and the rotate handle (always shown, floating above
+   the quad's top edge) -- both positioned the same way as the corner
+   handles above, just visually distinguished so they don't read as more
+   corners. */
+.crop-handle-edge { width: 10px; height: 10px; background: #c4b5fd; }
+.crop-handle-rotate {
+  width: 14px; height: 14px; background: #fff; border-color: #8B5CF6; cursor: grab;
+}
+.crop-handle-rotate:active { cursor: grabbing; }
+.sam3-edge-points-btn { margin-left: 6px; padding: 2px 8px; font-size: 12px; }
 
 .modal:has(.dup-groups) { width: 640px; }
 .dup-groups { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }

@@ -2767,22 +2767,66 @@ function existingSam3Prompts(image) {
 // Quad warp math for the SAM3 placement tool's free-corner (ctrl+drag) mode.
 // The placement is a quadrilateral (nw/ne/sw/se corners, each {x,y}) rather
 // than a plain box -- a rectangle is just the common case where all four
-// corners still form a right angle. Canvas 2D has no built-in way to draw an
-// image into an arbitrary quad, so it's approximated the standard way: split
-// the quad into a grid of smaller quads, each drawn as two affine-warped
-// (clipped) copies of the corresponding piece of the source image (see
-// drawWarpedQuad below). A true single-pass projective warp would need
-// per-pixel resampling; this mesh of affine triangles is the cheap, GPU-free
-// alternative and converges to it as the grid gets finer.
+// corners still form a right angle. A quad can also grow an optional
+// midpoint control point on any of its four edges (see EDGE_MIDS/edgePoint
+// below), letting that edge bend instead of staying straight, and can be
+// rotated as a whole (see rotatePoint/quadCenter) by spinning every point
+// it currently has -- corners and edge points alike -- around its center.
+// Canvas 2D has no built-in way to draw an image into an arbitrary
+// quadrilateral, let alone one with bent edges, so it's approximated the
+// standard way: split the quad into a grid of smaller quads, each drawn as
+// two affine-warped (clipped) copies of the corresponding piece of the
+// source image (see drawWarpedQuad below), with each small quad's own
+// corners positioned via a Coons patch (coonsPoint) so bent edges curve
+// smoothly rather than just kinking at the midpoint. A true single-pass
+// projective warp would need per-pixel resampling; this mesh of affine
+// triangles is the cheap, GPU-free alternative and converges to it as the
+// grid gets finer.
 // ---------------------------------------------------------------------------
 const QUAD_CORNERS = ["nw", "ne", "sw", "se"];
 const QUAD_OPPOSITE = { nw: "se", ne: "sw", sw: "ne", se: "nw" };
 // The corner sharing this one's row (same y) vs. column (same x).
 const QUAD_ROW_NEIGHBOR = { nw: "ne", ne: "nw", sw: "se", se: "sw" };
 const QUAD_COL_NEIGHBOR = { nw: "sw", sw: "nw", ne: "se", se: "ne" };
+// Optional edge-midpoint control points, one per side. Each maps to the pair
+// of corners it sits between -- used both to compute its default position
+// (the straight midpoint) when it hasn't been dragged, and to draw the
+// curve its edge follows once it has. Absent from a quad until the "Edge
+// points" toggle adds them (see renderSam3StageStep).
+const EDGE_MIDS = ["n", "e", "s", "w"];
+const EDGE_MID_CORNERS = { n: ["nw", "ne"], s: ["sw", "se"], w: ["nw", "sw"], e: ["ne", "se"] };
 
+// A quad's corners plus whichever edge-midpoints it currently has.
 function cloneQuad(q) {
-  return { nw: { ...q.nw }, ne: { ...q.ne }, sw: { ...q.sw }, se: { ...q.se } };
+  const out = {};
+  for (const k of Object.keys(q)) out[k] = { ...q[k] };
+  return out;
+}
+
+// The position of edge midpoint `key`: its own stored point if the user has
+// dragged it, otherwise the straight-line midpoint of its two corners (which
+// makes coonsPoint below reduce exactly to plain bilinear interpolation for
+// a quad that has no custom edge points at all -- see its comment).
+function edgePoint(quad, key) {
+  if (quad[key]) return quad[key];
+  const [a, b] = EDGE_MID_CORNERS[key];
+  return { x: (quad[a].x + quad[b].x) / 2, y: (quad[a].y + quad[b].y) / 2 };
+}
+
+// Quad center (corners only), used as the pivot for rotation.
+function quadCenter(quad) {
+  return {
+    x: (quad.nw.x + quad.ne.x + quad.sw.x + quad.se.x) / 4,
+    y: (quad.nw.y + quad.ne.y + quad.sw.y + quad.se.y) / 4,
+  };
+}
+
+function rotatePoint(p, center, angle) {
+  const dx = p.x - center.x;
+  const dy = p.y - center.y;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
 }
 
 function clamp(v, lo, hi) {
@@ -2835,11 +2879,34 @@ function drawTexturedTriangle(ctx, img, src, dst) {
   ctx.restore();
 }
 
-// Bilinear interpolation of the four quad corners at (u, v) in [0, 1].
-function lerpQuad(quad, u, v) {
-  const top = { x: quad.nw.x + (quad.ne.x - quad.nw.x) * u, y: quad.nw.y + (quad.ne.y - quad.nw.y) * u };
-  const bottom = { x: quad.sw.x + (quad.se.x - quad.sw.x) * u, y: quad.sw.y + (quad.se.y - quad.sw.y) * u };
-  return { x: top.x + (bottom.x - top.x) * v, y: top.y + (bottom.y - top.y) * v };
+// Quadratic (Lagrange) interpolation through p0 (t=0), pMid (t=0.5) and p1
+// (t=1) -- used to curve an edge through its midpoint control point instead
+// of just drawing it straight.
+function quadLerp(p0, pMid, p1, t) {
+  const l0 = 2 * t * t - 3 * t + 1;
+  const l1 = -4 * t * t + 4 * t;
+  const l2 = 2 * t * t - t;
+  return { x: l0 * p0.x + l1 * pMid.x + l2 * p1.x, y: l0 * p0.y + l1 * pMid.y + l2 * p1.y };
+}
+
+// Coons patch: fills the quad's interior at (u, v) in [0, 1] from its four
+// boundary curves (each a quadLerp through its two corners and its edge
+// midpoint -- straight if that midpoint hasn't been dragged off-center).
+// When all four edges are still straight this is exactly equivalent to
+// plain bilinear interpolation of the four corners (the old lerpQuad): a
+// quadLerp through a corner-average midpoint reduces to a straight lerp, so
+// existing quads with no edge points render identically.
+function coonsPoint(quad, u, v) {
+  const top = quadLerp(quad.nw, edgePoint(quad, "n"), quad.ne, u);
+  const bottom = quadLerp(quad.sw, edgePoint(quad, "s"), quad.se, u);
+  const left = quadLerp(quad.nw, edgePoint(quad, "w"), quad.sw, v);
+  const right = quadLerp(quad.ne, edgePoint(quad, "e"), quad.se, v);
+  const bx = (1 - u) * (1 - v) * quad.nw.x + u * (1 - v) * quad.ne.x + (1 - u) * v * quad.sw.x + u * v * quad.se.x;
+  const by = (1 - u) * (1 - v) * quad.nw.y + u * (1 - v) * quad.ne.y + (1 - u) * v * quad.sw.y + u * v * quad.se.y;
+  return {
+    x: (1 - v) * top.x + v * bottom.x + (1 - u) * left.x + u * right.x - bx,
+    y: (1 - v) * top.y + v * bottom.y + (1 - u) * left.y + u * right.y - by,
+  };
 }
 
 // Draws `img` warped so its four corners land on quad.nw/ne/sw/se, in
@@ -2865,10 +2932,10 @@ function drawWarpedQuad(ctx, img, quad) {
       const srcNE = { x: u1 * w, y: v0 * h };
       const srcSW = { x: u0 * w, y: v1 * h };
       const srcSE = { x: u1 * w, y: v1 * h };
-      const dstNW = lerpQuad(quad, u0, v0);
-      const dstNE = lerpQuad(quad, u1, v0);
-      const dstSW = lerpQuad(quad, u0, v1);
-      const dstSE = lerpQuad(quad, u1, v1);
+      const dstNW = coonsPoint(quad, u0, v0);
+      const dstNE = coonsPoint(quad, u1, v0);
+      const dstSW = coonsPoint(quad, u0, v1);
+      const dstSE = coonsPoint(quad, u1, v1);
       drawTexturedTriangle(ctx, img, [srcNW, srcNE, srcSE], [dstNW, dstNE, dstSE]);
       drawTexturedTriangle(ctx, img, [srcNW, srcSE, srcSW], [dstNW, dstSE, dstSW]);
     }
@@ -3116,11 +3183,16 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
             <div class="crop-handle crop-handle-quad" data-handle="ne"></div>
             <div class="crop-handle crop-handle-quad" data-handle="sw"></div>
             <div class="crop-handle crop-handle-quad" data-handle="se"></div>
+            <div class="crop-handle crop-handle-quad crop-handle-edge" data-handle="n"></div>
+            <div class="crop-handle crop-handle-quad crop-handle-edge" data-handle="e"></div>
+            <div class="crop-handle crop-handle-quad crop-handle-edge" data-handle="s"></div>
+            <div class="crop-handle crop-handle-quad crop-handle-edge" data-handle="w"></div>
+            <div class="crop-handle crop-handle-quad crop-handle-rotate" data-handle="rotate" title="Drag to rotate"></div>
           </div>
         </div>
       </div>
     </div>
-    <p class="dup-section-hint">Select a layer at left, then drag to move, drag a corner to resize, or ctrl+drag a corner to skew it.</p>
+    <p class="dup-section-hint">Select a layer at left, then drag to move, drag a corner to resize, ctrl+drag a corner to skew it, or drag the handle above it to rotate. <button id="sam3EdgePointsBtn" class="btn-ghost sam3-edge-points-btn" type="button"></button></p>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Discard</button>
@@ -3149,6 +3221,7 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
     else if (activeIndex === target) activeIndex = index;
     renderSidebar();
     render();
+    updateEdgePointsBtn();
   }
 
   function renderSidebar() {
@@ -3170,6 +3243,7 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
         activeIndex = Number(btn.dataset.index);
         renderSidebar();
         render();
+        updateEdgePointsBtn();
       });
     });
     sidebarEl.querySelectorAll(".sam3-reorder-btn").forEach((btn) => {
@@ -3209,11 +3283,39 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
   const ctx2d = canvas.getContext("2d");
   const handleEls = {};
   for (const k of QUAD_CORNERS) handleEls[k] = boxEl.querySelector(`[data-handle="${k}"]`);
+  for (const k of EDGE_MIDS) handleEls[k] = boxEl.querySelector(`[data-handle="${k}"]`);
+  const rotateHandleEl = boxEl.querySelector('[data-handle="rotate"]');
   const HANDLE_CURSORS = { nw: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", se: "nwse-resize" };
+  const ROTATE_HANDLE_DIST = 28;
+  const edgePointsBtn = modal.querySelector("#sam3EdgePointsBtn");
 
   function activeQuad() {
     return layerQuads[activeIndex];
   }
+
+  function hasEdgePoints(quad) {
+    return EDGE_MIDS.some((k) => quad[k]);
+  }
+
+  // Turns a plain corner quad into one with all four edge midpoints as real,
+  // independently-draggable points (initialized at their current straight
+  // position, so turning this on never moves anything by itself), or strips
+  // them back off a quad that has them -- discarding any bends.
+  function toggleEdgePoints() {
+    const quad = activeQuad();
+    const next = cloneQuad(quad);
+    if (hasEdgePoints(quad)) {
+      for (const k of EDGE_MIDS) delete next[k];
+    } else {
+      for (const k of EDGE_MIDS) next[k] = edgePoint(quad, k);
+    }
+    setQuad(next);
+    updateEdgePointsBtn();
+  }
+  function updateEdgePointsBtn() {
+    edgePointsBtn.textContent = hasEdgePoints(activeQuad()) ? "Remove edge points" : "+ Edge points";
+  }
+  edgePointsBtn.addEventListener("click", toggleEdgePoints);
 
   // Unlike the crop box, this is allowed to run past the stage's edges in
   // either direction -- the final composite (see the Save handler below)
@@ -3230,10 +3332,24 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
     ctx2d.strokeStyle = "#8B5CF6";
     ctx2d.lineWidth = 2;
     ctx2d.beginPath();
+    // Follows each edge's actual curve (through its midpoint control point)
+    // rather than cutting straight corner-to-corner, so the outline matches
+    // what's drawn underneath once an edge has been bent.
+    const EDGE_STEPS = 8;
+    const edges = [
+      ["nw", "n", "ne"],
+      ["ne", "e", "se"],
+      ["se", "s", "sw"],
+      ["sw", "w", "nw"],
+    ];
     ctx2d.moveTo(quad.nw.x, quad.nw.y);
-    ctx2d.lineTo(quad.ne.x, quad.ne.y);
-    ctx2d.lineTo(quad.se.x, quad.se.y);
-    ctx2d.lineTo(quad.sw.x, quad.sw.y);
+    for (const [from, midKey, to] of edges) {
+      const mid = edgePoint(quad, midKey);
+      for (let i = 1; i <= EDGE_STEPS; i++) {
+        const p = quadLerp(quad[from], mid, quad[to], i / EDGE_STEPS);
+        ctx2d.lineTo(p.x, p.y);
+      }
+    }
     ctx2d.closePath();
     ctx2d.stroke();
     ctx2d.restore();
@@ -3242,12 +3358,32 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
       handleEls[k].style.top = `${quad[k].y}px`;
       if (!handleEls[k].style.cursor) handleEls[k].style.cursor = HANDLE_CURSORS[k];
     }
+    const showEdges = hasEdgePoints(quad);
+    for (const k of EDGE_MIDS) {
+      const el = handleEls[k];
+      el.style.display = showEdges ? "" : "none";
+      if (!showEdges) continue;
+      const p = edgePoint(quad, k);
+      el.style.left = `${p.x}px`;
+      el.style.top = `${p.y}px`;
+    }
+    // Positioned above the top edge's midpoint, offset along that edge's
+    // own perpendicular (rather than always straight up) so the handle
+    // still reads as "above the shape" once it's been rotated or skewed.
+    const nMid = edgePoint(quad, "n");
+    const topVec = { x: quad.ne.x - quad.nw.x, y: quad.ne.y - quad.nw.y };
+    const len = Math.hypot(topVec.x, topVec.y) || 1;
+    let perp = { x: -topVec.y / len, y: topVec.x / len };
+    if (perp.y > 0) perp = { x: -perp.x, y: -perp.y };
+    rotateHandleEl.style.left = `${nMid.x + perp.x * ROTATE_HANDLE_DIST}px`;
+    rotateHandleEl.style.top = `${nMid.y + perp.y * ROTATE_HANDLE_DIST}px`;
   }
   function setQuad(next) {
     layerQuads[activeIndex] = next;
     render();
   }
   render();
+  updateEdgePointsBtn();
 
   function pointerPos(evt) {
     const rect = stage.getBoundingClientRect();
@@ -3269,11 +3405,19 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
     });
   }
 
-  let drag = null; // { mode: "move" | "corner", handle, start: {x,y}, startQuad }
+  let drag = null; // { mode: "move" | "corner" | "edge" | "rotate", handle, start: {x,y}, startQuad, startCenter?, startAngle? }
   boxEl.addEventListener("pointerdown", (evt) => {
     const handle = evt.target.dataset.handle;
     if (!handle && !pointInQuad(pointerPos(evt), activeQuad())) return; // missed the shape entirely
-    drag = { mode: handle ? "corner" : "move", handle, start: pointerPos(evt), startQuad: cloneQuad(activeQuad()) };
+    const startQuad = cloneQuad(activeQuad());
+    if (handle === "rotate") {
+      const startCenter = quadCenter(startQuad);
+      const p = pointerPos(evt);
+      drag = { mode: "rotate", start: p, startQuad, startCenter, startAngle: Math.atan2(p.y - startCenter.y, p.x - startCenter.x) };
+    } else {
+      const mode = !handle ? "move" : EDGE_MIDS.includes(handle) ? "edge" : "corner";
+      drag = { mode, handle, start: pointerPos(evt), startQuad };
+    }
     boxEl.setPointerCapture(evt.pointerId);
     evt.preventDefault();
   });
@@ -3287,10 +3431,31 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
     const dy = p.y - drag.start.y;
     if (drag.mode === "move") {
       const next = cloneQuad(drag.startQuad);
-      for (const k of QUAD_CORNERS) {
+      for (const k of Object.keys(next)) {
         next[k].x += dx;
         next[k].y += dy;
       }
+      setQuad(next);
+      return;
+    }
+    if (drag.mode === "rotate") {
+      // Spins every control point the quad currently has (corners and any
+      // edge midpoints alike) by the same angle around the quad's center --
+      // this is a rigid rotation, not a resize, so nothing else changes.
+      const angle = Math.atan2(p.y - drag.startCenter.y, p.x - drag.startCenter.x) - drag.startAngle;
+      const next = {};
+      for (const k of Object.keys(drag.startQuad)) next[k] = rotatePoint(drag.startQuad[k], drag.startCenter, angle);
+      setQuad(next);
+      return;
+    }
+    if (drag.mode === "edge") {
+      // Edge midpoints are free points like a ctrl-dragged corner: only the
+      // dragged one moves, bending just that edge.
+      const next = cloneQuad(drag.startQuad);
+      next[drag.handle] = {
+        x: clamp(edgePoint(drag.startQuad, drag.handle).x + dx, -dispW * 3, dispW * 4),
+        y: clamp(edgePoint(drag.startQuad, drag.handle).y + dy, -dispH * 3, dispH * 4),
+      };
       setQuad(next);
       return;
     }
@@ -3348,7 +3513,7 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
       layers.forEach((l, i) => {
         const quad = layerQuads[i];
         const naturalQuad = {};
-        for (const k of QUAD_CORNERS) naturalQuad[k] = { x: (quad[k].x / scale) * outScale, y: (quad[k].y / scale) * outScale };
+        for (const k of Object.keys(quad)) naturalQuad[k] = { x: (quad[k].x / scale) * outScale, y: (quad[k].y / scale) * outScale };
         drawWarpedQuad(outCtx, l.img, naturalQuad);
       });
       const blob = await new Promise((resolve) => outCanvas.toBlob(resolve, "image/png"));

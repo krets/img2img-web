@@ -2784,10 +2784,6 @@ function existingSam3Prompts(image) {
 // grid gets finer.
 // ---------------------------------------------------------------------------
 const QUAD_CORNERS = ["nw", "ne", "sw", "se"];
-const QUAD_OPPOSITE = { nw: "se", ne: "sw", sw: "ne", se: "nw" };
-// The corner sharing this one's row (same y) vs. column (same x).
-const QUAD_ROW_NEIGHBOR = { nw: "ne", ne: "nw", sw: "se", se: "sw" };
-const QUAD_COL_NEIGHBOR = { nw: "sw", sw: "nw", ne: "se", se: "ne" };
 // Optional edge-midpoint control points, one per side. Each maps to the pair
 // of corners it sits between -- used both to compute its default position
 // (the straight midpoint) when it hasn't been dragged, and to draw the
@@ -3147,7 +3143,6 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
   const scale = Math.min(maxW / naturalWidth, maxH / naturalHeight, 1);
   const dispW = Math.round(naturalWidth * scale);
   const dispH = Math.round(naturalHeight * scale);
-  const minSize = 12;
 
   // Default per-layer placement: each cutout at its own detected size
   // (capped to fit the stage), staggered slightly from center so several
@@ -3192,7 +3187,7 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
         </div>
       </div>
     </div>
-    <p class="dup-section-hint">Select a layer at left, then drag to move, drag a corner to resize, ctrl+drag a corner to skew it, or drag the handle above it to rotate. <button id="sam3EdgePointsBtn" class="btn-ghost sam3-edge-points-btn" type="button"></button></p>
+    <p class="dup-section-hint">Select a layer at left, then drag to move, drag a corner or edge point to reshape it, or drag the handle above it to rotate. <button id="sam3EdgePointsBtn" class="btn-ghost sam3-edge-points-btn" type="button"></button></p>
     <div id="sam3ModalStatus" class="status-line"></div>
     <div class="modal-actions">
       <button id="sam3ModalRemoveBtn" class="btn-ghost" type="button">Discard</button>
@@ -3275,10 +3270,11 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
   });
   // Each placement is a quad (nw/ne/sw/se corners, in DISPLAY pixel coords
   // relative to the stage) rather than a plain box: a rectangle is just the
-  // case where all four corners still form a right angle. Plain drag-resize
-  // keeps it that way (resizing anchored at the opposite corner, as before);
-  // ctrl+drag on a corner instead moves only that corner, leaving the other
-  // three exactly where they were -- turning the resize into a skew/distort.
+  // case where all four corners still form a right angle. Dragging a corner
+  // moves only that corner -- the other three stay put, turning resize into
+  // skew/distort -- since linking opposite corners together made drags feel
+  // like they were affecting the wrong point. Rotation is the one operation
+  // that still moves every point together, as a rigid transform.
   const canvas = modal.querySelector("#sam3Canvas");
   const ctx2d = canvas.getContext("2d");
   const handleEls = {};
@@ -3390,21 +3386,6 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
     return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
   }
 
-  // Shows a different cursor on a corner handle when ctrl is down and the
-  // pointer is on (or just moved onto) it -- the "this will skew, not
-  // resize" affordance -- reverting to its plain resize cursor otherwise.
-  for (const k of QUAD_CORNERS) {
-    const el = handleEls[k];
-    const updateCursor = (evt) => {
-      el.style.cursor = evt.ctrlKey ? "crosshair" : HANDLE_CURSORS[k];
-    };
-    el.addEventListener("pointerenter", updateCursor);
-    el.addEventListener("pointermove", updateCursor);
-    el.addEventListener("pointerleave", () => {
-      el.style.cursor = HANDLE_CURSORS[k];
-    });
-  }
-
   let drag = null; // { mode: "move" | "corner" | "edge" | "rotate", handle, start: {x,y}, startQuad, startCenter?, startAngle? }
   boxEl.addEventListener("pointerdown", (evt) => {
     const handle = evt.target.dataset.handle;
@@ -3460,25 +3441,13 @@ function renderSam3StageStep(imageId, image, baseImg, layers) {
       return;
     }
     const h = drag.handle;
-    const anchor = drag.startQuad[QUAD_OPPOSITE[h]];
+    // Only the dragged corner moves -- the other three stay exactly where
+    // they started, same as a free-dragged edge midpoint.
     const next = cloneQuad(drag.startQuad);
-    if (evt.ctrlKey) {
-      // Free corner: only the dragged corner moves, the other three stay
-      // exactly where they started -- scale becomes skew.
-      next[h] = {
-        x: clamp(drag.startQuad[h].x + dx, -dispW * 3, dispW * 4),
-        y: clamp(drag.startQuad[h].y + dy, -dispH * 3, dispH * 4),
-      };
-    } else {
-      // Plain resize: stays a rectangle anchored at the opposite corner.
-      let ddx = drag.startQuad[h].x + dx - anchor.x;
-      let ddy = drag.startQuad[h].y + dy - anchor.y;
-      ddx = Math.sign(ddx || 1) * clamp(Math.abs(ddx), minSize, dispW * 4);
-      ddy = Math.sign(ddy || 1) * clamp(Math.abs(ddy), minSize, dispH * 4);
-      next[h] = { x: anchor.x + ddx, y: anchor.y + ddy };
-      next[QUAD_ROW_NEIGHBOR[h]] = { x: drag.startQuad[QUAD_ROW_NEIGHBOR[h]].x, y: anchor.y + ddy };
-      next[QUAD_COL_NEIGHBOR[h]] = { x: anchor.x + ddx, y: drag.startQuad[QUAD_COL_NEIGHBOR[h]].y };
-    }
+    next[h] = {
+      x: clamp(drag.startQuad[h].x + dx, -dispW * 3, dispW * 4),
+      y: clamp(drag.startQuad[h].y + dy, -dispH * 3, dispH * 4),
+    };
     setQuad(next);
   });
   boxEl.addEventListener("pointerup", () => {

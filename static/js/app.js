@@ -2434,9 +2434,8 @@ function renderReferenceImages() {
 // A SAM3 placement reference belongs to exactly one image, but
 // referenceImageIds otherwise persists across image switches within a
 // project (see referencePicksByProject) -- so a stale one from whatever
-// image was open before needs dropping, and this image's own placement (if
-// it already prepared one earlier) is selected by default, as if it were
-// still where the user left it.
+// image was open before needs dropping. This image's own placement stays
+// selected only if it already was (e.g. just saved); it's never added here.
 function reconcileSam3ReferenceSelection(img) {
   // An unfinished placement (needs_composite -- still just the raw SAM3
   // cutout, transparent background) isn't something to feed a generation
@@ -2448,9 +2447,11 @@ function reconcileSam3ReferenceSelection(img) {
   state.referenceImageIds = state.referenceImageIds.filter(
     (id) => id === ownSam3RefId || state.referenceImages.some((r) => r.id === id)
   );
-  if (ownSam3RefId && !state.referenceImageIds.includes(ownSam3RefId) && state.referenceImageIds.length < maxReferenceImages()) {
-    state.referenceImageIds.push(ownSam3RefId);
-  }
+  // Deliberately not auto-selecting the image's own placement here: doing so
+  // re-added a stale SAM3 edit every time an old source was reopened (and
+  // undid any deselection on the next re-render). A fresh placement is
+  // selected when it's saved (see the setSam3Reference call site); after
+  // that it's opt-in via the picker, which still offers it.
   renderReferenceImages();
 }
 

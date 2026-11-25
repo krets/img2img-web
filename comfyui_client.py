@@ -67,7 +67,21 @@ WORKFLOW_NODES = {
 }
 
 
+# Flux.3 (flux3_api/) is a separate bundled pipeline from the Flux.2 ones
+# above: instead of one graph with switchable reference slots, it's a static
+# graph per reference count (flux3_edit_{1..4}ref.json, built by
+# flux3_api/build_workflows.py), chained load_N/scale_N/enc_N/reflat_N per
+# reference, with the first (primary) reference also setting the output size.
+FLUX3_MAX_REFS = 4
+FLUX3_PROMPT_NODE = "prompt"
+FLUX3_SEED_NODE = "noise"
+FLUX3_STEPS_NODE = "scheduler"
+FLUX3_SAVE_NODE = "save"
+
+
 def max_extra_images(workflow="default"):
+    if workflow in ("flux3", "flux3_vl"):
+        return FLUX3_MAX_REFS - 1
     return len(WORKFLOW_NODES.get(workflow, WORKFLOW_NODES["default"])["extra_image_nodes"])
 
 
@@ -254,6 +268,80 @@ def generate_image_edit(
         jobs.update_job(job_id, phase="saving")
         outputs = history_entry.get("outputs", {})
         save_node_output = outputs.get(SAVE_IMAGE_NODE)
+        if not save_node_output or not save_node_output.get("images"):
+            raise RuntimeError(f"ComfyUI run finished without a saved image. Outputs: {outputs}")
+
+        image_info = save_node_output["images"][0]
+        image_bytes = _download_image(base_url, image_info)
+
+        job = jobs.get_job(job_id)
+        processing_started_at = job.get("processing_started_at") if job else None
+        processing_seconds = (finished_at - processing_started_at) if processing_started_at else None
+        return image_bytes, None, processing_seconds
+    finally:
+        _generation_slot.release()
+
+
+def generate_image_edit_flux3(
+    base_url,
+    workflow_dir,
+    source_path,
+    prompt,
+    job_id,
+    max_dim=None,
+    extra_source_paths=None,
+    steps=None,
+    vl=False,
+):
+    """Runs a Flux.3 edit workflow (flux3_api/) against a primary image plus
+    up to FLUX3_MAX_REFS - 1 additional reference images. Unlike
+    generate_image_edit, there's no single graph with switchable slots --
+    workflow_dir is a folder of flux3_edit_{1..4}ref.json graphs, and the one
+    matching the actual number of images supplied (primary + extras) is
+    picked and run as-is, with the primary's own scaling node (scale_1,
+    already snapped to a 16px grid by build_workflows.py) setting the output
+    size. vl=True picks the flux3_edit_vl_*ref.json variant instead, which
+    also feeds the references into the Qwen3-VL text encoder itself (see
+    flux3_api/build_workflows.py and the ComfyUI custom node it depends on,
+    custom_nodes/flux3_vl_edit) -- experimental, requires that custom node to
+    be installed in the target ComfyUI. Returns (image_bytes, revised_prompt,
+    processing_seconds) like generate_image_edit.
+    """
+    base_url = base_url.rstrip("/")
+    extra_source_paths = list(extra_source_paths or [])
+    total_refs = 1 + len(extra_source_paths)
+    if total_refs > FLUX3_MAX_REFS:
+        raise ValueError(f"Flux.3 workflow supports at most {FLUX3_MAX_REFS - 1} extra reference images")
+
+    workflow_path = Path(workflow_dir) / f"flux3_edit_{'vl_' if vl else ''}{total_refs}ref.json"
+    if not workflow_path.exists():
+        raise RuntimeError(f"Flux.3 workflow file not found: {workflow_path}")
+
+    if jobs.is_cancelled(job_id):
+        raise jobs.GenerationCancelled()
+
+    jobs.update_job(job_id, phase="queued", value=0, max=0)
+    _acquire_generation_slot(job_id)
+    try:
+        jobs.update_job(job_id, phase="uploading", value=0, max=0)
+        graph = _load_workflow(workflow_path)
+
+        source_paths = [source_path] + extra_source_paths
+        for i, path in enumerate(source_paths, start=1):
+            graph[f"load_{i}"]["inputs"]["image"] = _upload_image(base_url, path, max_dim=max_dim)
+
+        graph[FLUX3_PROMPT_NODE]["inputs"]["text"] = prompt
+        graph[FLUX3_SEED_NODE]["inputs"]["noise_seed"] = random.randint(0, 2**63 - 1)
+        if steps is not None:
+            graph[FLUX3_STEPS_NODE]["inputs"]["steps"] = steps
+
+        prompt_id = _submit_prompt(base_url, graph, job_id)
+
+        history_entry = _wait_for_result(base_url, job_id, prompt_id)
+        finished_at = time.time()
+        jobs.update_job(job_id, phase="saving")
+        outputs = history_entry.get("outputs", {})
+        save_node_output = outputs.get(FLUX3_SAVE_NODE)
         if not save_node_output or not save_node_output.get("images"):
             raise RuntimeError(f"ComfyUI run finished without a saved image. Outputs: {outputs}")
 

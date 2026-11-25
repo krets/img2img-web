@@ -54,6 +54,8 @@ def update_config(body: ConfigIn):
         config["comfyui_sam3xy_workflow_path"] = body.comfyui_sam3xy_workflow_path
     if body.comfyui_sam3_cutout_workflow_path is not None:
         config["comfyui_sam3_cutout_workflow_path"] = body.comfyui_sam3_cutout_workflow_path
+    if body.comfyui_flux3_workflow_dir is not None:
+        config["comfyui_flux3_workflow_dir"] = body.comfyui_flux3_workflow_dir
     if body.fal_api_key is not None and body.fal_api_key != "":
         config["fal_api_key"] = body.fal_api_key
     if body.fal_model is not None:

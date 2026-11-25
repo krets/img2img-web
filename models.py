@@ -105,9 +105,15 @@ class GenerateRequestIn(BaseModel):
     # "sam3_xy" both run an upstream SAM3 detect/rescale pass and require
     # sam3_prompt; "sam3" scales the detected object uniformly (scale_by),
     # "sam3_xy" scales its width/height independently (scale_x/scale_y).
+    # "flux3" runs the Flux.3 edit pipeline (flux3_api/), which takes its
+    # output size from the primary reference image instead of aspect_ratio
+    # or max_dim-derived knobs. "flux3_vl" is the same pipeline but also
+    # feeds the references into Flux.3's own Qwen3-VL text encoder
+    # (experimental -- requires the flux3_vl_edit custom node on the
+    # ComfyUI side; see flux3_api/build_workflows.py).
     # All numeric fields are optional and fall back to the workflow's own
     # defaults.
-    comfyui_workflow: Optional[Literal["default", "sam3", "sam3_xy"]] = None
+    comfyui_workflow: Optional[Literal["default", "sam3", "sam3_xy", "flux3", "flux3_vl"]] = None
     sam3_prompt: Optional[str] = None
     sam3_scale_by: Optional[float] = None
     sam3_scale_x: Optional[float] = None
@@ -134,6 +140,7 @@ class ConfigIn(BaseModel):
     comfyui_sam3_workflow_path: Optional[str] = None
     comfyui_sam3xy_workflow_path: Optional[str] = None
     comfyui_sam3_cutout_workflow_path: Optional[str] = None
+    comfyui_flux3_workflow_dir: Optional[str] = None
     fal_api_key: Optional[str] = None
     fal_model: Optional[str] = None
     xai_management_key: Optional[str] = None

@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     "comfyui_sam3_workflow_path": "comfyui_flux_and_SAM3.json",
     "comfyui_sam3xy_workflow_path": "comfyui_flux_and_SAM3_xy.json",
     "comfyui_sam3_cutout_workflow_path": "comfyui_sam3_cutout.json",
+    "comfyui_flux3_workflow_dir": "flux3_api",
     "fal_api_key": "",
     "fal_model": "fal-ai/flux-pro/kontext",
     # Only used to read the account balance for the Settings panel -- xAI's
@@ -104,6 +105,17 @@ def comfyui_workflow_path(config=None, workflow="default"):
         "cutout": "comfyui_sam3_cutout_workflow_path",
     }.get(workflow, "comfyui_workflow_path")
     path = Path(config[key])
+    return path if path.is_absolute() else APP_ROOT / path
+
+
+def comfyui_flux3_workflow_dir(config=None):
+    """Folder holding the flux3_edit_{1..4}ref.json workflows (see
+    flux3_api/build_workflows.py) -- unlike the other bundled workflows, Flux.3
+    uses a separate static graph per reference count instead of one graph
+    with switchable slots.
+    """
+    config = config or load_config()
+    path = Path(config["comfyui_flux3_workflow_dir"])
     return path if path.is_absolute() else APP_ROOT / path
 
 

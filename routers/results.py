@@ -206,22 +206,34 @@ def _run_generation(job_id, image, body, engine, config, source_path, reference_
             comfyui_workflow = body.comfyui_workflow or "default"
             model = comfyui_workflow if comfyui_workflow != "default" else None
             try:
-                image_bytes, revised_prompt, comfyui_processing_seconds = comfyui_client.generate_image_edit(
-                    base_url=config["comfyui_url"],
-                    workflow_path=cfg.comfyui_workflow_path(config, comfyui_workflow),
-                    source_path=effective_source_path,
-                    prompt=body.adhoc_prompt_text,
-                    job_id=job_id,
-                    max_dim=max_dim,
-                    extra_source_paths=reference_paths,
-                    workflow=comfyui_workflow,
-                    sam3_prompt=body.sam3_prompt,
-                    scale_by=body.sam3_scale_by,
-                    scale_x=body.sam3_scale_x,
-                    scale_y=body.sam3_scale_y,
-                    lr_pin=body.sam3_lr_pin,
-                    tb_pin=body.sam3_tb_pin,
-                )
+                if comfyui_workflow in ("flux3", "flux3_vl"):
+                    image_bytes, revised_prompt, comfyui_processing_seconds = comfyui_client.generate_image_edit_flux3(
+                        base_url=config["comfyui_url"],
+                        workflow_dir=cfg.comfyui_flux3_workflow_dir(config),
+                        source_path=effective_source_path,
+                        prompt=body.adhoc_prompt_text,
+                        job_id=job_id,
+                        max_dim=max_dim,
+                        extra_source_paths=reference_paths,
+                        vl=comfyui_workflow == "flux3_vl",
+                    )
+                else:
+                    image_bytes, revised_prompt, comfyui_processing_seconds = comfyui_client.generate_image_edit(
+                        base_url=config["comfyui_url"],
+                        workflow_path=cfg.comfyui_workflow_path(config, comfyui_workflow),
+                        source_path=effective_source_path,
+                        prompt=body.adhoc_prompt_text,
+                        job_id=job_id,
+                        max_dim=max_dim,
+                        extra_source_paths=reference_paths,
+                        workflow=comfyui_workflow,
+                        sam3_prompt=body.sam3_prompt,
+                        scale_by=body.sam3_scale_by,
+                        scale_x=body.sam3_scale_x,
+                        scale_y=body.sam3_scale_y,
+                        lr_pin=body.sam3_lr_pin,
+                        tb_pin=body.sam3_tb_pin,
+                    )
             except jobs.GenerationCancelled:
                 raise  # not a failure -- let it propagate to the cancelled-specific handler below
             except Exception as e:

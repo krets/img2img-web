@@ -1,6 +1,9 @@
 const BASE = "/api";
 
-async function request(method, path, { json, form } = {}) {
+// timeoutMs gives up on a request that hasn't answered in time, so a UI
+// waiting on it (e.g. a button stuck on "Applying…") gets an error back
+// instead of hanging forever on a stalled connection.
+async function request(method, path, { json, form, timeoutMs } = {}) {
   const opts = { method, headers: {} };
   if (json !== undefined) {
     opts.headers["Content-Type"] = "application/json";
@@ -8,7 +11,16 @@ async function request(method, path, { json, form } = {}) {
   } else if (form !== undefined) {
     opts.body = form;
   }
-  const res = await fetch(BASE + path, opts);
+  if (timeoutMs) opts.signal = AbortSignal.timeout(timeoutMs);
+  let res;
+  try {
+    res = await fetch(BASE + path, opts);
+  } catch (e) {
+    if (e.name === "TimeoutError") {
+      throw new Error(`The server didn't answer within ${Math.round(timeoutMs / 1000)}s. Check the connection and try again.`);
+    }
+    throw e;
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -63,15 +75,13 @@ export const api = {
   getImage: (id) => request("GET", `/images/${id}`),
   updateImage: (id, body) => request("PUT", `/images/${id}`, { json: body }),
   // Rotate/crop/pad settings applied to the source before it's sent to an engine.
-  // renderedBlob is the already-rotated/cropped/filled PNG the browser rendered
-  // (see preprocess_render.js) -- the server just stores it, no Pillow needed
-  // for the normal case. Both return the refreshed image detail; the stored
-  // source file is never modified.
-  setImagePreprocess: (id, params, renderedBlob) => {
+  // Only the settings are sent; the server renders them (a few seconds at
+  // most, even for a very large source). Both return the refreshed image
+  // detail; the stored source file is never modified.
+  setImagePreprocess: (id, params) => {
     const form = new FormData();
     form.append("params", JSON.stringify(params));
-    if (renderedBlob) form.append("file", renderedBlob, "processed.png");
-    return request("PUT", `/images/${id}/preprocess`, { form });
+    return request("PUT", `/images/${id}/preprocess`, { form, timeoutMs: 60000 });
   },
   clearImagePreprocess: (id) => request("DELETE", `/images/${id}/preprocess`),
   // Lineage: parent is one of another image's results. Both return the refreshed image detail.

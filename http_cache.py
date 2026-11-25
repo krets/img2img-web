@@ -8,8 +8,8 @@ only in how the file behind a URL can change:
 - IMMUTABLE: never rewritten (result images and their thumbnails/previews).
 - STABLE: only rewritten by the storage page's downscale, which keeps the
   picture the same and just lowers its resolution, so a cached copy that is
-  briefly out of date still looks right. Anything that does depend on the
-  exact pixel size (the crop editor) adds a size-based ?v= to its URL.
+  briefly out of date still looks right. (The crop editor takes the size
+  from the image record, not from the file it loads.)
 - REVALIDATE: replaced in place by ordinary edits (reference re-crops and
   SAM3 placements), so the browser must check with the server every time.
 

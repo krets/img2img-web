@@ -4,15 +4,11 @@ overhang -- and, for a non-90-degree angle, the small transparent corner gaps
 the rotation itself opens up -- is padded with either a solid color or a
 heavily blurred copy of the image).
 
-The browser renders this now (see static/js/preprocess_render.js) and uploads
-the result directly, so the normal edit/apply path never touches this module
--- an image only carries the small parameter dict below (images.preprocess,
-as JSON), and storage.save_processed_render just persists whatever bytes the
-browser sent. render() below exists as a server-side fallback for when there's
-no browser render to fall back on: a cache miss (storage.get_or_create_processed),
-or reconstructing a historical result's exact source from its source_preprocess
-snapshot. Keeping both implementations behaving the same is the point of this
-module's docstring and the one at the top of preprocess_render.js.
+An image only carries the small parameter dict below (images.preprocess, as
+JSON); render() turns it into pixels, cached by storage.get_or_create_processed.
+The browser's crop editor (static/js/preprocess.js) previews the same params
+on screen and sends only them, never a render: uploading a full-size render
+stalled over slow links.
 
 Params (all pixel values are in the *rotated* image's coordinate space, so
 they mean the same thing on screen as in the render):
@@ -54,8 +50,8 @@ def rotated_size(width, height, rotation):
     """The bounding box of width x height rotated by `rotation` degrees (like
     PIL's Image.rotate(expand=True)). Exact for multiples of 90 -- the usual
     cos/sin float error rounds away cleanly -- and otherwise the same formula
-    any renderer (this module, preprocess_render.js) needs to agree on, since
-    it's what crop coordinates are validated against.
+    the crop editor (preprocess.js) needs to agree on, since it's what crop
+    coordinates are validated against.
     """
     rad = math.radians(rotation)
     c, s = abs(math.cos(rad)), abs(math.sin(rad))
@@ -123,8 +119,7 @@ def render(img, params):
     resamples via rotate(expand=True), which (unlike a transpose) also opens
     small transparent gaps at the rotated canvas's corners -- those get filled
     exactly like crop overhang, since visually they're the same kind of
-    "nothing here" region. See preprocess_render.js for the client-side
-    equivalent this exists as a fallback for.
+    "nothing here" region.
     """
     img = img.convert("RGBA")
     rotation = params["rotation"] % 360
@@ -152,7 +147,7 @@ def render(img, params):
     # corner-gap pixel converts to whatever RGB value PIL carried under the
     # dropped alpha (not meaningful), so a crop whose border happens to land
     # exactly on a gap can pick up a slightly off sample there -- a narrow
-    # edge case, same risk the client-side renderer accepts for the same reason.
+    # edge case, accepted since it's barely visible.
     region_rgb = region.convert("RGB")
     if mode == "color":
         canvas = Image.new("RGB", (w, h), _parse_color(fill["color"]))

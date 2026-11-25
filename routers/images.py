@@ -1,5 +1,4 @@
 import json
-from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -428,16 +427,15 @@ def get_image_file(image_id: str):
 
 
 @router.put("/api/images/{image_id}/preprocess")
-async def set_image_preprocess(image_id: str, params: str = Form(...), file: UploadFile = File(None)):
+def set_image_preprocess(image_id: str, params: str = Form(...)):
     """Sets how the source gets rotated/cropped/padded before being sent to a
     generation engine. Only the settings are stored on the image row -- the
-    source file stays untouched -- but unlike before, the actual pixels
-    aren't rendered here: the browser already rendered them (see
-    preprocess_render.js) and uploads the result as `file`, which is just
-    persisted straight into the processed-render cache
-    (storage.save_processed_render). preprocess.render (Pillow) still exists
-    as a fallback for a cache miss elsewhere. Params that amount to no change
-    clear the setting (and file, if any, is ignored). Returns the image detail.
+    source file stays untouched -- and the render is made here, so the
+    browser sends a few hundred bytes of settings rather than uploading the
+    full-size result (tens of MB for a large source, which stalled saves over
+    a slow link). It's rendered now rather than on first use so the viewer
+    and the next generation find it ready. Params that amount to no change
+    clear the setting. Returns the image detail.
     """
     image = db.get_image(image_id)
     if not image or image["is_deleted"]:
@@ -456,15 +454,10 @@ async def set_image_preprocess(image_id: str, params: str = Form(...), file: Upl
 
     storage.clear_processed(image["project_id"], image_id)
     if normalized:
-        if file is None:
-            raise HTTPException(400, "A rendered file is required unless the settings are a no-op")
-        file_bytes = await file.read()
         try:
-            with Image.open(BytesIO(file_bytes)) as rendered:
-                rendered.verify()
+            storage.get_or_create_processed(image["project_id"], image_id, path, normalized)
         except Exception as e:
-            raise HTTPException(400, f"Could not read the pre-processed render: {e}")
-        storage.save_processed_render(image["project_id"], image_id, normalized, file_bytes)
+            raise HTTPException(500, f"Could not render the pre-processed image: {e}")
     return _image_detail(db.set_image_preprocess(image_id, normalized))
 
 

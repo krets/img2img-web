@@ -4,8 +4,8 @@
  * grid, the small corner gaps rotation itself opens up -- is padded with a
  * solid color, a blurred copy of the image, replicated edge pixels, or the
  * predominant edge color). Edits are only ever *local* until Apply, which
- * renders the result right here (see preprocess_render.js) and uploads it --
- * the stored source is never modified, and nothing touches the server before
+ * sends just the settings; the server renders them (preprocess.py) -- the
+ * stored source is never modified, and nothing touches the server before
  * that.
  *
  * Coordinates: crop is kept in the *rotated* image's pixel space (the same
@@ -13,7 +13,15 @@
  * view re-fits around image+crop whenever a gesture ends, so the crop can be
  * walked further and further out without the image shrinking mid-drag.
  */
-import { renderPreprocessed, rotatedBoundingSize } from "./preprocess_render.js";
+
+// The bounding box of width x height rotated by rotationDeg -- must agree
+// with preprocess.py's rotated_size(), which validates crops against it.
+function rotatedBoundingSize(width, height, rotationDeg) {
+  const rad = (rotationDeg * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rad));
+  const s = Math.abs(Math.sin(rad));
+  return { w: width * c + height * s, h: width * s + height * c };
+}
 
 const FILL_STORAGE_KEY = "grok_img2img.preprocessFill";
 const MIN_CROP = 8; // world px
@@ -400,11 +408,8 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
     const label = applyBtn.textContent;
     errorEl.textContent = "";
     try {
-      const params = currentParams();
-      applyBtn.textContent = "Rendering…";
-      const blob = await renderPreprocessed(imgEl, params);
       applyBtn.textContent = "Applying…";
-      await onApply(params, blob);
+      await onApply(currentParams());
     } catch (err) {
       errorEl.textContent = err.message;
     } finally {
@@ -441,8 +446,11 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
 
   return {
     isOpen: () => opened,
-    /** imageUrl: the untouched source. params: existing settings, or null. */
-    async open(imageUrl, params) {
+    /** imageUrl: the untouched source, at any resolution (a preview is plenty:
+     * the server renders the result). params: existing settings, or null.
+     * size: the source's real { width, height }, which crop coordinates are
+     * in; defaults to the loaded image's own size. */
+    async open(imageUrl, params, size = null) {
       opened = true;
       errorEl.textContent = "";
       imgEl.style.visibility = "hidden";
@@ -452,8 +460,8 @@ export function createPreprocessEditor({ stage, controlsHost, onApply, onCancel 
         imgEl.src = imageUrl;
       });
       if (!opened) return; // closed while the image was loading
-      natW = imgEl.naturalWidth;
-      natH = imgEl.naturalHeight;
+      natW = size?.width || imgEl.naturalWidth;
+      natH = size?.height || imgEl.naturalHeight;
       if (params) {
         rotation = normalizeDeg(params.rotation || 0);
         fineOffset = rotation - 90 * Math.round(rotation / 90);

@@ -1826,11 +1826,13 @@ function syncViewer() {
   abViewer.setImages(base.url, resultUrl, { baseProcessed: base.processed });
   abViewer.setPreprocess({
     imageId: img.id,
-    // Keyed by size: the editor works in the file's pixel coordinates, and the
-    // storage page's downscale rewrites the file in place (see http_cache.py).
-    rawUrl: `/api/images/${img.id}/file?v=${img.width}x${img.height}`,
+    // The editor only needs to show the picture -- the server does the render
+    // -- so it gets the small preview, and works in the full-size coordinates
+    // given by `size` (the preview is just scaled up to match them).
+    imageUrl: `/api/images/${img.id}/preview`,
+    size: { width: img.width, height: img.height },
     params: img.preprocess,
-    onApply: (params, blob) => savePreprocess(img.id, params, blob),
+    onApply: (params) => savePreprocess(img.id, params),
     onError: (message) => {
       els.generateStatus.textContent = `Error: ${message}`;
     },
@@ -3729,8 +3731,8 @@ function applyPreprocessedImage(image) {
   if (listed) listed.preprocess = image.preprocess;
 }
 
-async function savePreprocess(imageId, params, blob) {
-  applyPreprocessedImage(await api.setImagePreprocess(imageId, params, blob));
+async function savePreprocess(imageId, params) {
+  applyPreprocessedImage(await api.setImagePreprocess(imageId, params));
 }
 
 els.preprocessClearBtn.addEventListener("click", async () => {

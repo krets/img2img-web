@@ -165,17 +165,17 @@ export function initABViewer(container) {
   const lineageBadge = container.querySelector("#lineageBadge");
   let onCompareChange = null;
 
-  // { imageId, rawUrl, params, onApply(params, blob) } for the selected image, or
+  // { imageId, imageUrl, size, params, onApply(params) } for the selected image, or
   // null while there's nothing editable (no image, or its details haven't
   // loaded yet). See setPreprocess().
   let preprocessCtx = null;
   const editor = createPreprocessEditor({
     stage: preprocessStage,
     controlsHost: preprocessControls,
-    onApply: async (params, blob) => {
+    onApply: async (params) => {
       const ctx = preprocessCtx;
       if (!ctx) return;
-      await ctx.onApply(params, blob);
+      await ctx.onApply(params);
       if (mode === PREPROCESS_MODE && preprocessCtx?.imageId === ctx.imageId) setMode(compareMode);
     },
     onCancel: () => setMode(compareMode),
@@ -520,7 +520,7 @@ export function initABViewer(container) {
     if (inPreprocess) {
       preprocessBtn.blur(); // so the editor's Enter/Esc shortcuts aren't swallowed by the button that opened it
       const ctx = preprocessCtx;
-      editor.open(ctx.rawUrl, ctx.params).catch((err) => {
+      editor.open(ctx.imageUrl, ctx.params, ctx.size).catch((err) => {
         if (preprocessCtx?.imageId !== ctx.imageId) return;
         setMode(compareMode);
         ctx.onError?.(err.message);
@@ -565,9 +565,10 @@ export function initABViewer(container) {
       }
       compareSelect.value = selectedId || "";
     },
-    // ctx: { imageId, rawUrl, params, onApply(params, blob) => Promise, onError(msg) } for the
-    // image the crop/pre-process mode edits, or null to disable it. rawUrl is
-    // the untouched source; params are its current settings (null = none).
+    // ctx: { imageId, imageUrl, size, params, onApply(params) => Promise, onError(msg) }
+    // for the image the crop/pre-process mode edits, or null to disable it.
+    // imageUrl shows the untouched source at any resolution; size is its real
+    // { width, height }; params are its current settings (null = none).
     // Called again with the same imageId after every save -- an open editor is
     // left alone unless the image itself changed.
     setPreprocess(ctx) {

@@ -16,13 +16,12 @@ import threading
 import webbrowser
 
 import uvicorn
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request
 
 import config as cfg
 import db
 import hash_worker
+import http_cache
 import pruning
 import storage
 from routers import config_router, export, images, manage, projects, prompts, references, results
@@ -51,26 +50,24 @@ def startup():
     pruning.start_background_pruner()
 
 
-class NoCacheStaticFiles(StaticFiles):
-    """Forces browsers to revalidate static assets on every load (still cheap
-    via conditional GETs/304s) instead of serving a stale cached copy after an
-    update -- this is a frequently-iterated local app, not a CDN-fronted site.
-    """
+assets = http_cache.AssetVersioner("static")
 
-    async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache"
-        return response
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+def index_page(request: Request):
+    return assets.page_response(request, "index.html")
 
 
 @app.get("/manage", include_in_schema=False)
-def manage_page():
-    """The cross-library management page. The static mount below only maps a
-    bare directory to its index.html, so /manage needs its own route."""
-    return FileResponse("static/manage.html", headers={"Cache-Control": "no-cache"})
+@app.get("/manage.html", include_in_schema=False)
+def manage_page(request: Request):
+    """The cross-library management page."""
+    return assets.page_response(request, "manage.html")
 
 
-app.mount("/", NoCacheStaticFiles(directory="static", html=True), name="static")
+app.mount("/", http_cache.VersionedStaticFiles(assets, directory="static"), name="static")
+app.add_middleware(http_cache.SelectiveGZipMiddleware)
 
 
 def _open_browser(port):

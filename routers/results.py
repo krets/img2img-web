@@ -2,13 +2,13 @@ import json
 import time
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 
 import comfyui_client
 import config as cfg
 import db
 import fal_client
 import grok_client
+import http_cache
 import jobs
 import storage
 from models import EvaluationIn, GenerateRequestIn
@@ -299,7 +299,7 @@ def get_result_file(result_id: str):
     path = storage.result_image_path(image["project_id"], result["file_path"])
     if not path.exists():
         raise HTTPException(404, "Result file missing on disk")
-    return FileResponse(path, media_type="image/png")
+    return http_cache.image_response(path, "image/png", http_cache.IMMUTABLE)
 
 
 @router.get("/api/results/{result_id}/thumbnail")
@@ -312,7 +312,7 @@ def get_result_thumbnail(result_id: str):
     if not path.exists():
         raise HTTPException(404, "Result file missing on disk")
     thumb_path = storage.get_or_create_thumbnail("results", image["project_id"], result_id, path)
-    return FileResponse(thumb_path, media_type="image/jpeg")
+    return http_cache.image_response(thumb_path, "image/jpeg", http_cache.IMMUTABLE)
 
 
 @router.get("/api/results/{result_id}/source")
@@ -332,10 +332,14 @@ def get_result_source(result_id: str):
     path = storage.source_image_path(image["project_id"], image["file_name"])
     if not path.exists():
         raise HTTPException(404, "Source file missing on disk")
+    # A result from before snapshots were recorded follows the image's current
+    # crop, which can change at any time, so it must be revalidated.
+    policy = http_cache.STABLE if result["source_preprocess_known"] else http_cache.REVALIDATE
     params = result["source_preprocess"] if result["source_preprocess_known"] else image["preprocess"]
     if not params:
-        return FileResponse(path)
-    return FileResponse(storage.get_or_create_processed(image["project_id"], image["id"], path, params), media_type="image/png")
+        return http_cache.image_response(path, policy=policy)
+    processed = storage.get_or_create_processed(image["project_id"], image["id"], path, params)
+    return http_cache.image_response(processed, "image/png", policy)
 
 
 @router.get("/api/results/{result_id}/preview")
@@ -348,7 +352,7 @@ def get_result_preview(result_id: str):
     if not path.exists():
         raise HTTPException(404, "Result file missing on disk")
     preview_path = storage.get_or_create_preview("results", image["project_id"], result_id, path)
-    return FileResponse(preview_path, media_type="image/jpeg")
+    return http_cache.image_response(preview_path, "image/jpeg", http_cache.IMMUTABLE)
 
 
 @router.get("/api/results/{result_id}/side-by-side")
@@ -367,7 +371,7 @@ def get_result_side_by_side(result_id: str):
     combo_path = storage.get_or_create_side_by_side(image["project_id"], result_id, source_path, result_path)
     if combo_path is None:
         raise HTTPException(404, "Could not build side-by-side preview")
-    return FileResponse(combo_path, media_type="image/jpeg")
+    return http_cache.image_response(combo_path, "image/jpeg")
 
 
 @router.post("/api/results/{result_id}/promote-to-source")

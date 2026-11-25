@@ -22,6 +22,7 @@ import {
 } from "./ui.js";
 import { initTopbarMenu, openHotkeysModal, isHotkeysModalOpen, openLogModal, openTrashModal } from "./topbar_menu.js";
 import { openSettingsModal } from "./settings.js";
+import { prefetchImages } from "./prefetch.js";
 
 const state = {
   projects: [],
@@ -1695,6 +1696,31 @@ async function selectImage(id) {
   updateGenerateStatusForCurrentImage();
   renderImageList();
   renderDetails();
+  prefetchNeighbors(id);
+}
+
+// Warms the cache for the images on either side of `id` in the sidebar's
+// visible order, so stepping with the arrow keys shows them straight away.
+// Small previews for both neighbours come first so either direction shows
+// something at once, then the full-size files, next before previous.
+function prefetchNeighbors(id) {
+  const list = buildImageDisplayList().map((r) => r.img);
+  const idx = list.findIndex((i) => i.id === id);
+  if (idx === -1 || list.length < 2) return;
+  const next = list[(idx + 1) % list.length];
+  const prev = list[(idx - 1 + list.length) % list.length];
+  const previews = (img) => {
+    const base = sourceUrlFor(img);
+    return [
+      base.processed ? null : `/api/images/${img.id}/preview`,
+      img.active_result_id ? `/api/results/${img.active_result_id}/preview` : null,
+    ];
+  };
+  const fulls = (img) => [
+    sourceUrlFor(img).url,
+    img.active_result_id ? `/api/results/${img.active_result_id}/file` : null,
+  ];
+  prefetchImages([...previews(next), ...previews(prev), ...fulls(next), ...fulls(prev)]);
 }
 
 function stepImage(direction) {
@@ -1800,7 +1826,9 @@ function syncViewer() {
   abViewer.setImages(base.url, resultUrl, { baseProcessed: base.processed });
   abViewer.setPreprocess({
     imageId: img.id,
-    rawUrl: `/api/images/${img.id}/file`,
+    // Keyed by size: the editor works in the file's pixel coordinates, and the
+    // storage page's downscale rewrites the file in place (see http_cache.py).
+    rawUrl: `/api/images/${img.id}/file?v=${img.width}x${img.height}`,
     params: img.preprocess,
     onApply: (params, blob) => savePreprocess(img.id, params, blob),
     onError: (message) => {
@@ -4026,6 +4054,7 @@ function mergeQueueJob(job) {
   const idx = state.queue.findIndex((j) => j.id === job.id);
   if (idx === -1) state.queue.push(job);
   else state.queue[idx] = job;
+  speedUpQueuePolling(QUEUE_POLL_ACTIVE_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -4902,8 +4931,54 @@ initHotkeys({
   updateReferenceImagesVisibility();
   updateAspectRatioVisibility();
   updateComfyWorkflowVisibility();
-  pollQueue();
-  setInterval(pollQueue, 1200);
-  pollComfyStats();
-  setInterval(pollComfyStats, 5000);
+  startBackgroundPolling();
 })();
+
+// Each poll is a full round trip, which adds up on a slow link, so the queue is
+// polled quickly only while jobs are in flight and slowly otherwise, and both
+// polls drop to a trickle while the tab is hidden. The next poll is scheduled
+// only after the previous one returns, so slow responses never pile up.
+// Actions that queue a job call pollQueue() themselves, so an idle interval
+// doesn't delay seeing a job the user just started.
+const QUEUE_POLL_ACTIVE_MS = 1200;
+const QUEUE_POLL_IDLE_MS = 5000;
+const COMFY_POLL_MS = 5000;
+const HIDDEN_POLL_MS = 30000;
+
+// Set by startBackgroundPolling: moves a slow (idle) queue poll forward once a
+// job has just been queued, so its progress shows at the active rate.
+let speedUpQueuePolling = () => {};
+
+function startBackgroundPolling() {
+  const loop = (poll, delay) => {
+    let timer = null;
+    let dueAt = 0;
+    let inFlight = false;
+    const schedule = (ms) => {
+      clearTimeout(timer);
+      dueAt = Date.now() + ms;
+      timer = setTimeout(run, ms);
+    };
+    const run = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      clearTimeout(timer);
+      try {
+        await poll();
+      } finally {
+        inFlight = false;
+        schedule(document.hidden ? HIDDEN_POLL_MS : delay());
+      }
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) run(); // catch up straight away on return
+    });
+    run();
+    return (ms) => {
+      if (!inFlight && dueAt - Date.now() > ms) schedule(ms);
+    };
+  };
+  const hasActiveJobs = () => state.queue.some((j) => j.status === "queued" || j.status === "running");
+  speedUpQueuePolling = loop(pollQueue, () => (hasActiveJobs() ? QUEUE_POLL_ACTIVE_MS : QUEUE_POLL_IDLE_MS));
+  loop(pollComfyStats, () => COMFY_POLL_MS);
+}

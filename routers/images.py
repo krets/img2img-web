@@ -5,12 +5,12 @@ from urllib.parse import unquote, urlparse
 
 import requests
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 from PIL import Image
 
 import comfyui_client
 import config as cfg
 import db
+import http_cache
 import jobs
 import preprocess
 import storage
@@ -424,7 +424,7 @@ def get_image_file(image_id: str):
     path = storage.source_image_path(image["project_id"], image["file_name"])
     if not path.exists():
         raise HTTPException(404, "Image file missing on disk")
-    return FileResponse(path, media_type="image/png")
+    return http_cache.image_response(path, "image/png")
 
 
 @router.put("/api/images/{image_id}/preprocess")
@@ -737,7 +737,7 @@ def get_image_processed(image_id: str):
     if not path.exists():
         raise HTTPException(404, "Image file missing on disk")
     processed = storage.get_or_create_processed(image["project_id"], image_id, path, image["preprocess"])
-    return FileResponse(processed, media_type="image/png")
+    return http_cache.image_response(processed, "image/png")
 
 
 @router.get("/api/images/{image_id}/thumbnail")
@@ -749,7 +749,7 @@ def get_image_thumbnail(image_id: str):
     if not path.exists():
         raise HTTPException(404, "Image file missing on disk")
     thumb_path = storage.get_or_create_thumbnail("images", image["project_id"], image_id, path)
-    return FileResponse(thumb_path, media_type="image/jpeg")
+    return http_cache.image_response(thumb_path, "image/jpeg")
 
 
 @router.get("/api/images/{image_id}/preview")
@@ -761,4 +761,4 @@ def get_image_preview(image_id: str):
     if not path.exists():
         raise HTTPException(404, "Image file missing on disk")
     preview_path = storage.get_or_create_preview("images", image["project_id"], image_id, path)
-    return FileResponse(preview_path, media_type="image/jpeg")
+    return http_cache.image_response(preview_path, "image/jpeg")

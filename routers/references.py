@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 
 import db
+import http_cache
 import storage
 from models import ReferenceImageUpdateIn
 
@@ -166,7 +166,7 @@ def get_reference_image_file(ref_id: str):
     path = storage.reference_image_path(ref["project_id"], ref["file_name"])
     if not path.exists():
         raise HTTPException(404, "Reference image file missing on disk")
-    return FileResponse(path, media_type="image/png")
+    return http_cache.image_response(path, "image/png", http_cache.REVALIDATE)
 
 
 @router.get("/api/reference-images/{ref_id}/original")
@@ -177,7 +177,7 @@ def get_reference_image_original(ref_id: str):
     path = storage.reference_image_path(ref["project_id"], ref["original_file_name"])
     if not path.exists():
         raise HTTPException(404, "Reference image original file missing on disk")
-    return FileResponse(path, media_type="image/png")
+    return http_cache.image_response(path, "image/png", http_cache.REVALIDATE)
 
 
 @router.get("/api/reference-images/{ref_id}/thumbnail")
@@ -189,4 +189,4 @@ def get_reference_image_thumbnail(ref_id: str):
     if not path.exists():
         raise HTTPException(404, "Reference image file missing on disk")
     thumb_path = storage.get_or_create_thumbnail("references", ref["project_id"], ref_id, path)
-    return FileResponse(thumb_path, media_type="image/jpeg")
+    return http_cache.image_response(thumb_path, "image/jpeg", http_cache.REVALIDATE)

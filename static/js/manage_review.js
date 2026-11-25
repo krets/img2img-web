@@ -5,6 +5,7 @@ import { api } from "./api.js";
 import { escapeHtml, formatRelativeTime, parseDbTime, openModal, closeModal, isModalOpen, openConfirmModal } from "./ui.js";
 import { initABViewer } from "./viewer.js";
 import { openExportModal } from "./manage_export.js";
+import { prefetchImages } from "./prefetch.js";
 
 const FILTER_KEY = "grok_img2img.manage.reviewFilter";
 const PAGE_SIZE = 120;
@@ -714,6 +715,18 @@ function openLightbox(idx) {
   const r = view.items[idx];
   viewer.setImages(`/api/results/${r.id}/source`, `/api/results/${r.id}/file`, { baseProcessed: !!r.source_preprocess });
   renderLightboxHeader();
+  // Warm the cache for stepping with the arrows: the next and previous
+  // results' previews, then their full-size pairs, next before previous.
+  const next = view.items[idx + 1];
+  const prev = view.items[idx - 1];
+  prefetchImages([
+    next && `/api/results/${next.id}/preview`,
+    prev && `/api/results/${prev.id}/preview`,
+    next && `/api/results/${next.id}/source`,
+    next && `/api/results/${next.id}/file`,
+    prev && `/api/results/${prev.id}/source`,
+    prev && `/api/results/${prev.id}/file`,
+  ]);
 }
 
 async function stepLightbox(delta) {
